@@ -9,8 +9,6 @@
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
-#include "esp_partition.h"
-#include "esp_ota_ops.h"
 #include "NetworkManager.h"
 #include <cstring>
 
@@ -216,82 +214,25 @@ void CommandManager::Cmd_GetLogs(const char* json, JsonWriter& resp)
 
 void CommandManager::Cmd_Partitions(const char* json, JsonWriter& resp)
 {
-    const esp_partition_t* running = esp_ota_get_running_partition();
-    const esp_partition_t* nextOta = esp_ota_get_next_update_partition(nullptr);
+    static constexpr int MAX_PARTITIONS = 16;
+    UpdateManager::PartitionInfo parts[MAX_PARTITIONS];
+    int count = serviceProvider_.getUpdateManager().GetPartitions(parts, MAX_PARTITIONS);
 
     resp.fieldArray("partitions");
-
-    esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, nullptr);
-    for (; it != nullptr; it = esp_partition_next(it))
+    for (int i = 0; i < count; i++)
     {
-        const esp_partition_t* p = esp_partition_get(it);
-        if (!p) continue;
-
+        const auto& p = parts[i];
         resp.beginObject();
-        resp.field("label", p->label);
-
-        // Type
-        const char* typeStr = p->type == ESP_PARTITION_TYPE_APP  ? "app"
-                            : p->type == ESP_PARTITION_TYPE_DATA ? "data"
-                            : "unknown";
-        resp.field("type", typeStr);
-
-        // Subtype
-        char subtypeStr[16] = {};
-        if (p->type == ESP_PARTITION_TYPE_APP)
-        {
-            if (p->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY)
-                snprintf(subtypeStr, sizeof(subtypeStr), "factory");
-            else
-                snprintf(subtypeStr, sizeof(subtypeStr), "ota_%d",
-                         p->subtype - ESP_PARTITION_SUBTYPE_APP_OTA_0);
-        }
-        else if (p->type == ESP_PARTITION_TYPE_DATA)
-        {
-            switch (p->subtype)
-            {
-            case ESP_PARTITION_SUBTYPE_DATA_OTA:    snprintf(subtypeStr, sizeof(subtypeStr), "ota");    break;
-            case ESP_PARTITION_SUBTYPE_DATA_PHY:    snprintf(subtypeStr, sizeof(subtypeStr), "phy");    break;
-            case ESP_PARTITION_SUBTYPE_DATA_NVS:    snprintf(subtypeStr, sizeof(subtypeStr), "nvs");    break;
-            case ESP_PARTITION_SUBTYPE_DATA_FAT:    snprintf(subtypeStr, sizeof(subtypeStr), "fat");    break;
-            case ESP_PARTITION_SUBTYPE_DATA_SPIFFS: snprintf(subtypeStr, sizeof(subtypeStr), "spiffs"); break;
-            default: snprintf(subtypeStr, sizeof(subtypeStr), "data_%d", p->subtype);                   break;
-            }
-        }
-        else
-        {
-            snprintf(subtypeStr, sizeof(subtypeStr), "%d", p->subtype);
-        }
-        resp.field("subtype", subtypeStr);
-
-        resp.field("offset", static_cast<uint32_t>(p->address));
-        resp.field("size",   static_cast<uint32_t>(p->size));
-        resp.field("running", p == running);
-        resp.field("nextOta", p == nextOta);
-
-        bool uploadable =
-            (p->type == ESP_PARTITION_TYPE_APP &&
-             p->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
-             p != running)
-            ||
-            (p->type == ESP_PARTITION_TYPE_DATA &&
-             p->subtype == ESP_PARTITION_SUBTYPE_DATA_FAT &&
-             strcmp(p->label, "www") == 0);
-        resp.field("uploadable", uploadable);
-
-        // Version string for app partitions
-        char version[32] = {};
-        if (p->type == ESP_PARTITION_TYPE_APP)
-        {
-            esp_app_desc_t desc = {};
-            if (esp_ota_get_partition_description(p, &desc) == ESP_OK)
-                strncpy(version, desc.version, sizeof(version) - 1);
-        }
-        resp.field("version", version);
-
+        resp.field("label",      p.label);
+        resp.field("type",       p.type);
+        resp.field("subtype",    p.subtype);
+        resp.field("offset",     p.offset);
+        resp.field("size",       p.size);
+        resp.field("running",    p.running);
+        resp.field("nextOta",    p.nextOta);
+        resp.field("uploadable", p.uploadable);
+        resp.field("version",    p.version);
         resp.endObject();
     }
-    esp_partition_iterator_release(it);
-
     resp.endArray();
 }

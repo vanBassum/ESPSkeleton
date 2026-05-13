@@ -15,6 +15,7 @@ public:
     void RegisterRoute(httpd_handle_t server);
 
     void Broadcast(httpd_handle_t server, const char* json, int len);
+    void BroadcastBinary(httpd_handle_t server, const uint8_t* data, size_t len);
 
     void OnClientDisconnected(int fd);
 
@@ -23,6 +24,8 @@ private:
 
     Mutex wsMutex_;
     int wsClients_[MAX_WS_CLIENTS] = {};
+    int consecBinFails_[MAX_WS_CLIENTS] = {};
+    static constexpr int MAX_BIN_FAILS = 10;
 
     char wsBuf_[4096];
 

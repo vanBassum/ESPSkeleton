@@ -2,6 +2,7 @@
 
 #include "ServiceProvider.h"
 #include "InitState.h"
+#include "Mutex.h"
 #include <esp_ota_ops.h>
 #include <esp_vfs_fat.h>
 
@@ -31,6 +32,24 @@ public:
     bool WriteWwwChunk(const void* data, size_t size);
     const char* FinalizeWwwUpdate();
 
+    // ── Partition inspection (for Firmware page) ─────────────
+
+    struct PartitionInfo
+    {
+        char     label[16];
+        char     type[8];       // "app" or "data"
+        char     subtype[16];   // "ota_0" / "fat" / "nvs" / "0xNN" …
+        uint32_t offset;
+        uint32_t size;
+        bool     running;
+        bool     nextOta;
+        bool     uploadable;    // safe to overwrite via HTTP
+        char     version[32];   // app partitions only; empty otherwise
+    };
+
+    /// Enumerate all partitions into `out`. Returns count written.
+    int GetPartitions(PartitionInfo* out, int maxCount) const;
+
 private:
     ServiceProvider& serviceProvider_;
     InitState initState_;
@@ -46,4 +65,6 @@ private:
     bool wwwActive_ = false;
 
     void AbortOta();
+
+    Mutex mutex_;
 };

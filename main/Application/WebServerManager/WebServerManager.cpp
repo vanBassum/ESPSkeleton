@@ -6,9 +6,7 @@
 #include <unistd.h>
 #include <esp_log.h>
 #include <esp_vfs_fat.h>
-#include <esp_system.h>
 #include <esp_partition.h>
-#include <cstdlib>
 
 static constexpr const char* TAG = "WebServerManager";
 static constexpr const char* BASE_PATH = "/www";
@@ -118,10 +116,34 @@ void WebServerManager::RegisterRoutes()
     };
     httpd_register_uri_handler(server_, &upload_www);
 
+    // CORS preflight handlers — browsers send OPTIONS before cross-origin
+    // POST with a binary body (e.g. from the dev vite server on a different origin).
+    const httpd_uri_t upload_app_opts = {
+        .uri = "/api/upload/app",
+        .method = HTTP_OPTIONS,
+        .handler = HandleCorsPreflight,
+        .user_ctx = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    httpd_register_uri_handler(server_, &upload_app_opts);
+
+    const httpd_uri_t upload_www_opts = {
+        .uri = "/api/upload/www",
+        .method = HTTP_OPTIONS,
+        .handler = HandleCorsPreflight,
+        .user_ctx = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    httpd_register_uri_handler(server_, &upload_www_opts);
+
     const httpd_uri_t download = {
         .uri = "/api/download",
         .method = HTTP_GET,
-        .handler = HandleDownload,
+        .handler = HandleDownloadPartition,
         .user_ctx = this,
         .is_websocket = false,
         .handle_ws_control_frames = false,
@@ -137,6 +159,12 @@ void WebServerManager::Broadcast(const char* json, int len)
 {
     if (server_)
         wsHandler_.Broadcast(server_, json, len);
+}
+
+void WebServerManager::BroadcastBinary(const uint8_t* data, size_t len)
+{
+    if (server_)
+        wsHandler_.BroadcastBinary(server_, data, len);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -188,13 +216,11 @@ esp_err_t WebServerManager::HandleUploadApp(httpd_req_t* req)
 
     char resp[64];
     int len = snprintf(resp, sizeof(resp), "{\"ok\":true,\"size\":%d}", total);
+    SetCorsHeaders(req);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, resp, len);
 
-    ESP_LOGI(TAG, "App upload complete (%d bytes), rebooting...", total);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    esp_restart();
-
+    ESP_LOGI(TAG, "App upload complete (%d bytes) — restart required to apply", total);
     return ESP_OK;
 }
 
@@ -243,26 +269,48 @@ esp_err_t WebServerManager::HandleUploadWww(httpd_req_t* req)
 
     char resp[64];
     int len = snprintf(resp, sizeof(resp), "{\"ok\":true,\"size\":%d}", total);
+    SetCorsHeaders(req);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, resp, len);
 
-    ESP_LOGI(TAG, "WWW upload complete (%d bytes), rebooting...", total);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    esp_restart();
-
+    ESP_LOGI(TAG, "WWW upload complete (%d bytes) — restart required to apply", total);
     return ESP_OK;
 }
 
-esp_err_t WebServerManager::HandleDownload(httpd_req_t* req)
-{
-    char query[64] = {};
-    char label[32] = {};
+// ──────────────────────────────────────────────────────────────
+// CORS + partition download
+// ──────────────────────────────────────────────────────────────
 
-    if (httpd_req_get_url_query_len(req) == 0 ||
-        httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
-        httpd_query_key_value(query, "partition", label, sizeof(label)) != ESP_OK)
+void WebServerManager::SetCorsHeaders(httpd_req_t* req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin",  "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+}
+
+esp_err_t WebServerManager::HandleCorsPreflight(httpd_req_t* req)
+{
+    SetCorsHeaders(req);
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, nullptr, 0);
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::HandleDownloadPartition(httpd_req_t* req)
+{
+    SetCorsHeaders(req);
+
+    char query[96] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK)
     {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing ?partition=");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ?partition=");
+        return ESP_FAIL;
+    }
+
+    char label[17] = {};
+    if (httpd_query_key_value(query, "partition", label, sizeof(label)) != ESP_OK)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing 'partition' param");
         return ESP_FAIL;
     }
 
@@ -270,38 +318,36 @@ esp_err_t WebServerManager::HandleDownload(httpd_req_t* req)
         ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, label);
     if (!p)
     {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "partition not found");
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Unknown partition");
         return ESP_FAIL;
     }
 
-    char disp[64];
-    snprintf(disp, sizeof(disp), "attachment; filename=\"%s.bin\"", label);
+    ESP_LOGI(TAG, "Download partition '%s' (%lu bytes)", label, (unsigned long)p->size);
+
     httpd_resp_set_type(req, "application/octet-stream");
+
+    char disp[80];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s.bin\"", label);
     httpd_resp_set_hdr(req, "Content-Disposition", disp);
 
-    static constexpr size_t CHUNK = 4096;
-    void* buf = malloc(CHUNK);
-    if (!buf)
-    {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
-        return ESP_FAIL;
-    }
-
+    constexpr size_t CHUNK = 4096;
+    uint8_t buf[CHUNK];
     size_t offset = 0;
     while (offset < p->size)
     {
-        size_t toRead = (p->size - offset < CHUNK) ? p->size - offset : CHUNK;
-        if (esp_partition_read(p, offset, buf, toRead) != ESP_OK)
+        size_t n = (p->size - offset < CHUNK) ? (p->size - offset) : CHUNK;
+        if (esp_partition_read(p, offset, buf, n) != ESP_OK)
         {
-            free(buf);
-            httpd_resp_send_chunk(req, nullptr, 0);
+            ESP_LOGE(TAG, "esp_partition_read failed at offset %lu", (unsigned long)offset);
             return ESP_FAIL;
         }
-        httpd_resp_send_chunk(req, static_cast<const char*>(buf), toRead);
-        offset += toRead;
+        if (httpd_resp_send_chunk(req, reinterpret_cast<const char*>(buf), n) != ESP_OK)
+        {
+            ESP_LOGW(TAG, "Client disconnected during download");
+            return ESP_FAIL;
+        }
+        offset += n;
     }
-
-    free(buf);
     httpd_resp_send_chunk(req, nullptr, 0);
     return ESP_OK;
 }

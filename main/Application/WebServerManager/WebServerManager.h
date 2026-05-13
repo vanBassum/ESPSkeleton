@@ -20,6 +20,7 @@ public:
     void Init();
 
     void Broadcast(const char* json, int len);
+    void BroadcastBinary(const uint8_t* data, size_t len);
 
 private:
     ServiceProvider& serviceProvider_;
@@ -36,5 +37,8 @@ private:
 
     static esp_err_t HandleUploadApp(httpd_req_t* req);
     static esp_err_t HandleUploadWww(httpd_req_t* req);
-    static esp_err_t HandleDownload(httpd_req_t* req);
+    static esp_err_t HandleDownloadPartition(httpd_req_t* req);
+    static esp_err_t HandleCorsPreflight(httpd_req_t* req);
+
+    static void SetCorsHeaders(httpd_req_t* req);
 };

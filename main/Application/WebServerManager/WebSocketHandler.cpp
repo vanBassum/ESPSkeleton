@@ -61,6 +61,7 @@ void WebSocketHandler::RemoveWsClient(int fd)
         if (wsClients_[i] == fd)
         {
             wsClients_[i] = 0;
+            consecBinFails_[i] = 0;
             ESP_LOGI(TAG, "WS client removed: fd=%d slot=%d", fd, i);
             return;
         }
@@ -74,7 +75,15 @@ void WebSocketHandler::OnClientDisconnected(int fd)
 
 void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int len)
 {
-    LOCK(wsMutex_);
+    // Snapshot clients under lock, then send outside the lock. Holding wsMutex_
+    // across send would deadlock when a broadcaster source (e.g. ConsoleManager)
+    // already holds its own mutex and httpd internals call back into us.
+    int clients[MAX_WS_CLIENTS];
+
+    {
+        LOCK(wsMutex_);
+        memcpy(clients, wsClients_, sizeof(clients));
+    }
 
     httpd_ws_frame_t frame = {};
     frame.type = HTTPD_WS_TYPE_TEXT;
@@ -83,13 +92,54 @@ void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int le
 
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
     {
-        if (wsClients_[i] != 0)
+        if (clients[i] != 0)
         {
-            if (httpd_ws_send_frame_async(server, wsClients_[i], &frame) != ESP_OK)
+            if (httpd_ws_send_frame_async(server, clients[i], &frame) != ESP_OK)
             {
-                ESP_LOGW(TAG, "Broadcast failed to fd=%d, removing", wsClients_[i]);
+                ESP_LOGW(TAG, "Broadcast failed to fd=%d, removing", clients[i]);
+                LOCK(wsMutex_);
                 wsClients_[i] = 0;
             }
+        }
+    }
+}
+
+void WebSocketHandler::BroadcastBinary(httpd_handle_t server, const uint8_t* data, size_t len)
+{
+    int clients[MAX_WS_CLIENTS];
+
+    {
+        LOCK(wsMutex_);
+        memcpy(clients, wsClients_, sizeof(clients));
+    }
+
+    httpd_ws_frame_t frame = {};
+    frame.type = HTTPD_WS_TYPE_BINARY;
+    frame.payload = const_cast<uint8_t*>(data);
+    frame.len = len;
+
+    for (int i = 0; i < MAX_WS_CLIENTS; i++)
+    {
+        if (clients[i] == 0) continue;
+
+        if (httpd_ws_send_frame_async(server, clients[i], &frame) == ESP_OK)
+        {
+            LOCK(wsMutex_);
+            consecBinFails_[i] = 0;
+            continue;
+        }
+
+        // Push failed — usually EAGAIN (TCP send buffer momentarily full) under
+        // load. Don't remove the client on a single failure; the socket-close
+        // callback cleans up real disconnects. Only after many consecutive
+        // failures do we give up on this client.
+        LOCK(wsMutex_);
+        if (++consecBinFails_[i] >= MAX_BIN_FAILS)
+        {
+            ESP_LOGW(TAG, "BroadcastBinary giving up on fd=%d after %d consecutive failures",
+                     clients[i], consecBinFails_[i]);
+            wsClients_[i] = 0;
+            consecBinFails_[i] = 0;
         }
     }
 }

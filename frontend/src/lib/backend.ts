@@ -5,6 +5,7 @@ const DEV_HOST = "strux.local"
 // ── Types ────────────────────────────────────────────────────────
 
 type BroadcastHandler = (msg: Record<string, unknown>) => void
+type BinaryHandler = (data: ArrayBuffer) => void
 
 interface PendingRequest {
   resolve: (data: unknown) => void
@@ -23,6 +24,7 @@ class BackendService {
   private ws: WebSocket | null = null
   private pending = new Map<number, PendingRequest>()
   private broadcastHandlers = new Set<BroadcastHandler>()
+  private binaryHandlers = new Set<BinaryHandler>()
   private statusHandlers = new Set<StatusHandler>()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -70,6 +72,7 @@ class BackendService {
       const url = `${proto}//${host}/ws`
       console.log(`[BackendService] connecting to ${url} (DEV=${import.meta.env.DEV})`)
       const ws = new WebSocket(url)
+      ws.binaryType = "arraybuffer"
       let opened = false
 
       ws.onopen = () => {
@@ -82,6 +85,19 @@ class BackendService {
       }
 
       ws.onmessage = (ev) => {
+        // Binary frames are dispatched to binary subscribers.
+        if (ev.data instanceof ArrayBuffer) {
+          this.binaryHandlers.forEach((fn) => fn(ev.data))
+          return
+        }
+        // Defensive: some browsers may deliver the first frame as a Blob if
+        // binaryType wasn't applied in time. Convert and dispatch.
+        if (typeof Blob !== "undefined" && ev.data instanceof Blob) {
+          ev.data.arrayBuffer().then((buf) => {
+            this.binaryHandlers.forEach((fn) => fn(buf))
+          })
+          return
+        }
         try {
           const msg = JSON.parse(ev.data)
           if (typeof msg.id === "number") {
@@ -98,8 +114,12 @@ class BackendService {
           } else {
             this.broadcastHandlers.forEach((fn) => fn(msg))
           }
-        } catch {
-          /* ignore non-JSON frames */
+        } catch (e) {
+          const sample = typeof ev.data === "string" ? ev.data.slice(-80) : "(non-string)"
+          console.warn(
+            `[BackendService] failed to parse WS frame (${typeof ev.data === "string" ? ev.data.length : "?"} bytes); tail: ${sample}`,
+            e,
+          )
         }
       }
 
@@ -171,6 +191,14 @@ class BackendService {
     }
   }
 
+  subscribeBinary(fn: BinaryHandler): () => void {
+    this.binaryHandlers.add(fn)
+    this.ensureConnected()
+    return () => {
+      this.binaryHandlers.delete(fn)
+    }
+  }
+
   // ── API methods ──────────────────────────────────────────────
 
   async getInfo(): Promise<DeviceInfo> {
@@ -203,6 +231,10 @@ class BackendService {
 
   async getPartitions(): Promise<PartitionsResponse> {
     return this.send<PartitionsResponse>("partitions")
+  }
+
+  async reboot(): Promise<{ ok: boolean }> {
+    return this.send("reboot")
   }
 
   partitionDownloadUrl(label: string): string {

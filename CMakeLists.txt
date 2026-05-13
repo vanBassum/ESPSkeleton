@@ -28,8 +28,12 @@ project(Strux)
 
 find_program(PNPM pnpm)
 if(PNPM)
+    # --no-frozen-lockfile lets package.json edits auto-update the lockfile
+    # (CMake-driven builds shouldn't fail just because a dep was added).
+    # --config.confirm-modules-purge=false skips the interactive prompt that
+    # appears when node_modules is out of sync.
     add_custom_target(frontend_build
-        COMMAND ${PNPM} install
+        COMMAND ${PNPM} install --no-frozen-lockfile --config.confirm-modules-purge=false
         COMMAND ${PNPM} build
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/frontend
         COMMENT "Building frontend (pnpm install && pnpm build)..."

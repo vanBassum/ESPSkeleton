@@ -10,11 +10,26 @@ class JsonWriter;
 // Setting definition table
 // ──────────────────────────────────────────────────────────────
 
+// Calling a non-constexpr function from inside a constant-evaluated
+// constexpr context fails the compile with a clear, named diagnostic.
+// (We can't use `throw` because IDF builds with -fno-exceptions.)
+inline void NvsKeyExceedsNvsKeyNameMaxSize() {}
+
 // Opaque key type — accepts string literals directly.
 // Implicit const char* conversion lets the NVS layer use it transparently.
+// Constructor enforces NVS's 15-char key limit at compile time when used
+// in a constant-evaluated context (i.e. inside `constexpr SETTINGS_DEFS`).
 struct SettingKey {
     const char* key;
-    constexpr SettingKey(const char* k) : key(k) {}
+    constexpr SettingKey(const char* k) : key(k)
+    {
+        // NVS_KEY_NAME_MAX_SIZE includes the null terminator, so the usable
+        // key length is NVS_KEY_NAME_MAX_SIZE - 1 (= 15).
+        size_t n = 0;
+        while (k[n]) ++n;
+        if (n >= NVS_KEY_NAME_MAX_SIZE)
+            NvsKeyExceedsNvsKeyNameMaxSize();
+    }
     constexpr operator const char*() const { return key; }
 };
 

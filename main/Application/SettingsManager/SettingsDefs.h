@@ -6,7 +6,7 @@
 // Setting definitions — add new settings here
 // ──────────────────────────────────────────────────────────────
 
-inline const SettingDef SETTINGS_DEFS[] = {
+inline constexpr SettingDef SETTINGS_DEFS[] = {
     // WiFi
     { "wifi.ssid",      SettingType::String, "WiFi SSID",      "" },
     { "wifi.password",  SettingType::String, "WiFi Password",  "" },

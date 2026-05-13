@@ -119,6 +119,15 @@ public:
         return *this;
     }
 
+    JsonWriter& field(const char* name, float value)
+    {
+        writeKey(name);
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%.2f", value);
+        raw(buf);
+        return *this;
+    }
+
     JsonWriter& field(const char* name, bool value)
     {
         writeKey(name);

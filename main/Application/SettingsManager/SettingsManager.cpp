@@ -37,6 +37,7 @@ void SettingsManager::Init()
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to open NVS handle: %s", esp_err_to_name(err));
+        initAttempt.SetReady();
         return;
     }
 
