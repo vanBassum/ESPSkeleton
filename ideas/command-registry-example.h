@@ -188,19 +188,17 @@ private:
 //  }
 //
 // ──────────────────────────────────────────────────────────────
-// OPEN QUESTION — authentication
+// DECIDED — authentication stays OUT of the registry
 // ──────────────────────────────────────────────────────────────
-// The old table had `bool requiresAuth` per command; this sketch
-// deliberately omits it. Two candidate models:
+// The old table had `bool requiresAuth` per command. That mixes a
+// security policy into a routing table — cross-contamination of
+// responsibilities — so the registry knows nothing about auth.
 //
-//   (a) Session-level auth: the WebSocket session authenticates once
-//       (PIN on connect, if set); afterwards every command is allowed,
-//       before that none are. Commands know nothing about auth — it is
-//       purely a transport concern. Cleanest, but needs a small
-//       frontend change and loses unauthenticated read-only access
-//       (ping/info before login).
+// Interim, to preserve today's PIN behavior: handlers that guard
+// state-changing operations call the existing CheckAuth helper
+// themselves, first thing in the handler body. Auth stays available
+// as a utility; commands that need it opt in where the work happens.
 //
-//   (b) Keep one `bool requiresAuth` (or `mutates`) per entry as a
-//       declared fact about the command, enforced by the dispatcher
-//       before the handler runs. Default should be "auth required" so
-//       forgetting the flag fails safe.
+// If a richer model is ever needed (session auth, permission levels),
+// it should be flags/enum on the SESSION or transport — not a bool
+// per command entry.
