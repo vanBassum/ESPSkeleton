@@ -1,7 +1,10 @@
 #include "UpdateManager.h"
+#include "CommandManager.h"
 #include "ContextLock.h"
+#include "JsonWriter.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
 #include <cstring>
 
 UpdateManager::UpdateManager(ServiceProvider& serviceProvider)
@@ -17,6 +20,8 @@ void UpdateManager::Init()
         ESP_LOGW(TAG, "Already initialized or initializing");
         return;
     }
+
+    serviceProvider_.getCommandManager().Register(this, commands_);
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
@@ -260,4 +265,45 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
         esp_partition_iterator_release(it);
 
     return count;
+}
+
+// ──────────────────────────────────────────────────────────────
+// WebSocket commands
+// ──────────────────────────────────────────────────────────────
+
+void UpdateManager::Cmd_UpdateStatus(void* ctx, const char* json, JsonWriter& resp)
+{
+    auto* self = static_cast<UpdateManager*>(ctx);
+    const esp_app_desc_t* app = esp_app_get_description();
+
+    resp.field("firmware", app->version);
+    resp.field("running", self->GetRunningPartition());
+    resp.field("nextSlot", self->GetNextPartition());
+}
+
+void UpdateManager::Cmd_Partitions(void* ctx, const char* json, JsonWriter& resp)
+{
+    auto* self = static_cast<UpdateManager*>(ctx);
+
+    static constexpr int MAX_PARTITIONS = 16;
+    UpdateManager::PartitionInfo parts[MAX_PARTITIONS];
+    int count = self->GetPartitions(parts, MAX_PARTITIONS);
+
+    resp.fieldArray("partitions");
+    for (int i = 0; i < count; i++)
+    {
+        const auto& p = parts[i];
+        resp.beginObject();
+        resp.field("label",      p.label);
+        resp.field("type",       p.type);
+        resp.field("subtype",    p.subtype);
+        resp.field("offset",     p.offset);
+        resp.field("size",       p.size);
+        resp.field("running",    p.running);
+        resp.field("nextOta",    p.nextOta);
+        resp.field("uploadable", p.uploadable);
+        resp.field("version",    p.version);
+        resp.endObject();
+    }
+    resp.endArray();
 }

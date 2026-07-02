@@ -2,9 +2,12 @@
 
 #include "ServiceProvider.h"
 #include "InitState.h"
+#include "CommandEntry.h"
 #include "Mutex.h"
 #include <esp_ota_ops.h>
 #include <esp_vfs_fat.h>
+
+class JsonWriter;
 
 class UpdateManager {
     static constexpr const char* TAG = "UpdateManager";
@@ -67,4 +70,13 @@ private:
     void AbortOta();
 
     Mutex mutex_;
+
+    // ── WebSocket commands (registered with CommandManager in Init) ──
+    static void Cmd_UpdateStatus(void* ctx, const char* json, JsonWriter& resp);
+    static void Cmd_Partitions(void* ctx, const char* json, JsonWriter& resp);
+
+    inline static CommandEntry commands_[] = {
+        { "updateStatus", &UpdateManager::Cmd_UpdateStatus },
+        { "partitions",   &UpdateManager::Cmd_Partitions },
+    };
 };
