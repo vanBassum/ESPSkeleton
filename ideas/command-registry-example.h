@@ -3,100 +3,116 @@
 // ══════════════════════════════════════════════════════════════
 // DESIGN SKETCH — not built, not included anywhere.
 //
-// Command registry without dynamic memory, without std::function,
-// and with command tables that live in FLASH (.rodata), so they
-// can never be destroyed, never dangle, and never be corrupted.
+// Command registry without dynamic memory: the entries themselves
+// are the links of an intrusive chain, owned as `inline static`
+// members by the manager that implements them.
 //
-// The three ideas, in one sentence each:
-//   1. CommandEntry holds no runtime data (no `this`, no `next`),
-//      so tables can be `static constexpr` → stored in flash.
-//   2. `ctx` (the owner's `this`) is bound ONCE per table at
-//      Register() time, not per entry.
-//   3. Register() boot-asserts the table pointer is in flash, so
-//      a stack/heap table fails on the first call, every time.
+// Key properties:
+//   • No heap, no std::function, no max-commands constant.
+//   • Owner never touches linking — Register() does the chaining.
+//   • Registration is Init()-time only, single-threaded, and the
+//     chain is IMMUTABLE afterwards → dispatch needs no mutex.
+//   • Misuse is boot-deterministic: destroying a registered entry
+//     or registering twice aborts (device resets) on the first
+//     run, every run — never a surprise in the field.
+//   • Rip-out property: delete a manager's folder and its commands
+//     go with it; nothing else references them.
 // ══════════════════════════════════════════════════════════════
 
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
+#include <cassert>
 #include "esp_log.h"
-#include "esp_memory_utils.h"   // esp_ptr_in_drom()
 #include "JsonWriter.h"
 
 // ──────────────────────────────────────────────────────────────
 // CommandManager side
 // ──────────────────────────────────────────────────────────────
 
-// One command. A literal type: two pointers and a bool, nothing that
-// needs constructing or destroying. Handlers are plain function
-// pointers — captureless lambdas decay to these at compile time.
 struct CommandEntry
 {
     const char* name;
-    bool requiresAuth;
     void (*handler)(void* ctx, const char* json, JsonWriter& resp);
+
+    // Managed by CommandManager::Register() — owners never touch these.
+    void* ctx = nullptr;
+    CommandEntry* next = nullptr;
+    bool registered = false;
+
+    // A registered entry is a live link in the dispatch chain; letting
+    // it die would leave a dangling pointer in the chain. There is no
+    // compile-time way to forbid this (a deleted dtor would propagate
+    // up through the owning manager to the global ApplicationContext),
+    // so: abort. The device resets with a clear message on the very
+    // first run of the offending code — unmistakably "not supposed to
+    // be used like that."
+    ~CommandEntry()
+    {
+        if (registered)
+        {
+            ESP_LOGE("CommandEntry", "registered command '%s' destroyed — "
+                     "command tables must live for the whole application", name);
+            abort();
+        }
+    }
 };
 
 class CommandManager
 {
     static constexpr const char* TAG = "CommandManager";
 
-    // One registered table (a "block"). One slot per registering
-    // manager — NOT per command — so the pool is bounded by how many
-    // managers exist, a number that changes rarely. Overflow asserts
-    // on first boot, deterministically.
-    struct Block
-    {
-        const CommandEntry* entries;
-        size_t count;
-        void* ctx;
-    };
-
-    static constexpr size_t kMaxBlocks = 16;
-    Block blocks_[kMaxBlocks] = {};
-    size_t blockCount_ = 0;
+    CommandEntry* head_ = nullptr;
 
 public:
-    // Called from a manager's Init(). `entries` MUST point to a
-    // static constexpr table (flash). `ctx` is handed back to every
-    // handler in the table — pass `this`.
-    void Register(const CommandEntry* entries, size_t count, void* ctx)
+    // Called from a manager's Init(). Takes the array by reference so
+    // the count is deduced — it can never be wrong. `ctx` (usually the
+    // owner's `this`) is stamped into every entry and handed back to
+    // its handler at dispatch.
+    //
+    // Registration happens during the ordered Init() sequence in
+    // main.cpp — single-threaded, and strictly before WebServerManager
+    // (last in the sequence) can dispatch anything. After boot the
+    // chain never changes, so no locking exists anywhere in here.
+    template <size_t N>
+    void Register(void* ctx, CommandEntry (&commands)[N])
     {
-        // Lifetime is not a convention here, it is a checked invariant:
-        // constexpr tables live in DROM (flash rodata). Anything on the
-        // stack or heap is in DRAM and fails immediately — see
-        // BADBADEXAMPLE below. If it registered, it is immortal.
-        assert(esp_ptr_in_drom(entries) && "command table must be static constexpr (flash)");
+        for (size_t i = 0; i < N; ++i)
+        {
+            // Re-registering would re-link an entry that is already in
+            // the chain and cycle it → Dispatch() would hang. Make the
+            // mistake loud instead: fails on first boot, deterministic.
+            assert(!commands[i].registered && "command registered twice");
+            assert(Find(commands[i].name) == nullptr && "duplicate command name");
 
-        assert(blockCount_ < kMaxBlocks && "raise kMaxBlocks");
-
-        // Registration runs unconditionally at Init(), so a duplicate
-        // name is caught on the very first boot after it is introduced.
-        for (size_t i = 0; i < count; i++)
-            assert(Find(entries[i].name) == nullptr && "duplicate command name");
-
-        blocks_[blockCount_++] = { entries, count, ctx };
+            commands[i].ctx = ctx;
+            commands[i].registered = true;
+            commands[i].next = head_;
+            head_ = &commands[i];
+        }
     }
 
-    // Dispatch: linear walk over blocks then entries. ~15 commands
-    // total in practice — lookup cost is irrelevant.
+    // Linear walk — ~15 commands in practice, cost is irrelevant.
     bool Dispatch(const char* type, const char* json, JsonWriter& resp)
     {
-        for (size_t b = 0; b < blockCount_; b++)
-            for (size_t i = 0; i < blocks_[b].count; i++)
-            {
-                const CommandEntry& e = blocks_[b].entries[i];
-                if (strcmp(type, e.name) != 0)
-                    continue;
-                if (e.requiresAuth && !CheckAuth(json, resp))
-                    return true;
-                e.handler(blocks_[b].ctx, json, resp);
-                return true;
-            }
+        for (CommandEntry* e = head_; e != nullptr; e = e->next)
+        {
+            if (strcmp(type, e->name) != 0)
+                continue;
+            e->handler(e->ctx, json, resp);
+            return true;
+        }
         return false;   // unknown command
     }
 
 private:
-    const CommandEntry* Find(const char* name) const; // omitted
-    bool CheckAuth(const char* json, JsonWriter& resp); // unchanged from today
+    const CommandEntry* Find(const char* name) const
+    {
+        for (CommandEntry* e = head_; e != nullptr; e = e->next)
+            if (strcmp(name, e->name) == 0)
+                return e;
+        return nullptr;
+    }
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -109,32 +125,32 @@ public:
     void Init(/* ServiceProvider& sp */)
     {
         // CommandManager& cmdMan = sp.getCommandManager();
-        // cmdMan.Register(kCommands, std::size(kCommands), this);
+        // cmdMan.Register(this, commands);
         //
-        // That's it. No linking, no unregistering, no lifetime to
-        // manage. Delete this manager's folder and its commands
-        // vanish with it.
+        // That's it. No linking, no lifetime management. Delete this
+        // manager's folder and its commands vanish with it.
     }
 
 private:
-    void CmdWifiScan(const char* json, JsonWriter& resp)
+    // Static trampoline casts ctx back to the owner. Being a member,
+    // it may call private methods.
+    static void DoWifiScan(void* ctx, const char* json, JsonWriter& resp)
     {
-        // ... actual work, a normal private member with full access
+        static_cast<NetworkManager*>(ctx)->DoWifiScanImpl(json, resp);
     }
 
-    // The table. `static constexpr` on a type with no runtime data
-    // puts this in .rodata → flash. Zero bytes of RAM per command.
-    // The lambdas are captureless, so they convert to plain function
-    // pointers at compile time; `ctx` arrives at dispatch and is cast
-    // back to the owner. Being defined in-class, the lambda may call
-    // private members.
-    static constexpr CommandEntry kCommands[] = {
-        { "wifiScan", false,
-          [](void* ctx, const char* json, JsonWriter& resp)
-              { static_cast<NetworkManager*>(ctx)->CmdWifiScan(json, resp); } },
+    void DoWifiScanImpl(const char* json, JsonWriter& resp)
+    {
+        // ... actual work
+    }
 
-        // { "wifiStatus", false, ... },   // more commands: more lines,
-        //                                 // zero more RAM
+    // `inline static` member → static storage duration → lives for the
+    // whole program, which is exactly what the dtor guard demands.
+    // RAM cost: ~24 bytes per command. ctx/next/registered are filled
+    // in by Register().
+    inline static CommandEntry commands[] = {
+        { "wifiScan", &NetworkManager::DoWifiScan },
+        // { "wifiStatus", &NetworkManager::DoWifiStatus },
     };
 };
 
@@ -144,18 +160,30 @@ private:
 //
 //  void BADBADEXAMPLE(CommandManager& cmdMan)
 //  {
-//      CommandEntry testCommands[] = {                 // ← stack (DRAM)
-//          { "justtesting", false, someHandler },
+//      CommandEntry testCommands[] = {                 // ← stack!
+//          { "justtesting", &SomeHandler },
 //      };
-//      cmdMan.Register(testCommands, 1, nullptr);
-//      // ^ asserts HERE, on the first call, every boot:
-//      //   esp_ptr_in_drom(testCommands) is false for stack, heap,
-//      //   and even static non-const RAM arrays. Only genuinely
-//      //   immortal flash tables get in, so the registry can never
-//      //   hold a dangling pointer. The bad example is not
-//      //   discouraged — it is impossible.
+//      cmdMan.Register(nullptr, testCommands);
+//      // ... scope ends → ~CommandEntry() sees registered == true
+//      //     → ESP_LOGE + abort() → device resets.
+//      // Fails on the FIRST run of this code path, every run. The
+//      // mistake cannot survive a single test on the desk.
 //  }
 //
-// Conditional registration (rare): a manager that only exposes some
-// commands in some configs splits them into two constexpr tables and
-// calls Register() twice behind an `if`. Blocks are cheap (12 bytes).
+// ──────────────────────────────────────────────────────────────
+// OPEN QUESTION — authentication
+// ──────────────────────────────────────────────────────────────
+// The old table had `bool requiresAuth` per command; this sketch
+// deliberately omits it. Two candidate models:
+//
+//   (a) Session-level auth: the WebSocket session authenticates once
+//       (PIN on connect, if set); afterwards every command is allowed,
+//       before that none are. Commands know nothing about auth — it is
+//       purely a transport concern. Cleanest, but needs a small
+//       frontend change and loses unauthenticated read-only access
+//       (ping/info before login).
+//
+//   (b) Keep one `bool requiresAuth` (or `mutates`) per entry as a
+//       declared fact about the command, enforced by the dispatcher
+//       before the handler runs. Default should be "auth required" so
+//       forgetting the flag fails safe.
