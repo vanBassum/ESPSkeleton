@@ -10,8 +10,10 @@
 // Key properties:
 //   • No heap, no std::function, no max-commands constant.
 //   • Owner never touches linking — Register() does the chaining.
-//   • Registration is Init()-time only, single-threaded, and the
-//     chain is IMMUTABLE afterwards → dispatch needs no mutex.
+//   • Thread-safe by contract, like every manager: a Mutex guards
+//     the chain, so Register() may be called from any task at any
+//     time. Handlers run OUTSIDE the lock, so even a handler that
+//     registers more commands cannot deadlock.
 //   • Misuse is boot-deterministic: destroying a registered entry
 //     or registering twice aborts (device resets) on the first
 //     run, every run — never a surprise in the field.
@@ -25,6 +27,8 @@
 #include <cassert>
 #include "esp_log.h"
 #include "JsonWriter.h"
+#include "Mutex.h"
+#include "ContextLock.h"
 
 // ──────────────────────────────────────────────────────────────
 // CommandManager side
@@ -62,6 +66,7 @@ class CommandManager
 {
     static constexpr const char* TAG = "CommandManager";
 
+    Mutex mutex_;
     CommandEntry* head_ = nullptr;
 
 public:
@@ -70,13 +75,13 @@ public:
     // owner's `this`) is stamped into every entry and handed back to
     // its handler at dispatch.
     //
-    // Registration happens during the ordered Init() sequence in
-    // main.cpp — single-threaded, and strictly before WebServerManager
-    // (last in the sequence) can dispatch anything. After boot the
-    // chain never changes, so no locking exists anywhere in here.
+    // Thread-safe: may be called from any task at any time, not just
+    // the Init() sequence. Entries can be added late; they can only
+    // never be DESTROYED (see ~CommandEntry).
     template <size_t N>
     void Register(void* ctx, CommandEntry (&commands)[N])
     {
+        LOCK(mutex_);
         for (size_t i = 0; i < N; ++i)
         {
             // Re-registering would re-link an entry that is already in
@@ -85,6 +90,9 @@ public:
             assert(!commands[i].registered && "command registered twice");
             assert(Find(commands[i].name) == nullptr && "duplicate command name");
 
+            // Fields are fully written BEFORE the entry becomes
+            // reachable through head_, so a concurrent Dispatch can
+            // never observe a half-initialized entry.
             commands[i].ctx = ctx;
             commands[i].registered = true;
             commands[i].next = head_;
@@ -93,19 +101,28 @@ public:
     }
 
     // Linear walk — ~15 commands in practice, cost is irrelevant.
+    //
+    // The lock is held only while FINDING the entry, not while running
+    // the handler. This is safe because entries are immortal (dtor
+    // guard): the pointer stays valid after the lock is released, and
+    // name/handler/ctx are written once, before the entry is linked.
+    // Running handlers outside the lock means a handler can call
+    // Register() — or dispatch nested commands — without deadlocking.
     bool Dispatch(const char* type, const char* json, JsonWriter& resp)
     {
-        for (CommandEntry* e = head_; e != nullptr; e = e->next)
+        const CommandEntry* e = nullptr;
         {
-            if (strcmp(type, e->name) != 0)
-                continue;
-            e->handler(e->ctx, json, resp);
-            return true;
+            LOCK(mutex_);
+            e = Find(type);
         }
-        return false;   // unknown command
+        if (e == nullptr)
+            return false;   // unknown command
+        e->handler(e->ctx, json, resp);
+        return true;
     }
 
 private:
+    // Callers must hold mutex_.
     const CommandEntry* Find(const char* name) const
     {
         for (CommandEntry* e = head_; e != nullptr; e = e->next)
