@@ -1,62 +1,52 @@
 #pragma once
 
 // ══════════════════════════════════════════════════════════════
-// THE REGISTRATION PATTERN — reference distillation, not built.
+// THE REGISTRATION PATTERN — bare minimum, reference only.
 //
-// How a central manager can dispatch to things owned by other
-// managers, with zero heap, zero std::function, no max-count
-// constant, and no upward dependencies. First applied in
-// CommandManager (see Application/CommandManager/CommandEntry.h);
-// candidates for the same treatment: MqttManager's command/
-// discovery hooks, settings definitions.
+// How a central hub can call into things owned by other managers,
+// with zero heap, zero std::function, no max-count constant, and
+// no upward dependencies. First applied in CommandManager; also
+// fits MQTT hooks, settings definitions, observers, log sinks.
 //
 // The essence, in five decisions:
 //
-//  1. ENTRIES ARE THE LINKS. The registry stores nothing; each
-//     entry carries its own `next` pointer. No array in the hub,
-//     no capacity to size, no allocation ever.
+//  1. ENTRIES ARE THE LINKS. The hub stores nothing but a head
+//     pointer; each entry carries its own `next`. No array in the
+//     hub, no capacity to size, no allocation ever.
 //
 //  2. THE OWNER PROVIDES THE MEMORY. Entries live as an
 //     `inline static Entry entries_[]` member of the registering
-//     class → static storage duration → immortal. The registry
-//     only ever holds pointers to memory that cannot die.
+//     class → static storage duration → immortal. The hub only
+//     ever points at memory that cannot die.
 //
-//  3. CTX IS STAMPED ONCE, AT REGISTRATION. Entries are written
-//     as pure data ({name, function}); Register() fills in the
-//     owner's `this`. Handlers are captureless-lambda/static-fn
-//     trampolines that cast ctx back. That's what keeps
-//     std::function (and its heap) out.
+//  3. CTX IS STAMPED ONCE, AT REGISTRATION. Entries are written as
+//     pure data; Register() fills in the owner's `this`. Handlers
+//     are static-function trampolines that cast ctx back. That is
+//     what keeps std::function (and its heap) out.
 //
 //  4. MISUSE FAILS ON THE FIRST BOOT, EVERY BOOT. Registration is
-//     unconditional straight-line code in Init(), so every guard
-//     fires deterministically on the developer's desk:
-//       - destroying a registered entry  → dtor logs + abort()
-//         (compile-time forbid is impossible: a deleted dtor would
-//         propagate up to the global ApplicationContext)
+//     unconditional straight-line code in Init(), so the guards
+//     fire deterministically on the developer's desk:
+//       - destroying a registered entry → dtor logs + abort()
+//         (a deleted dtor is impossible: it would propagate up to
+//         the global ApplicationContext)
 //       - registering the same array twice → assert (would cycle
-//         the chain and hang dispatch)
-//       - duplicate name → assert
+//         the chain)
 //
-//  5. LOCK THE LINKS, NOT THE CALLS. A RecursiveMutex guards the
-//     chain (recursive so Register can use Find under its own
-//     lock, keeping check-and-insert atomic). Dispatch finds the
-//     entry under the lock but runs the handler OUTSIDE it — safe
-//     because entries are immortal — so a handler may register or
-//     dispatch recursively without deadlock.
+//  5. LOCK THE LINKS, NOT THE CALLS. A mutex guards the chain;
+//     handlers run OUTSIDE it — safe because entries are immortal —
+//     so a handler may itself register without deadlock.
 // ══════════════════════════════════════════════════════════════
 
 #include <cstdlib>
-#include <cstring>
 #include <cassert>
 #include "esp_log.h"
-#include "RecursiveMutex.h"
+#include "Mutex.h"
 #include "ContextLock.h"
 
-// Adapt the handler signature per use case; everything else stays.
 struct Entry
 {
-    const char* name;
-    void (*handler)(void* ctx /*, payload... */);
+    void (*handler)(void* ctx);   // adapt the signature per use case
 
     // Managed by Registry::Register() — owners never touch these.
     void* ctx = nullptr;
@@ -67,8 +57,8 @@ struct Entry
     {
         if (registered)
         {
-            ESP_LOGE("Entry", "registered entry '%s' destroyed — "
-                     "entry tables must live for the whole application", name);
+            ESP_LOGE("Entry", "registered entry destroyed — entry tables "
+                     "must live for the whole application");
             abort();
         }
     }
@@ -78,13 +68,13 @@ class Registry
 {
     static constexpr const char* TAG = "Registry";
 
-    RecursiveMutex mutex_;
+    Mutex mutex_;
     Entry* head_ = nullptr;
 
 public:
     // Array by reference: the count is deduced, so it can never be wrong.
-    // Thread-safe and usable from construction (members are initialized
-    // before any Init() runs), so registration order doesn't matter.
+    // Thread-safe, and usable from construction — registration order
+    // between managers doesn't matter.
     template <size_t N>
     void Register(void* ctx, Entry (&entries)[N])
     {
@@ -92,7 +82,6 @@ public:
         for (size_t i = 0; i < N; ++i)
         {
             assert(!entries[i].registered && "entry registered twice");
-            assert(Find(entries[i].name) == nullptr && "duplicate name");
 
             entries[i].ctx = ctx;
             entries[i].registered = true;
@@ -101,22 +90,17 @@ public:
         }
     }
 
-    void Dispatch(const char* name /*, payload... */)
+    void InvokeAll()
     {
-        const Entry* e = Find(name);
-        if (e == nullptr)
-            return;
-        e->handler(e->ctx);   // outside the lock — see decision 5
-    }
-
-private:
-    const Entry* Find(const char* name)
-    {
-        LOCK(mutex_);
-        for (Entry* e = head_; e != nullptr; e = e->next)
-            if (strcmp(name, e->name) == 0)
-                return e;
-        return nullptr;
+        Entry* head;
+        {
+            LOCK(mutex_);
+            head = head_;
+        }
+        // Outside the lock — entries are immortal and next-pointers are
+        // never rewritten after linking, so the walk is safe.
+        for (Entry* e = head; e != nullptr; e = e->next)
+            e->handler(e->ctx);
     }
 };
 
@@ -140,9 +124,9 @@ private:
 
     void DoThingImpl() { /* real work, full private access */ }
 
-    // ~24 bytes RAM per entry. Delete this class and its entries
+    // ~16 bytes RAM per entry. Delete this class and its entries
     // vanish with it — nothing else references them.
     inline static Entry entries_[] = {
-        { "doThing", &SomeManager::DoThing },
+        { &SomeManager::DoThing },
     };
 };
