@@ -2,6 +2,7 @@
 
 #include "ServiceProvider.h"
 #include "InitState.h"
+#include "CommandEntry.h"
 #include <nvs_handle.hpp>
 
 class JsonWriter;
@@ -87,4 +88,15 @@ private:
     std::unique_ptr<nvs::NVSHandle> handle_;
 
     void ApplyDefaults();
+
+    // ── WebSocket commands (registered with CommandManager in Init) ──
+    static void Cmd_GetSettings(void* ctx, const char* json, JsonWriter& resp);
+    static void Cmd_SetSetting(void* ctx, const char* json, JsonWriter& resp);
+    static void Cmd_SaveSettings(void* ctx, const char* json, JsonWriter& resp);
+
+    inline static CommandEntry commands_[] = {
+        { "getSettings",  &SettingsManager::Cmd_GetSettings },
+        { "setSetting",   &SettingsManager::Cmd_SetSetting },
+        { "saveSettings", &SettingsManager::Cmd_SaveSettings },
+    };
 };

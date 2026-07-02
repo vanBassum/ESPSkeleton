@@ -1,6 +1,8 @@
 #include "SettingsManager.h"
 #include "SettingsDefs.h"
+#include "CommandManager.h"
 #include "JsonWriter.h"
+#include "JsonHelpers.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include <cstring>
@@ -23,6 +25,10 @@ void SettingsManager::Init()
         ESP_LOGW(TAG, "Already initialized or initializing");
         return;
     }
+
+    // Registered before the NVS work so the commands exist even if NVS
+    // fails to open (getSettings then reports defaults).
+    serviceProvider_.getCommandManager().Register(this, commands_);
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -240,4 +246,69 @@ void SettingsManager::WriteAllSettings(JsonWriter& writer) const
     }
 
     writer.endArray();
+}
+
+// ──────────────────────────────────────────────────────────────
+// WebSocket commands
+// ──────────────────────────────────────────────────────────────
+
+void SettingsManager::Cmd_GetSettings(void* ctx, const char* json, JsonWriter& resp)
+{
+    static_cast<SettingsManager*>(ctx)->WriteAllSettings(resp);
+}
+
+void SettingsManager::Cmd_SetSetting(void* ctx, const char* json, JsonWriter& resp)
+{
+    auto* self = static_cast<SettingsManager*>(ctx);
+    if (!self->serviceProvider_.getCommandManager().CheckAuth(json, resp))
+        return;
+
+    char key[64] = {};
+    char value[128] = {};
+    ExtractJsonString(json, "key", key, sizeof(key));
+    ExtractJsonString(json, "value", value, sizeof(value));
+
+    if (key[0] == '\0')
+    {
+        resp.field("ok", false);
+        resp.field("error", "missing key");
+        return;
+    }
+
+    const auto* defs = self->GetDefinitions();
+    int count = self->GetDefinitionCount();
+
+    for (int i = 0; i < count; i++)
+    {
+        if (strcmp(defs[i].key, key) == 0)
+        {
+            switch (defs[i].type)
+            {
+            case SettingType::String:
+                self->setString(defs[i].key, value);
+                break;
+            case SettingType::Int:
+                self->setInt(defs[i].key, atoi(value));
+                break;
+            case SettingType::Bool:
+                self->setBool(defs[i].key, strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+                break;
+            }
+
+            resp.field("ok", true);
+            return;
+        }
+    }
+
+    resp.field("ok", false);
+    resp.field("error", "unknown key");
+}
+
+void SettingsManager::Cmd_SaveSettings(void* ctx, const char* json, JsonWriter& resp)
+{
+    auto* self = static_cast<SettingsManager*>(ctx);
+    if (!self->serviceProvider_.getCommandManager().CheckAuth(json, resp))
+        return;
+
+    resp.field("ok", self->Save());
 }
