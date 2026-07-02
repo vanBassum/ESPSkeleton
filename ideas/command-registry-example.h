@@ -66,33 +66,20 @@ class CommandManager
 {
     static constexpr const char* TAG = "CommandManager";
 
-    Mutex mutex_;
+    RecursiveMutex mutex_;
     CommandEntry* head_ = nullptr;
 
 public:
-    // Called from a manager's Init(). Takes the array by reference so
-    // the count is deduced — it can never be wrong. `ctx` (usually the
-    // owner's `this`) is stamped into every entry and handed back to
-    // its handler at dispatch.
-    //
-    // Thread-safe: may be called from any task at any time, not just
-    // the Init() sequence. Entries can be added late; they can only
-    // never be DESTROYED (see ~CommandEntry).
+
     template <size_t N>
     void Register(void* ctx, CommandEntry (&commands)[N])
     {
         LOCK(mutex_);
         for (size_t i = 0; i < N; ++i)
         {
-            // Re-registering would re-link an entry that is already in
-            // the chain and cycle it → Dispatch() would hang. Make the
-            // mistake loud instead: fails on first boot, deterministic.
             assert(!commands[i].registered && "command registered twice");
-            assert(FindLocked(commands[i].name) == nullptr && "duplicate command name");
+            assert(Find(commands[i].name) == nullptr && "duplicate command name");
 
-            // Fields are fully written BEFORE the entry becomes
-            // reachable through head_, so a concurrent Dispatch can
-            // never observe a half-initialized entry.
             commands[i].ctx = ctx;
             commands[i].registered = true;
             commands[i].next = head_;
@@ -100,19 +87,6 @@ public:
         }
     }
 
-    // Locks internally. Handing the pointer out after the lock is
-    // released is safe because entries are immortal (dtor guard) and
-    // name/handler/ctx are written once, before the entry is linked.
-    const CommandEntry* Find(const char* name)
-    {
-        LOCK(mutex_);
-        return FindLocked(name);
-    }
-
-    // Linear walk — ~15 commands in practice, cost is irrelevant.
-    //
-    // The handler runs OUTSIDE the lock, so a handler can call
-    // Register() — or dispatch nested commands — without deadlocking.
     bool Dispatch(const char* type, const char* json, JsonWriter& resp)
     {
         const CommandEntry* e = Find(type);
@@ -123,20 +97,16 @@ public:
     }
 
 private:
-    // The lock-free core — callers hold mutex_. Register() needs this
-    // (instead of the public Find) so its duplicate check and insert
-    // happen under ONE continuous lock; a Find that locks internally
-    // would make that check-then-act racy, and recursively re-locking
-    // would need a recursive mutex (different FreeRTOS API, and lock
-    // ownership becomes unreviewable). Public = locks, *Locked =
-    // caller does: every function has one answer.
-    const CommandEntry* FindLocked(const char* name) const
+
+    const CommandEntry* Find(const char* name)
     {
+        LOCK(mutex_);
         for (CommandEntry* e = head_; e != nullptr; e = e->next)
             if (strcmp(name, e->name) == 0)
                 return e;
         return nullptr;
     }
+
 };
 
 // ──────────────────────────────────────────────────────────────
