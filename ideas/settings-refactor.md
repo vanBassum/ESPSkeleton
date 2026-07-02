@@ -1,80 +1,124 @@
-# Brainstorm: Settings System Refactor
+# Brainstorm: Distributed, Strongly-Typed Settings
 
-**Status:** Idea — not ready to implement yet.
+**Status:** Brainstorm — not approved for implementation yet.
+**Updated:** 2026-07-02 (supersedes the earlier version of this file; the
+registration mechanism it worried about now exists — see
+`ideas/registration-pattern.h` and the CommandManager registry on the
+`modular-managers` branch).
 
 ## The Idea
 
-Move setting definitions out of the central `SettingsDefs.h` into the classes that own and use them. Each manager declares `SettingDefinition` member variables and registers them at runtime with SettingsManager.
+Move setting definitions out of the central `SettingsDefs.h` into the manager
+that owns them, using the registration pattern (intrusive chain, owner
+provides the memory, misuse fails at first boot). Each manager declares its
+settings as typed `inline static` members and registers them in `Init()`.
 
 ```cpp
-class NetworkManager {
-    SettingDefinition wifiSsid_{"wifi.ssid", SettingType::String, "WiFi SSID", ""};
-    SettingDefinition wifiPass_{"wifi.password", SettingType::String, "WiFi Password", ""};
-public:
-    void Init() {
-        settingsManager.Register(wifiSsid_);
-        settingsManager.Register(wifiPass_);
-    }
-    void Connect() {
-        char ssid[32];
-        wifiSsid_.get(ssid);
-    }
+class MqttManager {
+    inline static IntSetting  mqttPort_   {"mqtt.port",    "MQTT Port",    1883};
+    inline static BoolSetting mqttEnabled_{"mqtt.enabled", "MQTT Enabled", false};
+    inline static StringSetting mqttBroker_{"mqtt.broker", "MQTT Broker",  ""};
+
+    // Init():
+    //   serviceProvider_.getSettingsManager().Register({&mqttPort_, &mqttEnabled_, &mqttBroker_});
+    // usage:
+    //   int port = mqttPort_.Get();
 };
 ```
 
-## Why It's Worth Doing
+`IntSetting` / `BoolSetting` / `StringSetting` share an intrusive base
+(key, label, type tag, `next`, `registered`, dtor-abort guard — the
+registration pattern verbatim). The UI walk uses the base; owners use the
+typed leaf. Register() takes base pointers, so heterogeneous types chain
+fine (e.g. via std::initializer_list of `Setting*` — no heap).
 
-Eliminates shotgun surgery: today adding a setting means editing `SettingsDefs.h` + `SettingsManager.cpp` + the consumer. With this design, a new setting lives entirely in the class that needs it.
+## Decisions reached so far
 
-## Tradeoffs
+### Scattered defaults: mostly a PRO
 
-**Cons of distributed definitions:**
-- Bloats manager classes — settings metadata mixed with business logic
-- No single place to see all settings at a glance
-- Runtime registration: a fixed-size registry can be full (silent failure risk)
+- The default is domain knowledge: `1883` means "standard MQTT port" next to
+  the code that opens the socket; in a central table it's just inventory.
+- Completes the rip-out property: today deleting MqttManager leaves orphaned
+  `mqtt.*` rows in SettingsDefs.h. Distributed, settings die with their
+  folder and the settings UI shrinks automatically.
+- Forks stop touching shared files: new `climate.*` settings live entirely in
+  the fork's new manager — no merge conflict with backports.
+- The "overview" we lose barely exists: the authoritative overview is the
+  runtime-generated settings UI (and the `getSettings` dump), not the header.
 
-**Pros of distributed definitions:**
-- Manager becomes self-contained — doesn't change when unrelated settings are added elsewhere
-- Co-location: the class that owns the setting also owns its defaults and label
+Real costs to solve:
+1. UI grouping/order — chain order is registration order. Fix with a `group`
+   field or sort by key prefix. Cosmetic but real.
+2. Cross-cutting settings need an owner (see SystemManager below).
 
-**On namespace keys:** `Settings::Wifi::Ssid` feels like drag — hard-typed but verbose. Plain strings are the natural alternative; less ceremony, slightly more error-prone, probably acceptable given tests.
+### Settings become PRIVATE to their owner
 
-**On componentization:** Componentization and "adjustable" pull in opposite directions. This codebase leans adjustable — everything in one main component, easy to change. Only generic infrastructure (`lib/`) is stable enough to be a reusable component.
+Key insight: managers that don't own a setting shouldn't read it by key —
+they go through the owner's typed API
+(`getSystemManager().GetDeviceName(buf, len)`, not `getString("device.name")`).
+Consequences:
 
----
+- Each key string exists in exactly ONE place: the owner's definition. The
+  string becomes an NVS storage detail, like a DB column name — not an API.
+- Strong typing everywhere: consumers get compiler-checked signatures;
+  owners get typed `Get()`/`Set()` on the entry handle; defaults are typed
+  values (`1883`, `false`), not strings parsed at boot.
+- SettingsManager's by-key getString/setString remains only for: the owner's
+  own accessors, and the generic settings-UI path (setSetting from frontend).
 
-## Option: Runtime-Injected Definitions
+### Typed defaults kill ApplyDefaults()
 
-**Core idea:** SettingsManager stops knowing about the app schema. The definition table is passed in from outside — making it a generic, reusable NVS-backed schema store.
+With the default stored (typed) in the entry, `Get()` falls back to it when
+NVS has no value. No boot-time NVS writes; "user never changed this" stays
+distinguishable from "user set it to the default".
 
-```cpp
-// Application owns the schema
-inline const SettingDef APP_SETTINGS[] = {
-    { "wifi.ssid",     SettingType::String, "WiFi SSID",     "" },
-    { "wifi.password", SettingType::String, "WiFi Password", "" },
-    // ...
-};
+### Registration timing
 
-// Injected at construction or Init
-SettingsManager sm{serviceProvider, APP_SETTINGS, std::size(APP_SETTINGS)};
-```
+Register in `Init()`, unconditionally — NOT register-on-first-use (rejected:
+unused settings would be missing from the frontend). Linking + stamping the
+SettingsManager pointer doesn't need NVS; NVS is only touched at first
+`Get()`, and managers read their own settings during their own `Init()`,
+which runs after SettingsManager::Init(). The full schema is registered
+before WebServerManager (last in main.cpp) can serve the UI.
 
-Consumers access settings the same way as today — `getString("wifi.ssid", buf, sizeof(buf))`.
+### Rejected: central list with #ifdefs per manager
 
-**What changes:**
-- `SettingsManager` constructor or `Init()` takes `const SettingDef* defs, int count`
-- `SettingsDefs.h` moves to the application layer — out of the SettingsManager folder
-- SettingsManager has zero app-specific includes → can move to `lib/`
+Solves cross-cutting on paper, but it's the exact central coupling the
+registration pattern removes — the shared file still changes for every
+manager, just conditionally. Wacky. Dead end.
 
-**What stays the same:**
-- Central table (one overview of all settings)
-- `get/setString/Int/Bool` API unchanged
-- `WriteAllSettings()` unchanged
-- No runtime registration, no fixed-size registry cap
+## Open: SystemManager for cross-cutting settings
 
-**Tradeoffs:**
-- Pro: SettingsManager becomes a reusable lib component, decoupled from the app
-- Pro: Minimal change from current design — surgical
-- Pro: Still one place to see all settings
-- Con: Still shotgun surgery when adding a setting (table + consumer)
-- Con: String keys unvalidated at compile time unless constants are kept
+Most keys map cleanly: `wifi.*` → NetworkManager, `mqtt.*` → MqttManager,
+`ntp.*` → TimeManager. The orphans are `device.name` (read by Network for
+hostname, Mqtt for discovery) and `device.pin` (read by CheckAuth).
+
+Candidates considered:
+- DeviceManager — no: that's the hardware tree, `device.name` isn't hardware.
+- CredentialManager — no: a whole manager for one PIN.
+- SettingsManager owns them itself — workable, but mixes mechanism with
+  schema ownership.
+- **SystemManager (leaning yes)** — owns device identity and lifecycle:
+  - `device.name` + typed `GetDeviceName()`
+  - `device.pin` + the `CheckAuth(json, resp)` helper (auth belongs with the
+    credential owner)
+  - possibly the generic `ping`/`info`/`reboot` commands (they are "system"
+    commands) — which would make CommandManager a PURE dispatcher with zero
+    manager dependencies.
+
+  Scope guard: "SystemManager owns device identity and lifecycle." The
+  moment someone wants a timer or watchdog in it, the answer is no.
+
+  Cost: one more manager (wiring in ServiceProvider/ApplicationContext/
+  main.cpp/CMakeLists).
+
+**Not yet decided:** whether SystemManager takes CheckAuth + ping/info/reboot
+from CommandManager, or only the two settings. Also undecided: UI grouping
+mechanism (`group` field vs key-prefix sort).
+
+## Relation to other work
+
+- Mechanism: `ideas/registration-pattern.h` (bare pattern),
+  `main/Application/CommandManager/CommandEntry.h` (first application).
+- Broader modularity design: `docs/superpowers/specs/2026-07-02-modular-managers-design.md`
+  (this settings refactor is its parked item §8).
