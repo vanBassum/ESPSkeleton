@@ -17,6 +17,19 @@ else()
     set(PROJECT_VER "0.0.0-dev")
 endif()
 
+# ── Per-board sdkconfig ───────────────────────────────────────
+# Common defaults plus an optional board-specific override file
+# (sdkconfig.defaults.<board>), letting a board change flash size / PSRAM /
+# partitions without touching the shared defaults. BOARD is the same cache
+# var consumed by main/CMakeLists.txt for board selection.
+if(NOT DEFINED BOARD)
+    set(BOARD "esp32_devkit")
+endif()
+set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+if(EXISTS "${CMAKE_SOURCE_DIR}/sdkconfig.defaults.${BOARD}")
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.${BOARD}")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # "Trim" the build. Include the minimal set of components, main, and anything it depends on.
 idf_build_set_property(MINIMAL_BUILD ON)

@@ -57,9 +57,46 @@ set(COMPONENT_REQUIRES
     espressif__mqtt
 )
 
+# ── Board selection ────────────────────────────────────────────
+# Pick the target board with -DBOARD=<name>; defaults to the generic ESP32
+# DevKit. Each board lives in main/hardware/boards/<name>/ with its own
+# BoardConfig.h and a board.cmake fragment that may append extra files to
+# BOARD_SOURCES. Shared, board-independent drivers live in hardware/drivers/.
+set(BOARD "esp32_devkit" CACHE STRING "Target board (folder under main/hardware/boards/)")
+
+set(BOARD_DIR "${CMAKE_CURRENT_LIST_DIR}/hardware/boards/${BOARD}")
+if(NOT EXISTS "${BOARD_DIR}/board.cmake")
+    file(GLOB _available_boards RELATIVE "${CMAKE_CURRENT_LIST_DIR}/hardware/boards"
+         "${CMAKE_CURRENT_LIST_DIR}/hardware/boards/*")
+    message(FATAL_ERROR "Unknown BOARD '${BOARD}'. Available boards: ${_available_boards}")
+endif()
+
+set(BOARD_SOURCES "")
+include("${BOARD_DIR}/board.cmake")
+
+# NOTE on component REQUIRES: ESP-IDF resolves a component's REQUIRES in a
+# separate "expansion" pass that runs this CMakeLists in script mode WITHOUT
+# the -DBOARD cache var, so board.cmake can't switch REQUIRES per board (it
+# would always see the default board). Component deps therefore go through the
+# two channels that DO work regardless of board:
+#   • managed deps -> main/idf_component.yml
+#   • IDF built-ins -> COMPONENT_REQUIRES above
+# board.cmake is limited to BOARD_SOURCES, which is evaluated in the normal
+# configure pass where BOARD is visible.
+
+# The selected board folder is the ONLY one on the include path, so headers
+# included by name (e.g. BoardConfig.h) resolve to it.
+list(APPEND INCLUDE_DIRS_LIST "hardware/boards/${BOARD}")
+list(APPEND SOURCE_FILES_LIST ${BOARD_SOURCES})
+message(STATUS "Building for BOARD=${BOARD}")
+
 # Register component with ESP-IDF
 idf_component_register(
     SRCS ${SOURCE_FILES_LIST}
     INCLUDE_DIRS ${INCLUDE_DIRS_LIST}
     REQUIRES ${COMPONENT_REQUIRES}
 )
+
+# Board identity define for the (rare) code-level conditionals.
+string(TOUPPER "${BOARD}" BOARD_UPPER)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE BOARD_${BOARD_UPPER})

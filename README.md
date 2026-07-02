@@ -50,9 +50,13 @@ Strux/
 │   │   ├── TimeManager/              # SNTP + timezone
 │   │   ├── UpdateManager/            # OTA firmware + www partition
 │   │   └── WebServerManager/         # HTTP + WebSocket server
-│   ├── hardware/                      # Board-specific code
-│   │   ├── BoardConfig.h             # Pin definitions — edit for your board
-│   │   └── Led.h                     # GPIO LED driver (HA-controllable)
+│   ├── hardware/                      # Hardware abstraction
+│   │   ├── boards/                    # One folder per target board (-DBOARD=<name>)
+│   │   │   └── esp32_devkit/          # Generic ESP32 DevKit (default)
+│   │   │       ├── BoardConfig.h      # Pin definitions for this board
+│   │   │       └── board.cmake        # Board build fragment
+│   │   └── drivers/                   # Shared drivers, usable by any board
+│   │       └── Led.h                  # GPIO LED driver (HA-controllable)
 │   └── lib/                           # Reusable utilities
 │       ├── common/                    # Stream, BufferStream, EnumOperators
 │       ├── json/                      # JsonWriter, JsonHelpers
@@ -69,11 +73,23 @@ Strux/
 
 | Folder | Contains | Changes when you... |
 |--------|----------|---------------------|
-| `hardware/` | Pin definitions, board-specific drivers, display/peripheral setup | Swap the board or add a peripheral |
+| `hardware/boards/<name>/` | Pin definitions, board-specific setup, `board.cmake` | Swap or add a board |
+| `hardware/drivers/` | Board-independent chip/peripheral drivers | Add a peripheral |
 | `Application/` | Managers, business logic, orchestration, commands | Add features or change behavior |
 | `lib/` | RTOS wrappers, JSON, time utilities | Rarely — these are stable building blocks |
 
-**Rule of thumb:** if the code changes when you swap the board, it belongs in `hardware/`. If it changes when you add a feature, it belongs in `Application/`.
+**Rule of thumb:** if the code changes when you swap the board, it belongs in `hardware/boards/<name>/`. If it's a chip driver several boards could use, it belongs in `hardware/drivers/`. If it changes when you add a feature, it belongs in `Application/`.
+
+### Multiple boards
+
+The target board is selected at configure time with `-DBOARD=<name>` (default: `esp32_devkit`). Only the selected board folder is put on the include path, so application code just includes `BoardConfig.h` and gets the right one. To support a new board:
+
+1. Copy `main/hardware/boards/esp32_devkit/` to `main/hardware/boards/<your_board>/` and edit `BoardConfig.h`
+2. Add extra board-only source files to `BOARD_SOURCES` in its `board.cmake` (optional)
+3. Add `sdkconfig.defaults.<your_board>` in the repo root if the board needs different flash size, PSRAM, or partitions (optional)
+4. Build with `idf.py -DBOARD=<your_board> build`
+
+Shared chip drivers (sensors, displays, expanders) go in `main/hardware/drivers/`, parameterized through `BoardConfig` constants so every board can reuse them.
 
 ---
 
@@ -90,8 +106,14 @@ Or use the included dev container (requires Docker + VS Code with the Dev Contai
 
 ```bash
 idf.py set-target esp32
-idf.py build
+idf.py build                          # default board: esp32_devkit
 idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+To build for a different board (see `main/hardware/boards/`):
+
+```bash
+idf.py -DBOARD=<name> build
 ```
 
 If [pnpm](https://pnpm.io/) is installed, the frontend is built automatically as part of `idf.py build`. The React app is compiled, gzipped, and embedded into a FAT partition on flash. No SD card or external storage needed.
@@ -267,11 +289,11 @@ The web UI auto-generates form fields for each entry, grouped by prefix. Adding 
 
 ## Hardware Layer
 
-The `hardware/` directory contains everything that changes when you swap the board or add a peripheral.
+The `hardware/` directory contains everything that changes when you swap the board or add a peripheral. It is split into `boards/<name>/` (one folder per target board, selected with `-DBOARD=<name>`) and `drivers/` (shared, board-independent drivers).
 
 ### BoardConfig.h
 
-Edit [`BoardConfig.h`](main/hardware/BoardConfig.h) to match your board's pin assignments:
+Each board has its own [`BoardConfig.h`](main/hardware/boards/esp32_devkit/BoardConfig.h) with its pin assignments:
 
 ```cpp
 namespace BoardConfig
@@ -287,7 +309,7 @@ namespace BoardConfig
 
 ### DeviceManager
 
-The [`DeviceManager`](main/Application/DeviceManager/) owns hardware driver instances and wires them up to MQTT/HA. The included [`Led`](main/hardware/Led.h) driver is registered as a Home Assistant `light` entity — you can turn it on/off from HA.
+The [`DeviceManager`](main/Application/DeviceManager/) owns hardware driver instances and wires them up to MQTT/HA. The included [`Led`](main/hardware/drivers/Led.h) driver is registered as a Home Assistant `light` entity — you can turn it on/off from HA.
 
 This is where you add your project-specific hardware:
 
@@ -307,8 +329,8 @@ class DeviceManager {
 This is a template — copy it, rename it, and build on top of it:
 
 1. **Rename the project** in `CMakeLists.txt` (`project(YourProject)`) and `.github/workflows/release.yml`
-2. **Update `BoardConfig.h`** with your board's pin assignments
-3. **Add hardware drivers** in `hardware/` and instantiate them in `DeviceManager`
+2. **Update `BoardConfig.h`** (or add a new board folder under `hardware/boards/`) with your board's pin assignments
+3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in `DeviceManager`
 4. **Add application logic** as new managers in `Application/`
 5. **Register HA entities** via `MqttManager::RegisterCommand()` and `RegisterDiscovery()`
 6. **Extend the web UI** — add pages in `frontend/src/pages/`, register routes in the sidebar
@@ -329,12 +351,12 @@ Commands are dispatched by `CommandManager`. Add an entry to the command table w
 
 ### Adding a Hardware Driver
 
-1. Define pins in `hardware/BoardConfig.h`
-2. Create your driver in `hardware/` (e.g., `hardware/display/MyDisplay.h`)
+1. Define pins in the board's `hardware/boards/<name>/BoardConfig.h`
+2. Create your driver in `hardware/drivers/` (e.g., `hardware/drivers/MyDisplay.h`), parameterized through `BoardConfig` constants
 3. Instantiate it in `DeviceManager` and wire up MQTT entities if needed
-4. Add include paths and component dependencies in `main/CMakeLists.txt`
+4. Add component dependencies in `main/CMakeLists.txt` (IDF built-ins) or `main/idf_component.yml` (managed components); board-only source files go in the board's `board.cmake` via `BOARD_SOURCES`
 
-See [`Led.h`](main/hardware/Led.h) and [`DeviceManager.cpp`](main/Application/DeviceManager/DeviceManager.cpp) for a complete example.
+See [`Led.h`](main/hardware/drivers/Led.h) and [`DeviceManager.cpp`](main/Application/DeviceManager/DeviceManager.cpp) for a complete example.
 
 ---
 

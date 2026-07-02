@@ -1,8 +1,9 @@
 #pragma once
 
 // ──────────────────────────────────────────────────────────────
-// Board configuration — hardware-specific pin assignments and constants.
-// Edit this file to match your board or target MCU.
+// Board configuration — generic ESP32 DevKit (ESP32-WROOM-32).
+// Pin assignments and constants for this board only. Other boards live in
+// sibling folders under hardware/boards/ and are selected with -DBOARD=<name>.
 // ──────────────────────────────────────────────────────────────
 
 namespace BoardConfig
