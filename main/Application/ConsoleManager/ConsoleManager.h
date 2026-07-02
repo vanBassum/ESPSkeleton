@@ -2,6 +2,7 @@
 
 #include "ServiceProvider.h"
 #include "InitState.h"
+#include "CommandEntry.h"
 #include "Mutex.h"
 #include "Task.h"
 #include "freertos/queue.h"
@@ -56,4 +57,11 @@ private:
 
     static int LogOutput(const char* fmt, va_list args);
     static ConsoleManager* s_instance_;
+
+    // ── WebSocket commands (registered with CommandManager in Init) ──
+    static void Cmd_GetLogs(void* ctx, const char* json, JsonWriter& resp);
+
+    inline static CommandEntry commands_[] = {
+        { "getLogs", &ConsoleManager::Cmd_GetLogs },
+    };
 };

@@ -1,4 +1,5 @@
 #include "ConsoleManager.h"
+#include "CommandManager.h"
 #include "JsonWriter.h"
 #include "BufferStream.h"
 #include "esp_log.h"
@@ -42,6 +43,10 @@ void ConsoleManager::Init()
     broadcastTask_.Run();
 
     esp_log_set_vprintf(&LogOutput);
+
+    // ConsoleManager initializes before CommandManager::Init() — fine by
+    // design: the registry is usable from construction.
+    serviceProvider_.getCommandManager().Register(this, commands_);
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized (capturing stdout)");
@@ -155,4 +160,13 @@ void ConsoleManager::WriteHistory(JsonWriter& writer) const
     }
 
     writer.endArray();
+}
+
+// ──────────────────────────────────────────────────────────────
+// WebSocket commands
+// ──────────────────────────────────────────────────────────────
+
+void ConsoleManager::Cmd_GetLogs(void* ctx, const char* json, JsonWriter& resp)
+{
+    static_cast<ConsoleManager*>(ctx)->WriteHistory(resp);
 }
