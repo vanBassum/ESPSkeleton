@@ -6,7 +6,10 @@
 #include "WiFiInterface.h"
 #include "ServiceProvider.h"
 #include "InitState.h"
+#include "CommandEntry.h"
 #include "Timer.h"
+
+class JsonWriter;
 
 class NetworkManager {
     static constexpr const char* TAG = "NetworkManager";
@@ -48,4 +51,11 @@ private:
     void HandleNetworkEvent(const NetworkEvent& event);
     void AttemptStaConnect();
     void FallbackToAP();
+
+    // ── WebSocket commands (registered with CommandManager in Init) ──
+    static void Cmd_WifiScan(void* ctx, const char* json, JsonWriter& resp);
+
+    inline static CommandEntry commands_[] = {
+        { "wifiScan", &NetworkManager::Cmd_WifiScan },
+    };
 };

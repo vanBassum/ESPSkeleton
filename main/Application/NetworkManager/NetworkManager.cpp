@@ -1,5 +1,7 @@
 #include "NetworkManager.h"
 #include "SettingsManager.h"
+#include "CommandManager.h"
+#include "JsonWriter.h"
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
@@ -76,6 +78,8 @@ void NetworkManager::Init()
             }
         }
     });
+
+    serviceProvider_.getCommandManager().Register(this, commands_);
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
@@ -179,4 +183,31 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         staConnected_ = false;
         break;
     }
+}
+
+// ──────────────────────────────────────────────────────────────
+// WebSocket commands
+// ──────────────────────────────────────────────────────────────
+
+void NetworkManager::Cmd_WifiScan(void* ctx, const char* json, JsonWriter& resp)
+{
+    auto* self = static_cast<NetworkManager*>(ctx);
+
+    WiFiInterface::ScanResult results[20] = {};
+    int count = self->wifi().Scan(results, 20);
+
+    resp.field("ok", true);
+    resp.fieldArray("networks");
+
+    for (int i = 0; i < count; i++)
+    {
+        resp.beginObject();
+        resp.field("ssid", results[i].ssid);
+        resp.field("rssi", static_cast<int32_t>(results[i].rssi));
+        resp.field("channel", static_cast<int32_t>(results[i].channel));
+        resp.field("secure", results[i].secure);
+        resp.endObject();
+    }
+
+    resp.endArray();
 }
