@@ -1,10 +1,12 @@
-# Modular Managers Implementation Plan
+# Command Registry Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make every feature manager removable by deleting its folder + wiring lines, by inverting CommandManager into a heap-free intrusive command registry and moving each command into the manager that owns its domain.
+**Scope note:** This plan implements ONLY the CommandManager registry concept from the design spec (§3–§5): the intrusive command registry and moving each command into the manager that owns its domain. Everything else in the spec — DeviceManager/HA entity inversion (§6), documentation of the rip-out rule (§2), rip-out smoke tests — is **deliberately parked**; Bas will work those out later.
 
-**Architecture:** Commands become `CommandEntry` chains: each manager owns an `inline static CommandEntry commands_[]` table and registers it in `Init()` via `CommandManager::Register(this, commands_)`. CommandManager is a pure dispatcher guarded by a `RecursiveMutex`. The LED's Home Assistant entity moves from HomeAssistantManager into DeviceManager using MqttManager's existing hooks, removing the last upward reference.
+**Goal:** Invert CommandManager into a heap-free intrusive command registry; each manager owns and registers its own commands.
+
+**Architecture:** Commands become `CommandEntry` chains: each manager owns an `inline static CommandEntry commands_[]` table and registers it in `Init()` via `CommandManager::Register(this, commands_)`. CommandManager is a pure dispatcher guarded by a `RecursiveMutex`; handlers run outside the lock.
 
 **Tech Stack:** ESP-IDF v6.0, C++17, FreeRTOS. No heap, no `std::function` in the registry. Spec: `docs/superpowers/specs/2026-07-02-modular-managers-design.md`. Normative registry sketch: `ideas/command-registry-example.h`.
 
@@ -17,7 +19,7 @@
 - Command **names and JSON payloads must not change** — the frontend is untouched. `CommandManager::Execute(type, json, resp)` keeps its exact signature (WebSocketHandler.cpp:203 calls it).
 - No dynamic memory in anything this plan adds. No `std::function`, no `new`, no containers.
 - C++17. `snprintf` with `sizeof` bounds. Match surrounding code style (4 spaces, `TAG` logging).
-- Commit after every task (messages given per task). Do not push force; push the branch after each commit.
+- Commit after every task (messages given per task). Push the branch after each commit.
 - `CommandEntry` tables must have static storage duration — `inline static` class members. Never stack/heap (the dtor aborts the device if a registered entry dies; this is by design).
 - Init-order note: the registry is usable **from construction** (mutex and head are member-initialized), so managers whose `Init()` runs before CommandManager's (Console, Settings, Network, Time — see main.cpp order) may still register safely. `CommandManager::Init()` only registers its own built-ins.
 
@@ -462,7 +464,7 @@ git push
 - Modify: `main/Application/NetworkManager/NetworkManager.cpp`
 
 **Interfaces:**
-- Consumes: `CommandEntry`, `CommandManager::Register`. Uses its own `wifi_interface_` member directly (no more `getNetworkManager().wifi()` from outside).
+- Consumes: `CommandEntry`, `CommandManager::Register`. Uses its own `wifi_interface_` member directly.
 - Produces: WebSocket command `wifiScan` — identical response shape.
 
 - [ ] **Step 1: Add command table to `NetworkManager.h`**
@@ -707,286 +709,19 @@ git push
 
 ---
 
-### Task 6: DeviceManager self-registers its LED HA entity; HomeAssistantManager drops DeviceManager
+### Task 6: Verification
 
-**Files:**
-- Modify: `main/Application/DeviceManager/DeviceManager.h`
-- Modify: `main/Application/DeviceManager/DeviceManager.cpp`
-- Modify: `main/Application/HomeAssistantManager/HomeAssistantManager.h`
-- Modify: `main/Application/HomeAssistantManager/HomeAssistantManager.cpp`
-
-**Interfaces:**
-- Consumes: `MqttManager::RegisterCommand(name, handler)`, `MqttManager::RegisterDiscovery(cb)`, `MqttManager::PublishEntityDiscovery(component, objectId, writeFields)`, `MqttManager::Publish(subtopic, payload, retain)`, `MqttManager::GetBaseTopic()` — all existing.
-- Produces: identical MQTT/HA behavior (LED light entity, same topics `{base}/set/led`, `{base}/led/state`). HomeAssistantManager no longer references DeviceManager.
-
-Note: `MqttManager::Init()` runs before `DeviceManager::Init()` (main.cpp order), and its Register* hooks safely store callbacks whether or not MQTT is enabled/connected — registration is unconditional, publishing degrades gracefully.
-
-- [ ] **Step 1: Add LED entity to `DeviceManager.h`**
-
-Add a private method declaration (in the private section, after `Led led_;`):
-
-```cpp
-    void RegisterLedEntity();
-    void PublishLedState();
-```
-
-- [ ] **Step 2: Implement in `DeviceManager.cpp`**
-
-Replace the whole file with:
-
-```cpp
-#include "DeviceManager.h"
-#include "MqttManager/MqttManager.h"
-#include "JsonWriter.h"
-#include "esp_log.h"
-#include <cstring>
-#include <cstdio>
-
-DeviceManager::DeviceManager(ServiceProvider &ctx)
-    : serviceProvider_(ctx)
-{
-}
-
-void DeviceManager::Init()
-{
-    auto init = initState_.TryBeginInit();
-    if (!init)
-    {
-        ESP_LOGW(TAG, "Already initialized or initializing");
-        return;
-    }
-
-    led_.Init();
-    RegisterLedEntity();
-
-    init.SetReady();
-    ESP_LOGI(TAG, "Initialized");
-}
-
-// ──────────────────────────────────────────────────────────────
-// Home Assistant entities for this project's hardware.
-//
-// Devices register their own entities via MqttManager's hooks —
-// HomeAssistantManager only publishes generic device-level entities
-// and knows nothing about project hardware. If your project removes
-// MqttManager, delete this section (the compiler will point here).
-// ──────────────────────────────────────────────────────────────
-
-void DeviceManager::RegisterLedEntity()
-{
-    auto &mqtt = serviceProvider_.getMqttManager();
-
-    mqtt.RegisterCommand("led", [this](const char *data, int len)
-    {
-        bool on = (len >= 2 && strncmp(data, "ON", 2) == 0);
-        led_.Set(on);
-        PublishLedState();
-    });
-
-    mqtt.RegisterDiscovery([this]()
-    {
-        auto &mqtt = serviceProvider_.getMqttManager();
-
-        mqtt.PublishEntityDiscovery("light", "led", [&mqtt](JsonWriter &json)
-        {
-            json.field("name", "LED");
-
-            char topic[128];
-            snprintf(topic, sizeof(topic), "%s/set/led", mqtt.GetBaseTopic());
-            json.field("cmd_t", topic);
-
-            snprintf(topic, sizeof(topic), "%s/led/state", mqtt.GetBaseTopic());
-            json.field("stat_t", topic);
-
-            json.field("pl_on", "ON");
-            json.field("pl_off", "OFF");
-        });
-
-        PublishLedState();
-    });
-}
-
-void DeviceManager::PublishLedState()
-{
-    serviceProvider_.getMqttManager().Publish("led/state", led_.IsOn() ? "ON" : "OFF", true);
-}
-```
-
-- [ ] **Step 3: Strip HomeAssistantManager down to an extension-point shell**
-
-Replace `main/Application/HomeAssistantManager/HomeAssistantManager.cpp` with:
-
-```cpp
-#include "HomeAssistantManager.h"
-#include "esp_log.h"
-
-HomeAssistantManager::HomeAssistantManager(ServiceProvider &ctx)
-    : serviceProvider_(ctx)
-{
-}
-
-void HomeAssistantManager::Init()
-{
-    auto init = initState_.TryBeginInit();
-    if (!init)
-    {
-        ESP_LOGW(TAG, "Already initialized or initializing");
-        return;
-    }
-
-    // ── Add project-wide HA entities here ────────────────────
-    // Generic device-level entities (IP, RSSI, uptime, heap, reboot)
-    // are published by MqttManager itself. Hardware-specific entities
-    // are registered by the manager that owns the hardware (see
-    // DeviceManager::RegisterLedEntity for the pattern):
-    //
-    //   auto &mqtt = serviceProvider_.getMqttManager();
-    //   mqtt.RegisterCommand("my_thing", [this](const char *data, int len) { ... });
-    //   mqtt.RegisterDiscovery([this]() { ... PublishEntityDiscovery(...); });
-
-    init.SetReady();
-    ESP_LOGI(TAG, "Initialized");
-}
-```
-
-In `HomeAssistantManager.h`, remove the line `void PublishLedState();` from the private section. Nothing else changes.
-
-- [ ] **Step 4: Verify no stray references**
-
-Run: `grep -rn "getDeviceManager" main/Application --include=*.cpp --include=*.h | grep -v ApplicationContext | grep -v ServiceProvider`
-Expected: no output (only the wiring files may name DeviceManager).
-
-- [ ] **Step 5: Build**
+- [ ] **Step 1: Full build**
 
 Run the build command from Global Constraints.
 Expected: `Project build complete.`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 2: Confirm CommandManager's dependencies dropped**
 
-```bash
-git add main/Application/DeviceManager main/Application/HomeAssistantManager
-git commit -m "DeviceManager self-registers its LED HA entity
+Run: `grep -n "getNetworkManager\|getConsoleManager\|getUpdateManager" main/Application/CommandManager/CommandManager.cpp`
+Expected: no output. (Only `getSettingsManager` remains, inside `CheckAuth` — core→core, allowed.)
 
-HomeAssistantManager no longer references DeviceManager; it is now a
-pure extension point. Feature->feature edges are down to the two
-documented MQTT stacks."
-git push
-```
-
----
-
-### Task 7: Document the architecture rules (CLAUDE.md + README)
-
-**Files:**
-- Modify: `CLAUDE.md`
-- Modify: `README.md`
-
-**Interfaces:** none (documentation).
-
-- [ ] **Step 1: Add rules to `CLAUDE.md`**
-
-In `CLAUDE.md`, inside the `## Architecture` section, after the "Manager pattern (dependency injection)" subsection, add a new subsection:
-
-```markdown
-### Core vs. feature managers (the rip-out rule)
-
-Core managers — **Settings, Console, Command** — are the skeleton; any manager may reference them. Feature managers — **Network, Time, Mqtt, HomeAssistant, Update, WebServer, Device** — may only be referenced from the wiring files (`ServiceProvider.h`, `ApplicationContext.h`, `main.cpp`, `main/CMakeLists.txt`). Exceptions: HomeAssistant→Mqtt and Device→Mqtt (entity registration) are explicit stacks — removing Mqtt means removing/trimming those too.
-
-To remove a feature manager: delete its folder, remove its lines from the four wiring files, build — the compiler finds anything missed. No other manager needs editing.
-
-Commands are not implemented centrally: each manager owns an `inline static CommandEntry commands_[]` table ([main/Application/CommandManager/CommandEntry.h](main/Application/CommandManager/CommandEntry.h)) and registers it in `Init()` via `getCommandManager().Register(this, commands_)`. Tables must have static storage duration (the entry dtor aborts otherwise — deliberately). Auth is not in the registry; handlers guarding state changes call `CommandManager::CheckAuth()` first.
-
-### Thread-safety contract
-
-Every manager must survive use from any task: `InitState` guards initialization, a `Mutex` (or `RecursiveMutex` when re-entry is by design) guards mutable state, and misuse asserts/aborts loudly at first occurrence instead of corrupting. Convention: public methods lock; private `*Locked` methods document that the caller holds the lock. Never hold a lock while calling out to handlers/callbacks.
-```
-
-- [ ] **Step 2: Update README's "Adding a New Command" section**
-
-In `README.md`, replace the current "### Adding a New Command" paragraph (which describes the central command table) with:
-
-```markdown
-### Adding a New Command
-
-Commands live with the manager that owns the domain — there is no central command table. In your manager:
-
-1. Declare a static trampoline and an `inline static CommandEntry commands_[]` table (private members):
-
-```cpp
-static void Cmd_MyThing(void* ctx, const char* json, JsonWriter& resp);
-
-inline static CommandEntry commands_[] = {
-    { "myThing", &MyManager::Cmd_MyThing },
-};
-```
-
-2. Register it in `Init()`: `serviceProvider_.getCommandManager().Register(this, commands_);`
-3. The trampoline casts `ctx` back: `static_cast<MyManager*>(ctx)->...`. If the command changes state, call `getCommandManager().CheckAuth(json, resp)` as its first line.
-
-Tables must be `inline static` class members (static storage duration) — a registered `CommandEntry` that gets destroyed aborts the device on purpose. The frontend calls commands via the WebSocket RPC layer in `backend.ts`, unchanged.
-```
-
-- [ ] **Step 3: Build (docs don't affect it, but keep the habit)**
-
-Run the build command from Global Constraints.
-Expected: `Project build complete.`
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add CLAUDE.md README.md
-git commit -m "Document rip-out rule, distributed commands, thread-safety contract"
-git push
-```
-
----
-
-### Task 8: Verification — rip-out smoke test + on-device checks
-
-**Files:** none permanently (scratch branch only).
-
-- [ ] **Step 1: Full clean-ish build on the branch**
-
-Run the build command from Global Constraints.
-Expected: `Project build complete.`
-
-- [ ] **Step 2: Rip-out smoke test — HomeAssistantManager**
-
-This proves the whole point of the design. On a scratch branch:
-
-```bash
-git checkout -b ripout-smoke
-git rm -r main/Application/HomeAssistantManager
-```
-
-Then remove HomeAssistant from the wiring (guided by compile errors):
-- `main/Application/ServiceProvider.h`: delete the `class HomeAssistantManager;` forward declaration and the `getHomeAssistantManager()` pure virtual.
-- `main/Application/ApplicationContext.h`: delete its include, getter, and member.
-- `main/main.cpp`: delete the `getHomeAssistantManager().Init();` line.
-- `main/CMakeLists.txt`: delete the `HomeAssistantManager.cpp` source line and the `Application/HomeAssistantManager` include dir line.
-
-Run the build command. Expected: `Project build complete.` — **with zero edits inside any other manager**. If any non-wiring file needed editing, that is a design violation: stop and report it.
-
-- [ ] **Step 3: Rip-out smoke test — MqttManager (the stack case)**
-
-Still on `ripout-smoke`:
-
-```bash
-git rm -r main/Application/MqttManager
-```
-
-Wiring removals as above (ServiceProvider.h, ApplicationContext.h, main.cpp, main/CMakeLists.txt — also remove `espressif__mqtt` from `COMPONENT_REQUIRES` and the mqtt dependency from `main/idf_component.yml`). Per the documented stack rule, also delete DeviceManager's entity block: remove `RegisterLedEntity()`/`PublishLedState()` declarations and definitions and the `RegisterLedEntity();` call — the section is marked with a comment saying exactly this.
-
-Run the build command. Expected: `Project build complete.`
-
-- [ ] **Step 4: Discard the scratch branch**
-
-```bash
-git checkout modular-managers
-git branch -D ripout-smoke
-```
-
-- [ ] **Step 5: On-device checks (needs hardware — coordinate with Bas)**
+- [ ] **Step 3: On-device checks (needs hardware — coordinate with Bas)**
 
 Flash a devkit (`idf.py -p <PORT> flash monitor`) and verify from the web UI:
 - Dashboard loads; `info`/`ping` work (device time visible).
@@ -995,9 +730,8 @@ Flash a devkit (`idf.py -p <PORT> flash monitor`) and verify from the web UI:
 - Console page shows log history.
 - Firmware page shows running partition, next slot, and the partition table.
 - Reboot button works (asks PIN if set).
-- With MQTT configured: device appears in Home Assistant with the LED light + diagnostic sensors; toggling the LED from HA works and state updates.
 
-- [ ] **Step 6: Final commit if any fixes were needed, then push**
+- [ ] **Step 4: Push**
 
 ```bash
 git push
@@ -1005,8 +739,8 @@ git push
 
 ---
 
-## Self-review notes (done at plan time)
+## Parked for later (per Bas — do NOT implement now)
 
-- Spec §1/§2 (layering + rule) → Task 7. §3 (registry) → Task 1. §4 (relocations) → Tasks 2–5. §5 (auth) → Tasks 1–2 (CheckAuth public, handlers call it). §6 (Device/HA) → Task 6. §7 (thread-safety doc) → Task 7. §8 verification → Task 8. `RecursiveMutex` prerequisite from the spec already exists in `lib/rtos/RecursiveMutex.h` — no task needed.
-- Init-order hazard (Console/Settings/Network register before CommandManager::Init) addressed by making the registry constructor-ready; noted in Global Constraints and CommandManager.h docs.
-- No CMakeLists changes needed in Tasks 1–6: `CommandEntry.h` is header-only and no .cpp files are added or removed.
+- DeviceManager/HomeAssistant entity inversion (spec §6)
+- Rip-out rule documentation in CLAUDE.md/README (spec §2) and rip-out smoke tests
+- MqttManager `std::function` hooks cleanup (spec §8)
