@@ -739,40 +739,15 @@ git push
 
 ---
 
-## Parked for later (per Bas — do NOT implement now)
+## Parked for later
 
-- DeviceManager/HomeAssistant entity inversion (spec §6)
-- Rip-out rule documentation in CLAUDE.md/README (spec §2) and rip-out smoke tests
-- MqttManager `std::function` hooks cleanup (spec §8). Revisited 2026-07-03:
-  sketched an intrusive-registry version in `ideas/mqtt-registry-example.h`,
-  then parked again — the command registry is request/response, while MQTT
-  mostly *emits* (discovery, periodic state), so the pattern doesn't map
-  cleanly. Also considered folding the three registries into one shared
-  `Registry<Args...>` lib template; undecided. Leave MQTT alone for now.
-- DeviceManager ↔ board layering (added 2026-07-03): the board defines what
-  devices exist, yet DeviceManager (Application layer) hard-codes them.
-  Different boards have different devices but should expose the same
-  capabilities. Maybe the DeviceManager definition belongs in the board
-  folders (`hardware/boards/<name>/`) — undecided, brainstorm first.
-- Webserver login (added 2026-07-03): PIN auth was ripped out entirely.
-  It returns as a login in the webserver layer; authentication checking
-  stays at that edge and never leaks into command handlers.
-- Remote access / relay server (added 2026-07-03): devices connect
-  OUTBOUND to a server (NAT-friendly) so Bas can reach them remotely.
-  This is the driving reason CommandManager is the star point: the relay
-  is just another dumb-pipe transport that gets ALL commands for free
-  (incl. firmware update). Prerequisites it stresses: envelope needs
-  request ids (relay multiplexes many clients over one connection);
-  auth = device credential to server + user login at server, handlers
-  stay oblivious. Depends on the stream-commands rework
-  (`ideas/stream-commands-example.h`).
-  Vision (2026-07-03): login to a server page, see connected devices,
-  click one → the device's OWN web UI opens, served THROUGH the command
-  pipe (chosen over WireGuard and over server-hosted frontend copies —
-  device-served UI can never version-skew from firmware). Server caches
-  device files keyed on firmware version for fast page loads. Open fork:
-  `readFile` (raw FAT bytes, server owns HTTP semantics) vs `httpGet`
-  (device owns status/headers/SPA-fallback; server is a pure proxy).
-  Possibly dogfood: the device's own StaticFileHandler fetches bytes via
-  the same command, keeping one file-access path — HTTP decisions stay
-  in the route layer, the command stays "give me bytes".
+Moved to `docs/backlog/` (2026-07-03), one doc per topic:
+
+- `stream-commands.md` — streams as command contract, JSON as dialect (NEXT UP)
+- `remote-access.md` — relay server + device-served remote UI vision
+- `webserver-login.md` — auth returns at the webserver edge
+- `mqtt-registration.md` — MQTT hooks cleanup + HA entity inversion (spec §6)
+- `board-device-layering.md` — DeviceManager definition per board
+
+Still unplaced: rip-out rule documentation in CLAUDE.md/README (spec §2)
+and rip-out smoke tests.
