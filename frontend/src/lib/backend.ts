@@ -65,6 +65,7 @@ class BackendService {
     this.token = null
     sessionStorage.removeItem("strux.token")
     this.setAuthenticated(false)
+    this.ws?.close()
   }
 
   private authHeaders(): Record<string, string> {
