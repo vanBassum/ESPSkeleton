@@ -20,6 +20,13 @@ public:
 
     void Init();
 
+    // Everything else is commands: the manager's entire external
+    // surface is its command table below.
+
+private:
+    ServiceProvider& serviceProvider_;
+    InitState initState_;
+
     // ── App firmware OTA ──────────────────────────────────────
 
     bool BeginAppUpdate();
@@ -35,7 +42,7 @@ public:
     bool WriteWwwChunk(const void* data, size_t size);
     const char* FinalizeWwwUpdate();
 
-    // ── Partition inspection (for Firmware page) ─────────────
+    // ── Partition inspection ──────────────────────────────────
 
     struct PartitionInfo
     {
@@ -46,16 +53,12 @@ public:
         uint32_t size;
         bool     running;
         bool     nextOta;
-        bool     uploadable;    // safe to overwrite via HTTP
+        bool     uploadable;    // safe to overwrite via upload
         char     version[32];   // app partitions only; empty otherwise
     };
 
     /// Enumerate all partitions into `out`. Returns count written.
     int GetPartitions(PartitionInfo* out, int maxCount) const;
-
-private:
-    ServiceProvider& serviceProvider_;
-    InitState initState_;
 
     // OTA state
     esp_ota_handle_t otaHandle_ = 0;

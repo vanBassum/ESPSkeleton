@@ -251,30 +251,19 @@ class BackendService {
     const begin = await this.send<{ ok: boolean; error?: string }>("updateBegin", { target })
     if (!begin.ok) throw new Error(begin.error ?? "updateBegin failed")
 
-    // The device's HTTP server is single-threaded: one long request
-    // starves the WebSocket, and the heartbeat would kill the
-    // connection mid-upload. Send the image in chunks so the server
-    // breathes in between, and pause the heartbeat while we're at it.
+    // The device's HTTP server is single-threaded, so it can't answer
+    // heartbeat pings while the upload streams — pause them so our own
+    // watchdog doesn't kill a healthy connection. updateWrite streams
+    // the whole body straight to flash.
     this.stopHeartbeat()
     try {
-      const CHUNK = 256 * 1024
-      let sent = 0
-      let total = 0
-      while (sent < file.size) {
-        const slice = file.slice(sent, sent + CHUNK)
-        const write = await this.postCommand("updateWrite", slice, (pct) => {
-          onProgress?.(Math.round(((sent + (slice.size * pct) / 100) / file.size) * 100))
-        })
-        if (!write.ok) throw new Error(write.error ?? "updateWrite failed")
-        total += write.size ?? slice.size
-        sent += slice.size
-        onProgress?.(Math.round((sent / file.size) * 100))
-      }
+      const write = await this.postCommand("updateWrite", file, onProgress)
+      if (!write.ok) throw new Error(write.error ?? "updateWrite failed")
 
       const end = await this.send<{ ok: boolean; error?: string }>("updateEnd")
       if (!end.ok) throw new Error(end.error ?? "updateEnd failed")
 
-      return { ok: true, size: total }
+      return { ok: true, size: write.size ?? file.size }
     } catch (e) {
       // Best effort: close a dangling session so the next attempt isn't "busy".
       this.send("updateEnd").catch(() => {})
