@@ -35,9 +35,7 @@ private:
     void StartServer();
     void RegisterRoutes();
 
-    static esp_err_t HandleUploadApp(httpd_req_t* req);
-    static esp_err_t HandleUploadWww(httpd_req_t* req);
-    static esp_err_t HandleDownloadPartition(httpd_req_t* req);
+    static esp_err_t HandleApiCommand(httpd_req_t* req);
     static esp_err_t HandleCorsPreflight(httpd_req_t* req);
 
     static void SetCorsHeaders(httpd_req_t* req);
