@@ -7,6 +7,7 @@ class HomeAssistantManager;
 class MqttManager;
 class NetworkManager;
 class SettingsManager;
+class SystemManager;
 class TimeManager;
 class UpdateManager;
 class WebServerManager;
@@ -21,6 +22,7 @@ public:
     virtual MqttManager& getMqttManager() = 0;
     virtual NetworkManager& getNetworkManager() = 0;
     virtual SettingsManager& getSettingsManager() = 0;
+    virtual SystemManager& getSystemManager() = 0;
     virtual TimeManager& getTimeManager() = 0;
     virtual UpdateManager& getUpdateManager() = 0;
     virtual WebServerManager& getWebServerManager() = 0;

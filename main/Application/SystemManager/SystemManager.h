@@ -1,0 +1,61 @@
+#pragma once
+
+#include "ServiceProvider.h"
+#include "InitState.h"
+#include "CommandEntry.h"
+#include "TypedSettings.h"
+
+class JsonWriter;
+
+// ──────────────────────────────────────────────────────────────
+// SystemManager owns device identity and lifecycle — and nothing
+// else (no timers, no watchdogs; those belong elsewhere):
+//   - device.name: exposed to other managers via GetDeviceName()
+//     (settings are private to their owner — nobody else reads the
+//     key)
+//   - device.pin + CheckAuth(): the auth helper lives with the
+//     credential it checks
+//   - the generic system commands: ping / info / reboot
+// ──────────────────────────────────────────────────────────────
+class SystemManager
+{
+    static constexpr const char* TAG = "SystemManager";
+
+public:
+    explicit SystemManager(ServiceProvider& serviceProvider);
+
+    SystemManager(const SystemManager&) = delete;
+    SystemManager& operator=(const SystemManager&) = delete;
+    SystemManager(SystemManager&&) = delete;
+    SystemManager& operator=(SystemManager&&) = delete;
+
+    void Init();
+
+    /// Copies the device name into `out`; falls back to "Strux" if the
+    /// stored value is empty.
+    void GetDeviceName(char* out, size_t maxLen);
+
+    /// PIN check for handlers that guard state-changing commands. Call as
+    /// the FIRST line of such handlers. Returns true if authorized;
+    /// otherwise writes {ok:false, error:"auth"} into resp.
+    bool CheckAuth(const char* json, JsonWriter& resp);
+
+private:
+    ServiceProvider& serviceProvider_;
+    InitState initState_;
+
+    // ── Settings (registered with SettingsManager in Init) ──
+    inline static StringSetting name_{ "device.name", "Device Name", "Strux" };
+    inline static StringSetting pin_ { "device.pin",  "Device PIN",  ""      };
+
+    // ── WebSocket commands (registered with CommandManager in Init) ──
+    static void Cmd_Ping(void* ctx, const char* json, JsonWriter& resp);
+    static void Cmd_Info(void* ctx, const char* json, JsonWriter& resp);
+    static void Cmd_Reboot(void* ctx, const char* json, JsonWriter& resp);
+
+    inline static CommandEntry commands_[] = {
+        { "ping",   &SystemManager::Cmd_Ping },
+        { "info",   &SystemManager::Cmd_Info },
+        { "reboot", &SystemManager::Cmd_Reboot },
+    };
+};

@@ -11,6 +11,9 @@
 
 class JsonWriter;
 
+// Pure dispatcher — knows no commands and no other managers. Every
+// command lives in the manager that owns its domain and is registered
+// from that manager's Init().
 class CommandManager {
     static constexpr const char* TAG = "CommandManager";
 
@@ -55,12 +58,6 @@ public:
     /// Returns true if the command was recognized.
     bool Execute(const char* type, const char* json, JsonWriter& resp);
 
-    /// PIN check helper for handlers that guard state-changing commands.
-    /// Call as the FIRST line of such handlers. Returns true if authorized;
-    /// otherwise writes {ok:false, error:"auth"} into resp.
-    /// (Auth is deliberately NOT part of the registry — see the design spec.)
-    bool CheckAuth(const char* json, JsonWriter& resp);
-
 private:
     ServiceProvider& serviceProvider_;
     InitState initState_;
@@ -72,16 +69,4 @@ private:
     // lock). Handing the pointer out after unlock is safe because entries
     // are immortal and name/handler/ctx are written before linking.
     const CommandEntry* Find(const char* name);
-
-    // Built-in generic commands (everything domain-specific lives in the
-    // manager that owns the domain).
-    static void Cmd_Ping(void* ctx, const char* json, JsonWriter& resp);
-    static void Cmd_Info(void* ctx, const char* json, JsonWriter& resp);
-    static void Cmd_Reboot(void* ctx, const char* json, JsonWriter& resp);
-
-    inline static CommandEntry commands_[] = {
-        { "ping",   &CommandManager::Cmd_Ping },
-        { "info",   &CommandManager::Cmd_Info },
-        { "reboot", &CommandManager::Cmd_Reboot },
-    };
 };

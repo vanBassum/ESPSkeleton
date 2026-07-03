@@ -7,6 +7,7 @@
 #include "MqttManager/MqttManager.h"
 #include "NetworkManager/NetworkManager.h"
 #include "SettingsManager/SettingsManager.h"
+#include "SystemManager/SystemManager.h"
 #include "TimeManager/TimeManager.h"
 #include "UpdateManager/UpdateManager.h"
 #include "WebServerManager/WebServerManager.h"
@@ -26,6 +27,7 @@ public:
     MqttManager& getMqttManager() override { return m_mqttManager; }
     NetworkManager& getNetworkManager() override { return m_networkManager; }
     SettingsManager& getSettingsManager() override { return m_settingsManager; }
+    SystemManager& getSystemManager() override { return m_systemManager; }
     TimeManager& getTimeManager() override { return m_timeManager; }
     UpdateManager& getUpdateManager() override { return m_updateManager; }
     WebServerManager& getWebServerManager() override { return m_webServerManager; }
@@ -33,6 +35,7 @@ public:
 private:
     ConsoleManager m_consoleManager{*this};
     SettingsManager m_settingsManager{*this};
+    SystemManager m_systemManager{*this};
     NetworkManager m_networkManager{*this};
     TimeManager m_timeManager{*this};
     CommandManager m_commandManager{*this};
