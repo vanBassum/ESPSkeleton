@@ -743,7 +743,12 @@ git push
 
 - DeviceManager/HomeAssistant entity inversion (spec §6)
 - Rip-out rule documentation in CLAUDE.md/README (spec §2) and rip-out smoke tests
-- MqttManager `std::function` hooks cleanup (spec §8)
+- MqttManager `std::function` hooks cleanup (spec §8). Revisited 2026-07-03:
+  sketched an intrusive-registry version in `ideas/mqtt-registry-example.h`,
+  then parked again — the command registry is request/response, while MQTT
+  mostly *emits* (discovery, periodic state), so the pattern doesn't map
+  cleanly. Also considered folding the three registries into one shared
+  `Registry<Args...>` lib template; undecided. Leave MQTT alone for now.
 - DeviceManager ↔ board layering (added 2026-07-03): the board defines what
   devices exist, yet DeviceManager (Application layer) hard-codes them.
   Different boards have different devices but should expose the same
