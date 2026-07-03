@@ -88,12 +88,18 @@ unchanged.
 
   `field(key, value)` for leaves; `object(key)` / `array(key)` return
   child scopes (guaranteed copy elision — no copies, one destructor).
-  The one misuse RAII cannot prevent — writing to a parent while a
-  child scope is open, or two live siblings — is caught by a
-  `childOpen` flag + assert: dies loudly on first run. Copy/assignment
-  deleted. Existing naked `beginObject/endObject` JsonWriter callers
-  (MQTT discovery, PublishState) may migrate opportunistically; not
-  part of this rework.
+
+  Writing to a parent while a child scope is open is LEGAL and means
+  "done with the child": the parent auto-closes the open child
+  (cascading depth-first, so braces close inner-first), marks it
+  invalid, then writes. Opening a second child likewise auto-closes
+  the first. Writing to an invalidated scope → FATAL (abandoned-scope
+  use is always a bug). Destructor: invalid → no-op; valid → close and
+  detach from parent. Copy/assignment deleted.
+
+  Existing naked `beginObject/endObject` JsonWriter callers (MQTT
+  discovery, PublishState) may migrate opportunistically; not part of
+  this rework.
 
 `BufferStream` (write-side compose-in-RAM) and `JsonWriter` (writes to
 any `Stream`) already exist and are unchanged.
