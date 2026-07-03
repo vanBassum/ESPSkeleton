@@ -251,19 +251,32 @@ class BackendService {
     const begin = await this.send<{ ok: boolean; error?: string }>("updateBegin", { partition })
     if (!begin.ok) throw new Error(begin.error ?? "updateBegin failed")
 
-    // The device's HTTP server is single-threaded, so it can't answer
-    // heartbeat pings while the upload streams — pause them so our own
-    // watchdog doesn't kill a healthy connection. updateWrite streams
-    // the whole body straight to flash.
+    // The device's HTTP server is single-threaded: during one long
+    // request it can serve NOBODY else, starved clients reconnect, and
+    // the server's LRU purge then evicts the quietest socket — our own
+    // WebSocket (verified on hardware; this is not just the heartbeat).
+    // Chunking lets the server breathe between requests. The heartbeat
+    // pause is a second belt so our watchdog can't misfire either.
     this.stopHeartbeat()
     try {
-      const write = await this.postCommand("updateWrite", file, onProgress)
-      if (!write.ok) throw new Error(write.error ?? "updateWrite failed")
+      const CHUNK = 256 * 1024
+      let sent = 0
+      let total = 0
+      while (sent < file.size) {
+        const slice = file.slice(sent, sent + CHUNK)
+        const write = await this.postCommand("updateWrite", slice, (pct) => {
+          onProgress?.(Math.round(((sent + (slice.size * pct) / 100) / file.size) * 100))
+        })
+        if (!write.ok) throw new Error(write.error ?? "updateWrite failed")
+        total += write.size ?? slice.size
+        sent += slice.size
+        onProgress?.(Math.round((sent / file.size) * 100))
+      }
 
       const end = await this.send<{ ok: boolean; error?: string }>("updateEnd")
       if (!end.ok) throw new Error(end.error ?? "updateEnd failed")
 
-      return { ok: true, size: write.size ?? file.size }
+      return { ok: true, size: total }
     } catch (e) {
       // Best effort: close a dangling session so the next attempt isn't "busy".
       this.send("updateEnd").catch(() => {})
