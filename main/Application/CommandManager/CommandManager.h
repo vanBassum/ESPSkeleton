@@ -37,9 +37,10 @@ public:
         for (size_t i = 0; i < N; ++i)
         {
             // Re-registering would re-link an entry already in the chain
-            // and cycle it → Execute() would hang. Fail loudly on first
-            // boot instead.
-            assert(!commands[i].registered && "command registered twice");
+            // and cycle it → Execute() would hang. Chain-corruption class,
+            // so FATAL (survives NDEBUG), not assert.
+            if (commands[i].registered)
+                FATAL("command '%s' registered twice", commands[i].name);
             assert(Find(commands[i].name) == nullptr && "duplicate command name");
 
             commands[i].ctx = ctx;

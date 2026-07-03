@@ -1,7 +1,6 @@
 #pragma once
 
-#include <cstdlib>
-#include "esp_log.h"
+#include "Fatal.h"
 
 class JsonWriter;
 
@@ -37,10 +36,7 @@ struct CommandEntry
     ~CommandEntry()
     {
         if (registered)
-        {
-            ESP_LOGE("CommandEntry", "registered command '%s' destroyed — "
-                     "command tables must live for the whole application", name);
-            abort();
-        }
+            FATAL("registered command '%s' destroyed — command tables must "
+                  "live for the whole application", name);
     }
 };
