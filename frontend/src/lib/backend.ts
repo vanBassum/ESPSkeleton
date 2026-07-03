@@ -318,10 +318,14 @@ export interface UploadResult {
   size: number
 }
 
+export type SettingType = "string" | "int32" | "uint32" | "float" | "bool"
+
+export const NUMERIC_SETTING_TYPES: SettingType[] = ["int32", "uint32", "float"]
+
 export interface SettingEntry {
   key: string
   label: string
-  type: "string" | "int" | "bool"
+  type: SettingType
   value: string | number | boolean
 }
 

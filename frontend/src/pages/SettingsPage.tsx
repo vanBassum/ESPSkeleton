@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { backend, type SettingEntry, type WifiNetwork } from "@/lib/backend"
+import { backend, NUMERIC_SETTING_TYPES, type SettingEntry, type WifiNetwork } from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
 import { SaveIcon, Undo2Icon, PowerIcon, SearchIcon, LockIcon, BracesIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -114,7 +114,7 @@ export default function SettingsPage() {
       setSettings((prev) =>
         prev.map((s) =>
           s.key === key
-            ? { ...s, value: s.type === "int" ? Number(value) : s.type === "bool" ? value === "true" : value }
+            ? { ...s, value: NUMERIC_SETTING_TYPES.includes(s.type) ? Number(value) : s.type === "bool" ? value === "true" : value }
             : s,
         ),
       )
@@ -337,7 +337,7 @@ function SettingRow({
       ) : (
         <Input
           className="w-48"
-          type={isPassword ? "password" : setting.type === "int" ? "number" : "text"}
+          type={isPassword ? "password" : NUMERIC_SETTING_TYPES.includes(setting.type) ? "number" : "text"}
           defaultValue={String(setting.value)}
           onBlur={(e) => {
             if (e.target.value !== String(setting.value)) {
