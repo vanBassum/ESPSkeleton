@@ -65,7 +65,7 @@ required for long-lived dashboards (e.g. a 4-hour graph). Sessions die
 | Route | Auth | Behavior |
 |---|---|---|
 | `GET /api/login` | open | Returns `{"name":"<device name>"}` for the login page's brand slot — everything else that knows the name is behind auth. |
-| `POST /api/login` | open | Body `{"password":"..."}`. Match → `{"token":"..."}`. Mismatch → ~1 s delay, then 401 (brute-force damping). |
+| `POST /api/login` | open | Body `{"password":"..."}`. Match → `{"token":"..."}`. Mismatch → 401 immediately — no lockout, no delay; this is a keep-out-the-pleps layer, not a security boundary. |
 | `POST /api/command` | Bearer header | Missing/unknown/expired token → 401 before touching the body. |
 | `/ws` | `?token=` query param | Checked during the upgrade GET; bad token → upgrade refused. Accepted connections are bound to their session; inbound frames refresh it. |
 | static files | open | The login page ships inside the React bundle, so the SPA itself must be served unauthenticated. |
@@ -134,7 +134,7 @@ otherwise. A `useAuth`-style hook subscribes to the backend flag.
 
 ## Verification
 
-Build + flash. Manually: wrong password (delay + error), right password
+Build + flash. Manually: wrong password (immediate error), right password
 (app loads), reload tab (still in via sessionStorage), second browser
 (independent session), 5 concurrent logins (oldest evicted), password
 change (both browsers kicked to login), `pnpm dev` against the device

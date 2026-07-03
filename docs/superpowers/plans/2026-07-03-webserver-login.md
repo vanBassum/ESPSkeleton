@@ -240,8 +240,6 @@ Add includes after the existing ones:
 #include "JsonWriter.h"
 #include "BufferStream.h"
 #include "ContextLock.h"
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 ```
 
 In `Init()`, add after `wsHandler_.SetCommandManager(...)`:
@@ -399,7 +397,8 @@ esp_err_t WebServerManager::HandleLoginPost(httpd_req_t* req)
 
     if (strcmp(password, expected) != 0)
     {
-        vTaskDelay(pdMS_TO_TICKS(1000));   // brute-force damping
+        // No delay, no lockout — deliberately (spec): this layer keeps
+        // out the pleps, it is not a security boundary.
         SendUnauthorized(req);
         return ESP_OK;
     }
@@ -1113,7 +1112,7 @@ Run: `idf.py -p <PORT> flash monitor`
 Manual checklist (from the spec's Verification section):
 
 1. Open the device UI → login page appears with the device name in the brand slot.
-2. Wrong password → ~1 s pause, "Invalid password".
+2. Wrong password → immediate "Invalid password"; retry works right away.
 3. Password `admin` → app loads; console page streams logs (WS authenticated).
 4. Reload the tab → still logged in (sessionStorage token survives).
 5. Second browser (or private window) → independent login works alongside.
