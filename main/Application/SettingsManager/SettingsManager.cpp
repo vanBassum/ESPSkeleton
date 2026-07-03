@@ -1,6 +1,6 @@
 #include "SettingsManager.h"
 #include "CommandManager.h"
-#include "CommandAuth.h"
+#include "SystemManager.h"
 #include "ContextLock.h"
 #include "JsonWriter.h"
 #include "JsonHelpers.h"
@@ -217,7 +217,7 @@ void SettingsManager::Cmd_GetSettings(const char* json, JsonWriter& resp)
 
 void SettingsManager::Cmd_SetSetting(const char* json, JsonWriter& resp)
 {
-    if (!CheckCommandAuth(serviceProvider_, json, resp))
+    if (!serviceProvider_.getSystemManager().CheckCommandAuth(json, resp))
         return;
 
     char key[64] = {};
@@ -267,7 +267,7 @@ void SettingsManager::Cmd_SetSetting(const char* json, JsonWriter& resp)
 
 void SettingsManager::Cmd_SaveSettings(const char* json, JsonWriter& resp)
 {
-    if (!CheckCommandAuth(serviceProvider_, json, resp))
+    if (!serviceProvider_.getSystemManager().CheckCommandAuth(json, resp))
         return;
 
     resp.field("ok", Save());

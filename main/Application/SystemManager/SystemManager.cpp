@@ -1,8 +1,8 @@
 #include "SystemManager.h"
 #include "SettingsManager.h"
 #include "CommandManager.h"
-#include "CommandAuth.h"
 #include "JsonWriter.h"
+#include "JsonHelpers.h"
 #include "DateTime.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -38,6 +38,19 @@ void SystemManager::GetDeviceName(char* out, size_t maxLen)
     name_.Get(out, maxLen);
     if (out[0] == '\0')
         snprintf(out, maxLen, "Strux");
+}
+
+bool SystemManager::CheckCommandAuth(const char* json, JsonWriter& resp)
+{
+    char pin[64] = {};
+    ExtractJsonString(json, "pin", pin, sizeof(pin));
+
+    if (CheckPin(pin))
+        return true;
+
+    resp.field("ok", false);
+    resp.field("error", "auth");
+    return false;
 }
 
 bool SystemManager::CheckPin(const char* candidate)
@@ -87,7 +100,7 @@ void SystemManager::Cmd_Info(const char* json, JsonWriter& resp)
 
 void SystemManager::Cmd_Reboot(const char* json, JsonWriter& resp)
 {
-    if (!CheckCommandAuth(serviceProvider_, json, resp))
+    if (!CheckCommandAuth(json, resp))
         return;
 
     resp.field("ok", true);
