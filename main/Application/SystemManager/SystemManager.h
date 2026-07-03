@@ -13,8 +13,6 @@ class JsonWriter;
 //   - device.name: exposed to other managers via GetDeviceName()
 //     (settings are private to their owner — nobody else reads the
 //     key)
-//   - device.pin + CheckCommandAuth(): the auth check lives with
-//     the credential it checks
 //   - the generic system commands: ping / info / reboot
 // ──────────────────────────────────────────────────────────────
 class SystemManager
@@ -35,29 +33,12 @@ public:
     /// stored value is empty.
     void GetDeviceName(char* out, size_t maxLen);
 
-    /// Auth gate for command handlers. Extracts the candidate PIN from the
-    /// command's JSON payload, checks it against the stored one, and writes
-    /// the error response on failure. Call as the FIRST line of any handler
-    /// that guards a state-changing command:
-    ///
-    ///   if (!serviceProvider_.getSystemManager().CheckCommandAuth(json, resp))
-    ///       return;
-    ///
-    /// True when the PIN matches, or when no PIN is configured (auth
-    /// disabled). The stored PIN never leaves this manager.
-    bool CheckCommandAuth(const char* json, JsonWriter& resp);
-
 private:
     ServiceProvider& serviceProvider_;
     InitState initState_;
 
-    /// The bare credential check behind CheckCommandAuth(). True when the
-    /// candidate matches the stored PIN, or when no PIN is configured.
-    bool CheckPin(const char* candidate);
-
     // ── Settings (registered with SettingsManager in Init) ──
     inline static StringSetting name_{ "device.name", "Device Name", "Strux" };
-    inline static StringSetting pin_ { "device.pin",  "Device PIN",  ""      };
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
     void Cmd_Ping(const char* json, JsonWriter& resp);
