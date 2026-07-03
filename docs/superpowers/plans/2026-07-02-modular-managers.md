@@ -744,3 +744,11 @@ git push
 - DeviceManager/HomeAssistant entity inversion (spec §6)
 - Rip-out rule documentation in CLAUDE.md/README (spec §2) and rip-out smoke tests
 - MqttManager `std::function` hooks cleanup (spec §8)
+- DeviceManager ↔ board layering (added 2026-07-03): the board defines what
+  devices exist, yet DeviceManager (Application layer) hard-codes them.
+  Different boards have different devices but should expose the same
+  capabilities. Maybe the DeviceManager definition belongs in the board
+  folders (`hardware/boards/<name>/`) — undecided, brainstorm first.
+- Webserver login (added 2026-07-03): PIN auth was ripped out entirely.
+  It returns as a login in the webserver layer; authentication checking
+  stays at that edge and never leaks into command handlers.
