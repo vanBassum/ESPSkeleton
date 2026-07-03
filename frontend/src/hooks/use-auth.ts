@@ -13,6 +13,12 @@ export function useAuth() {
       setChecking(false)
     })
 
+    // Resync once after subscribing — covers the race where auth resolved
+    // between first render and effect-mount (e.g. fast LAN), which would
+    // otherwise leave `checking` stuck true forever (blank page).
+    setAuthenticated(backend.authenticated)
+    if (backend.authenticated) setChecking(false)
+
     if (backend.hasToken && !backend.authenticated) {
       const timer = setTimeout(() => setChecking(false), 3000)
       return () => {

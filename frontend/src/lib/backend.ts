@@ -112,6 +112,12 @@ class BackendService {
       return Promise.reject(new Error("Not authenticated"))
     }
 
+    // Pin the token this attempt is validating. A newer login can replace
+    // `this.token` while this attempt is still in flight; this attempt must
+    // keep judging its own (possibly stale) token and never act on the
+    // current one, so it can't clobber a fresher, already-successful login.
+    const attemptToken = this.token
+
     this.setStatus("connecting")
 
     const p = (async () => {
@@ -121,11 +127,11 @@ class BackendService {
       try {
         const res = await fetch(this.commandUrl("ping"), {
           method: "POST",
-          headers: this.authHeaders(),
+          headers: { Authorization: `Bearer ${attemptToken}` },
           body: "{}",
         })
         if (res.status === 401) {
-          this.clearAuth()
+          if (this.token === attemptToken) this.clearAuth()
           this.setStatus("disconnected")
           throw new Error("Not authenticated")
         }
@@ -137,8 +143,8 @@ class BackendService {
       await new Promise<void>((resolve, reject) => {
         const host = import.meta.env.DEV ? DEV_HOST : location.host
         const proto = location.protocol === "https:" ? "wss:" : "ws:"
-        const url = `${proto}//${host}/ws?token=${this.token}`
-        console.log(`[BackendService] connecting to ${url} (DEV=${import.meta.env.DEV})`)
+        const url = `${proto}//${host}/ws?token=${attemptToken}`
+        console.log(`[BackendService] connecting to ${proto}//${host}/ws (DEV=${import.meta.env.DEV})`)
         const ws = new WebSocket(url)
         ws.binaryType = "arraybuffer"
         let opened = false
@@ -201,7 +207,7 @@ class BackendService {
           }
           this.pending.clear()
           if (!opened) reject(new Error("Connection failed"))
-          if (this.token) {
+          if (this.token === attemptToken) {
             this.reconnectTimer = setTimeout(() => {
               this.doConnect().catch(() => {})
             }, 2000)
@@ -259,7 +265,7 @@ class BackendService {
 
   subscribe(fn: BroadcastHandler): () => void {
     this.broadcastHandlers.add(fn)
-    this.ensureConnected()
+    this.ensureConnected().catch(() => {})
     return () => {
       this.broadcastHandlers.delete(fn)
     }
@@ -267,7 +273,7 @@ class BackendService {
 
   subscribeBinary(fn: BinaryHandler): () => void {
     this.binaryHandlers.add(fn)
-    this.ensureConnected()
+    this.ensureConnected().catch(() => {})
     return () => {
       this.binaryHandlers.delete(fn)
     }
