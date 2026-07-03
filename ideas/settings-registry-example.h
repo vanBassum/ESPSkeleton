@@ -14,12 +14,13 @@
 //     command handlers, or whatever wants YAML next).
 //   • KEEP IT SIMPLE: Setting = key + label + type + chain link.
 //     Typed leaves add a typed default and Get/Set. That's all.
+//   • Managed fields are NOT public: next/registered are private
+//     (friends: SettingsManager + the iterator); mgr is protected
+//     because the typed leaves need it for Get/Set.
 //   • Registration validates NVS constraints (key < 15 chars,
 //     duplicates) — SettingsManager is the NVS link, so it guards
 //     NVS rules, boot-deterministically.
-//   • Getters/setters live ON the typed setting (not descriptor-
-//     as-key style, which would reintroduce type mistakes at every
-//     call site). The MqttManager usage below stays elegant.
+//   • Standard iteration: begin()/end() → for (Setting& s : settings).
 //
 // NOTE: the "switch with no default" safety net is only a WARNING
 // by default (-Wswitch). To make it the compile error we want, add
@@ -35,6 +36,7 @@
 #include "esp_log.h"
 
 class SettingsManager;
+class SettingIterator;
 struct IntSetting;
 struct BoolSetting;
 struct StringSetting;
@@ -43,6 +45,20 @@ struct StringSetting;
 // -Werror=switch) adding a type here breaks the build at every
 // converter that hasn't been updated — exactly what we want.
 enum class SettingType : uint8_t { String, Int, Bool };
+
+// One place for the names; usable by Die(), the UI converter, logs.
+// The trailing return is NOT a default case — -Wswitch still flags a
+// missing enum value; the trailing return only satisfies -Wreturn-type.
+constexpr const char* SettingTypeToString(SettingType type)
+{
+    switch (type)
+    {
+    case SettingType::String: return "string";
+    case SettingType::Int:    return "int";
+    case SettingType::Bool:   return "bool";
+    }
+    return "?";
+}
 
 // ──────────────────────────────────────────────────────────────
 // Base entry — the intrusive chain link + schema facts.
@@ -53,21 +69,16 @@ struct Setting
 {
     const char* key;         // NVS key — a storage detail, not an API
     const char* label;       // shown in the generated settings UI
-    const SettingType type;  // plain member set by the leaf ctor — no virtual needed
-
-    // Managed by SettingsManager::Register() — owners never touch these.
-    SettingsManager* mgr = nullptr;
-    Setting* next = nullptr;
-    bool registered = false;
+    const SettingType type;  // plain member set by the leaf ctor
 
     // Checked downcasts for generic consumers (converters). Each leaf
     // overrides exactly one. Calling the wrong one is a bug → log +
     // abort. The settings UI iterates on every getSettings, so a
     // wrong-type conversion cannot hide — it dies the first time the
     // settings page is opened.
-    virtual IntSetting&    asInt()    { Die("int");    }
-    virtual BoolSetting&   asBool()   { Die("bool");   }
-    virtual StringSetting& asString() { Die("string"); }
+    virtual IntSetting&    asInt()    { Die(SettingType::Int);    }
+    virtual BoolSetting&   asBool()   { Die(SettingType::Bool);   }
+    virtual StringSetting& asString() { Die(SettingType::String); }
 
     // Same guard as CommandEntry: a registered entry is a live chain
     // link; destroying it aborts on the first run of the offending code.
@@ -85,11 +96,24 @@ protected:
     Setting(const char* key, const char* label, SettingType type)
         : key(key), label(label), type(type) {}
 
-    [[noreturn]] void Die(const char* want) const
+    // Logs what was asked for AND what it actually is:
+    //   "setting 'mqtt.port' is int, not string"
+    [[noreturn]] void Die(SettingType want) const
     {
-        ESP_LOGE("Setting", "setting '%s' is not of type %s", key, want);
+        ESP_LOGE("Setting", "setting '%s' is %s, not %s",
+                 key, SettingTypeToString(type), SettingTypeToString(want));
         abort();
     }
+
+    // Leaves reach NVS through this (stamped by Register()).
+    SettingsManager* mgr = nullptr;
+
+private:
+    friend class SettingsManager;   // links the chain
+    friend class SettingIterator;   // walks the chain
+
+    Setting* next = nullptr;
+    bool registered = false;
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -137,6 +161,24 @@ struct StringSetting : Setting
 };
 
 // ──────────────────────────────────────────────────────────────
+// Iteration — the ONLY public way to walk the chain, which is what
+// lets `next` be private. Minimal forward iterator, enough for
+// range-for; no heap, holds one pointer.
+// ──────────────────────────────────────────────────────────────
+
+class SettingIterator
+{
+    Setting* cur_;
+
+public:
+    explicit SettingIterator(Setting* s) : cur_(s) {}
+
+    Setting& operator*() const { return *cur_; }
+    SettingIterator& operator++() { cur_ = cur_->next; return *this; }
+    bool operator!=(const SettingIterator& o) const { return cur_ != o.cur_; }
+};
+
+// ──────────────────────────────────────────────────────────────
 // SettingsManager side — schema registry + NVS storage. NOTHING
 // about JSON, UI, or any presentation format lives here.
 // ──────────────────────────────────────────────────────────────
@@ -170,13 +212,14 @@ public:
         }
     }
 
-    // Iteration for generic consumers. First() takes the lock only to
-    // read head_; the links behind it are write-once and the entries
-    // immortal, so the walk itself needs no lock (same reasoning as
-    // dispatching command handlers outside the lock).
+    // begin() takes the lock only to read head_; the links behind it
+    // are write-once and the entries immortal, so the walk itself needs
+    // no lock (same reasoning as dispatching command handlers outside
+    // the lock).
     //
-    //   for (Setting* s = settings.First(); s; s = s->next) { ... }
-    Setting* First();
+    //   for (Setting& s : settingsManager) { ... }
+    SettingIterator begin() { /* LOCK(mutex_); */ return SettingIterator(head_); }
+    SettingIterator end()   { return SettingIterator(nullptr); }
 
     // NVS primitives used by the typed leaves via the stamped `mgr`
     // pointer (roughly today's getString/getInt/... made key-private):
@@ -192,27 +235,25 @@ public:
 // an MQTT dump writes their own ten-line walk just like it.
 // ──────────────────────────────────────────────────────────────
 //
-//  for (Setting* s = settings.First(); s != nullptr; s = s->next)
+//  for (Setting& s : settings)
 //  {
 //      json.beginObject();
-//      json.field("key", s->key);
-//      json.field("label", s->label);
+//      json.field("key", s.key);
+//      json.field("label", s.label);
+//      json.field("type", SettingTypeToString(s.type));
 //
-//      switch (s->type)   // NO default → compile error on new types
+//      switch (s.type)   // NO default → compile error on new types
 //      {
 //      case SettingType::Int:
-//          json.field("type", "int");
-//          json.field("value", s->asInt().Get());
+//          json.field("value", s.asInt().Get());
 //          break;
 //      case SettingType::Bool:
-//          json.field("type", "bool");
-//          json.field("value", s->asBool().Get());
+//          json.field("value", s.asBool().Get());
 //          break;
 //      case SettingType::String:
 //      {
-//          json.field("type", "string");
 //          char buf[128] = {};
-//          s->asString().Get(buf, sizeof(buf));
+//          s.asString().Get(buf, sizeof(buf));
 //          json.field("value", buf);
 //          break;
 //      }
@@ -262,6 +303,8 @@ private:
 //   the leaf makes the wrong call unrepresentable.
 // - Bare getInt(key)/getString(key) only: today's system minus the
 //   schema — cannot generate the settings UI, which is the point.
+// - Public next/registered/mgr fields: "owners never touch these" is
+//   now enforced by the compiler, not a comment.
 //
 // STILL OPEN: SystemManager for device.name/device.pin (and maybe
 // CheckAuth + ping/info/reboot); UI grouping (group field vs key-
