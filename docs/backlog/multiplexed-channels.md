@@ -30,6 +30,12 @@ point). Not worth retrofitting today's WS first: only the update flow
 needed chunking and it lives in one frontend function; browsers get
 parallelism free via extra HTTP connections.
 
-Might eventually let the update session commands (updateBegin/Write/
-End) collapse into a single streamed command; keep them until then —
-serial-style transports still want explicit chunk framing.
+The update session (updateBegin/Write/End) collapses into a single
+streamed command once this lands — settled 2026-07-03: the session is
+scaffolding around the transport, NOT domain architecture. Bas's
+argument, conceded: sector erase happens lazily during writes
+(OTA_WITH_SEQUENTIAL_WRITES), ordering within one stream is free, and
+finalize can run at end-of-stream. Writes only need cross-request
+state because the single-threaded server forces the image into
+multiple HTTP requests. Delete begin/end when one long stream can be
+served without starving the server.
