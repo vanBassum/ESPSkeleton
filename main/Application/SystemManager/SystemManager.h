@@ -51,13 +51,13 @@ private:
     inline static StringSetting pin_ { "device.pin",  "Device PIN",  ""      };
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    static void Cmd_Ping(void* ctx, const char* json, JsonWriter& resp);
-    static void Cmd_Info(void* ctx, const char* json, JsonWriter& resp);
-    static void Cmd_Reboot(void* ctx, const char* json, JsonWriter& resp);
+    void Cmd_Ping(const char* json, JsonWriter& resp);
+    void Cmd_Info(const char* json, JsonWriter& resp);
+    void Cmd_Reboot(const char* json, JsonWriter& resp);
 
     inline static CommandEntry commands_[] = {
-        { "ping",   &SystemManager::Cmd_Ping },
-        { "info",   &SystemManager::Cmd_Info },
-        { "reboot", &SystemManager::Cmd_Reboot },
+        { "ping",   &InvokeCommand<&SystemManager::Cmd_Ping> },
+        { "info",   &InvokeCommand<&SystemManager::Cmd_Info> },
+        { "reboot", &InvokeCommand<&SystemManager::Cmd_Reboot> },
     };
 };

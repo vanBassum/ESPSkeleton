@@ -188,12 +188,10 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void NetworkManager::Cmd_WifiScan(void* ctx, const char* json, JsonWriter& resp)
+void NetworkManager::Cmd_WifiScan(const char* json, JsonWriter& resp)
 {
-    auto* self = static_cast<NetworkManager*>(ctx);
-
     WiFiInterface::ScanResult results[20] = {};
-    int count = self->wifi().Scan(results, 20);
+    int count = wifi().Scan(results, 20);
 
     resp.field("ok", true);
     resp.fieldArray("networks");

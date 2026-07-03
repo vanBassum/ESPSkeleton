@@ -60,12 +60,12 @@ bool SystemManager::CheckPin(const char* candidate)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void SystemManager::Cmd_Ping(void* ctx, const char* json, JsonWriter& resp)
+void SystemManager::Cmd_Ping(const char* json, JsonWriter& resp)
 {
     resp.field("pong", true);
 }
 
-void SystemManager::Cmd_Info(void* ctx, const char* json, JsonWriter& resp)
+void SystemManager::Cmd_Info(const char* json, JsonWriter& resp)
 {
     const esp_app_desc_t* app = esp_app_get_description();
 
@@ -85,10 +85,9 @@ void SystemManager::Cmd_Info(void* ctx, const char* json, JsonWriter& resp)
     resp.field("deviceTime", deviceTimeStr);
 }
 
-void SystemManager::Cmd_Reboot(void* ctx, const char* json, JsonWriter& resp)
+void SystemManager::Cmd_Reboot(const char* json, JsonWriter& resp)
 {
-    auto* self = static_cast<SystemManager*>(ctx);
-    if (!CheckCommandAuth(self->serviceProvider_, json, resp))
+    if (!CheckCommandAuth(serviceProvider_, json, resp))
         return;
 
     resp.field("ok", true);

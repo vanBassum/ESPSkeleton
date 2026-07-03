@@ -72,11 +72,11 @@ private:
     Mutex mutex_;
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    static void Cmd_UpdateStatus(void* ctx, const char* json, JsonWriter& resp);
-    static void Cmd_Partitions(void* ctx, const char* json, JsonWriter& resp);
+    void Cmd_UpdateStatus(const char* json, JsonWriter& resp);
+    void Cmd_Partitions(const char* json, JsonWriter& resp);
 
     inline static CommandEntry commands_[] = {
-        { "updateStatus", &UpdateManager::Cmd_UpdateStatus },
-        { "partitions",   &UpdateManager::Cmd_Partitions },
+        { "updateStatus", &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },
+        { "partitions",   &InvokeCommand<&UpdateManager::Cmd_Partitions> },
     };
 };

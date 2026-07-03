@@ -40,3 +40,30 @@ struct CommandEntry
                   "live for the whole application", name);
     }
 };
+
+// ──────────────────────────────────────────────────────────────
+// Member-handler trampoline.
+//
+// Handlers are ordinary (non-static, usually private) member
+// functions with no ctx in sight:
+//
+//     void Ping(const char* json, JsonWriter& resp);
+//
+// The table entry instantiates the ctx-cast trampoline at compile
+// time — the owning class is deduced from the method itself, so the
+// cast can never target the wrong type:
+//
+//     { "ping", &InvokeCommand<&SystemManager::Ping> },
+//
+// The void* plumbing still exists (it is the type erasure that lets
+// one chain hold commands of many classes) but it lives only here.
+// ──────────────────────────────────────────────────────────────
+template <typename T> struct CommandOwner;
+template <typename C> struct CommandOwner<void (C::*)(const char*, JsonWriter&)> { using type = C; };
+
+template <auto Method>
+void InvokeCommand(void* ctx, const char* json, JsonWriter& resp)
+{
+    using C = typename CommandOwner<decltype(Method)>::type;
+    (static_cast<C*>(ctx)->*Method)(json, resp);
+}

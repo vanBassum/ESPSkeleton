@@ -54,10 +54,10 @@ private:
     void FallbackToAP();
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    static void Cmd_WifiScan(void* ctx, const char* json, JsonWriter& resp);
+    void Cmd_WifiScan(const char* json, JsonWriter& resp);
 
     inline static CommandEntry commands_[] = {
-        { "wifiScan", &NetworkManager::Cmd_WifiScan },
+        { "wifiScan", &InvokeCommand<&NetworkManager::Cmd_WifiScan> },
     };
 
     // ── Settings (registered with SettingsManager in Init) ──

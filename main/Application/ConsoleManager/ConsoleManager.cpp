@@ -166,7 +166,7 @@ void ConsoleManager::WriteHistory(JsonWriter& writer) const
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void ConsoleManager::Cmd_GetLogs(void* ctx, const char* json, JsonWriter& resp)
+void ConsoleManager::Cmd_GetLogs(const char* json, JsonWriter& resp)
 {
-    static_cast<ConsoleManager*>(ctx)->WriteHistory(resp);
+    WriteHistory(resp);
 }

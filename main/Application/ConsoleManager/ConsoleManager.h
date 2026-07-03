@@ -59,9 +59,9 @@ private:
     static ConsoleManager* s_instance_;
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    static void Cmd_GetLogs(void* ctx, const char* json, JsonWriter& resp);
+    void Cmd_GetLogs(const char* json, JsonWriter& resp);
 
     inline static CommandEntry commands_[] = {
-        { "getLogs", &ConsoleManager::Cmd_GetLogs },
+        { "getLogs", &InvokeCommand<&ConsoleManager::Cmd_GetLogs> },
     };
 };

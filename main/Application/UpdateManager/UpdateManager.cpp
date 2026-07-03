@@ -271,23 +271,20 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void UpdateManager::Cmd_UpdateStatus(void* ctx, const char* json, JsonWriter& resp)
+void UpdateManager::Cmd_UpdateStatus(const char* json, JsonWriter& resp)
 {
-    auto* self = static_cast<UpdateManager*>(ctx);
     const esp_app_desc_t* app = esp_app_get_description();
 
     resp.field("firmware", app->version);
-    resp.field("running", self->GetRunningPartition());
-    resp.field("nextSlot", self->GetNextPartition());
+    resp.field("running", GetRunningPartition());
+    resp.field("nextSlot", GetNextPartition());
 }
 
-void UpdateManager::Cmd_Partitions(void* ctx, const char* json, JsonWriter& resp)
+void UpdateManager::Cmd_Partitions(const char* json, JsonWriter& resp)
 {
-    auto* self = static_cast<UpdateManager*>(ctx);
-
     static constexpr int MAX_PARTITIONS = 16;
-    UpdateManager::PartitionInfo parts[MAX_PARTITIONS];
-    int count = self->GetPartitions(parts, MAX_PARTITIONS);
+    PartitionInfo parts[MAX_PARTITIONS];
+    int count = GetPartitions(parts, MAX_PARTITIONS);
 
     resp.fieldArray("partitions");
     for (int i = 0; i < count; i++)

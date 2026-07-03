@@ -186,12 +186,10 @@ bool SettingsManager::WriteString(const char* key, const char* v)
 // knows nothing about JSON. Anyone wanting YAML writes their own.
 // ──────────────────────────────────────────────────────────────
 
-void SettingsManager::Cmd_GetSettings(void* ctx, const char* json, JsonWriter& resp)
+void SettingsManager::Cmd_GetSettings(const char* json, JsonWriter& resp)
 {
-    auto* self = static_cast<SettingsManager*>(ctx);
-
     resp.fieldArray("settings");
-    for (const Setting& s : *self)
+    for (const Setting& s : *this)
     {
         resp.beginObject();
         resp.field("key", s.key);
@@ -217,10 +215,9 @@ void SettingsManager::Cmd_GetSettings(void* ctx, const char* json, JsonWriter& r
     resp.endArray();
 }
 
-void SettingsManager::Cmd_SetSetting(void* ctx, const char* json, JsonWriter& resp)
+void SettingsManager::Cmd_SetSetting(const char* json, JsonWriter& resp)
 {
-    auto* self = static_cast<SettingsManager*>(ctx);
-    if (!CheckCommandAuth(self->serviceProvider_, json, resp))
+    if (!CheckCommandAuth(serviceProvider_, json, resp))
         return;
 
     char key[64] = {};
@@ -235,7 +232,7 @@ void SettingsManager::Cmd_SetSetting(void* ctx, const char* json, JsonWriter& re
         return;
     }
 
-    for (Setting& s : *self)
+    for (Setting& s : *this)
     {
         if (strcmp(s.key, key) != 0)
             continue;
@@ -268,11 +265,10 @@ void SettingsManager::Cmd_SetSetting(void* ctx, const char* json, JsonWriter& re
     resp.field("error", "unknown key");
 }
 
-void SettingsManager::Cmd_SaveSettings(void* ctx, const char* json, JsonWriter& resp)
+void SettingsManager::Cmd_SaveSettings(const char* json, JsonWriter& resp)
 {
-    auto* self = static_cast<SettingsManager*>(ctx);
-    if (!CheckCommandAuth(self->serviceProvider_, json, resp))
+    if (!CheckCommandAuth(serviceProvider_, json, resp))
         return;
 
-    resp.field("ok", self->Save());
+    resp.field("ok", Save());
 }
