@@ -2,6 +2,8 @@
 #include "CommandManager.h"
 #include "ContextLock.h"
 #include "JsonScope.h"
+#include "JsonReader.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_app_desc.h"
@@ -304,5 +306,226 @@ void UpdateManager::Cmd_Partitions(Stream& in, Stream& out)
         o.field("nextOta",    p.nextOta);
         o.field("uploadable", p.uploadable);
         o.field("version",    p.version);
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Session-based update commands (updateBegin / updateWrite / updateEnd)
+// ──────────────────────────────────────────────────────────────
+
+bool UpdateManager::WriteActiveChunk(const void* data, size_t size)
+{
+    switch (activeTarget_)
+    {
+    case UpdateTarget::App: return WriteAppChunk(data, size);
+    case UpdateTarget::Www: return WriteWwwChunk(data, size);
+    case UpdateTarget::None: return false;
+    }
+    return false;
+}
+
+void UpdateManager::Cmd_UpdateBegin(Stream& in, Stream& out)
+{
+    JsonReader<256> req(in);
+    JsonObject resp(out);
+
+    char target[8] = {};
+    req.GetString("target", target, sizeof(target));
+
+    if (activeTarget_ != UpdateTarget::None)
+    {
+        resp.field("ok", false);
+        resp.field("error", "busy");
+        return;
+    }
+
+    if (strcmp(target, "app") == 0)
+    {
+        if (!BeginAppUpdate()) { resp.field("ok", false); resp.field("error", "begin failed"); return; }
+        activeTarget_ = UpdateTarget::App;
+    }
+    else if (strcmp(target, "www") == 0)
+    {
+        if (!BeginWwwUpdate()) { resp.field("ok", false); resp.field("error", "begin failed"); return; }
+        activeTarget_ = UpdateTarget::Www;
+    }
+    else
+    {
+        resp.field("ok", false);
+        resp.field("error", "bad target");
+        return;
+    }
+
+    resp.field("ok", true);
+}
+
+void UpdateManager::Cmd_UpdateWrite(Stream& in, Stream& out)
+{
+    char buf[1024];
+
+    if (activeTarget_ == UpdateTarget::None)
+    {
+        while (in.read(buf, sizeof(buf)) > 0) {}   // drain so the transport isn't left mid-body
+        JsonObject resp(out);
+        resp.field("ok", false);
+        resp.field("error", "no session");
+        return;
+    }
+
+    uint32_t total = 0;
+    size_t n;
+    while ((n = in.read(buf, sizeof(buf))) > 0)
+    {
+        if (!WriteActiveChunk(buf, n))
+        {
+            activeTarget_ = UpdateTarget::None;   // Write*Chunk aborted the session
+            while (in.read(buf, sizeof(buf)) > 0) {}
+            JsonObject resp(out);
+            resp.field("ok", false);
+            resp.field("error", "write failed");
+            return;
+        }
+        total += n;
+    }
+
+    JsonObject resp(out);
+    resp.field("ok", true);
+    resp.field("size", total);
+}
+
+void UpdateManager::Cmd_UpdateEnd(Stream& in, Stream& out)
+{
+    JsonObject resp(out);
+
+    const char* err = nullptr;
+    switch (activeTarget_)
+    {
+    case UpdateTarget::App:  err = FinalizeAppUpdate(); break;
+    case UpdateTarget::Www:  err = FinalizeWwwUpdate(); break;
+    case UpdateTarget::None: err = "no session";        break;
+    }
+    activeTarget_ = UpdateTarget::None;
+
+    if (err) { resp.field("ok", false); resp.field("error", err); return; }
+    resp.field("ok", true);
+}
+
+// ──────────────────────────────────────────────────────────────
+// Pull OTA — the device fetches the image itself
+// ──────────────────────────────────────────────────────────────
+
+void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
+{
+    JsonReader<512> req(in);
+    JsonObject resp(out);
+
+    char url[256] = {};
+    char target[8] = "app";
+    if (!req.GetString("url", url, sizeof(url)))
+    {
+        resp.field("ok", false);
+        resp.field("error", "missing url");
+        return;
+    }
+    req.GetString("target", target, sizeof(target));
+    bool isApp = (strcmp(target, "www") != 0);
+
+    if (activeTarget_ != UpdateTarget::None)
+    {
+        resp.field("ok", false);
+        resp.field("error", "busy");
+        return;
+    }
+
+    esp_http_client_config_t cfg = {};
+    cfg.url = url;
+    cfg.timeout_ms = 15000;
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { resp.field("ok", false); resp.field("error", "client init failed"); return; }
+
+    bool began = false;
+    const char* err = nullptr;
+    uint32_t total = 0;
+
+    do
+    {
+        if (esp_http_client_open(client, 0) != ESP_OK) { err = "connect failed"; break; }
+        esp_http_client_fetch_headers(client);
+        int status = esp_http_client_get_status_code(client);
+        if (status != 200) { err = "http status"; break; }
+
+        began = isApp ? BeginAppUpdate() : BeginWwwUpdate();
+        if (!began) { err = "begin failed"; break; }
+
+        char buf[1024];
+        int n;
+        while ((n = esp_http_client_read(client, buf, sizeof(buf))) > 0)
+        {
+            bool ok = isApp ? WriteAppChunk(buf, n) : WriteWwwChunk(buf, n);
+            if (!ok) { err = "write failed"; began = false; break; }   // Write*Chunk aborted
+            total += n;
+        }
+        if (err) break;
+        if (n < 0) { err = "read failed"; break; }
+
+        err = isApp ? FinalizeAppUpdate() : FinalizeWwwUpdate();
+        began = false;   // finalize consumed the session, success or not
+    } while (false);
+
+    if (began)   // opened a session but bailed before finalize consumed it
+    {
+        LOCK(mutex_);
+        if (isApp) AbortOta();      // AbortOta expects mutex_ held (as in WriteAppChunk)
+        else       wwwActive_ = false;
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (err) { resp.field("ok", false); resp.field("error", err); return; }
+    resp.field("ok", true);
+    resp.field("size", total);
+    ESP_LOGI(TAG, "Pull update from %s complete (%lu bytes)", url, (unsigned long)total);
+}
+
+// ──────────────────────────────────────────────────────────────
+// Partition download — tiny JSON request in, raw bytes out
+// ──────────────────────────────────────────────────────────────
+
+void UpdateManager::Cmd_DownloadPartition(Stream& in, Stream& out)
+{
+    JsonReader<256> req(in);
+
+    char label[17] = {};
+    req.GetString("partition", label, sizeof(label));
+
+    const esp_partition_t* p = esp_partition_find_first(
+        ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, label);
+    if (!p)
+    {
+        JsonObject resp(out);
+        resp.field("ok", false);
+        resp.field("error", "unknown partition");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Download partition '%s' (%lu bytes)", label, (unsigned long)p->size);
+
+    uint8_t buf[4096];
+    size_t offset = 0;
+    while (offset < p->size)
+    {
+        size_t n = (p->size - offset < sizeof(buf)) ? (p->size - offset) : sizeof(buf);
+        if (esp_partition_read(p, offset, buf, n) != ESP_OK)
+        {
+            ESP_LOGE(TAG, "esp_partition_read failed at offset %lu", (unsigned long)offset);
+            return;
+        }
+        if (out.write(buf, n) != n)
+        {
+            ESP_LOGW(TAG, "Client disconnected during download");
+            return;
+        }
+        offset += n;
     }
 }

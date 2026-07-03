@@ -67,6 +67,12 @@ private:
     size_t wwwOffset_ = 0;
     bool wwwActive_ = false;
 
+    // Active command-driven update session (updateBegin/Write/End).
+    // Guarded by the single-client assumption: Begin*Update()'s own
+    // otaActive_/wwwActive_ checks protect flash integrity regardless.
+    enum class UpdateTarget { None, App, Www };
+    UpdateTarget activeTarget_ = UpdateTarget::None;
+
     void AbortOta();
 
     Mutex mutex_;
@@ -74,9 +80,21 @@ private:
     // ── WebSocket commands (registered with CommandManager in Init) ──
     void Cmd_UpdateStatus(Stream& in, Stream& out);
     void Cmd_Partitions(Stream& in, Stream& out);
+    void Cmd_UpdateBegin(Stream& in, Stream& out);
+    void Cmd_UpdateWrite(Stream& in, Stream& out);
+    void Cmd_UpdateEnd(Stream& in, Stream& out);
+    void Cmd_UpdateFromUrl(Stream& in, Stream& out);
+    void Cmd_DownloadPartition(Stream& in, Stream& out);
+
+    bool WriteActiveChunk(const void* data, size_t size);
 
     inline static CommandEntry commands_[] = {
-        { "updateStatus", &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },
-        { "partitions",   &InvokeCommand<&UpdateManager::Cmd_Partitions> },
+        { "updateStatus",      &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },
+        { "partitions",        &InvokeCommand<&UpdateManager::Cmd_Partitions> },
+        { "updateBegin",       &InvokeCommand<&UpdateManager::Cmd_UpdateBegin> },
+        { "updateWrite",       &InvokeCommand<&UpdateManager::Cmd_UpdateWrite> },
+        { "updateEnd",         &InvokeCommand<&UpdateManager::Cmd_UpdateEnd> },
+        { "updateFromUrl",     &InvokeCommand<&UpdateManager::Cmd_UpdateFromUrl> },
+        { "downloadPartition", &InvokeCommand<&UpdateManager::Cmd_DownloadPartition> },
     };
 };
