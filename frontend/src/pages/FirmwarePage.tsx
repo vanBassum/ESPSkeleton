@@ -10,12 +10,6 @@ function fmtSize(bytes: number): string {
   return `${bytes} B`
 }
 
-function uploadTarget(p: Partition): "app" | "www" | null {
-  if (!p.uploadable) return null
-  if (p.type === "app") return "app"
-  if (p.label === "www") return "www"
-  return null
-}
 
 export default function FirmwarePage() {
   const connection = useConnectionStatus()
@@ -106,19 +100,18 @@ function PartitionRow({
   const [progress, setProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const target = uploadTarget(p)
-  const canUpload = !!target && !p.running
+  const canUpload = p.uploadable && !p.running
   const uploading = progress !== null
 
   async function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ""
-    if (!file || !target) return
+    if (!file || !canUpload) return
 
     setError(null)
     setProgress(0)
     try {
-      await backend.uploadPartition(target, file, setProgress)
+      await backend.uploadPartition(p.label, file, setProgress)
       onAfterUpload()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed")
@@ -158,8 +151,8 @@ function PartitionRow({
             disabled={!canUpload || uploading}
             onClick={() => fileRef.current?.click()}
             title={
-              !target
-                ? "This partition can't be updated over HTTP"
+              !p.uploadable
+                ? "This partition can't be uploaded to"
                 : p.running
                   ? "Cannot overwrite the running slot"
                   : "Upload a .bin file"

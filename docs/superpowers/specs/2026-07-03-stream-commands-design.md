@@ -164,15 +164,23 @@ WebServerManager (its only remaining manager dependency: CommandManager
 + ConsoleManager broadcast wiring). The Begin/Write/Finalize state
 machine stays; UpdateManager's command set becomes:
 
+All update commands address partitions **by label** — one generic
+session mechanism for any partition (revised 2026-07-03 during
+implementation, replacing the earlier `target:"app"|"www"` shape).
+Internally, app partitions go through the `esp_ota_*` API (image
+validation + set-boot-partition; the running slot is refused) while
+data partitions are raw erase+write — callers never see the split.
+Side benefit: uploading/downloading `nvs` is config backup/restore.
+
 | Command             | Dialect | Payload                                  |
 | ------------------- | ------- | ---------------------------------------- |
 | `updateStatus`      | JSON    | as today                                 |
 | `partitions`        | JSON    | as today                                 |
-| `updateBegin`       | JSON    | `{"target":"app"\|"www"}` → opens session |
+| `updateBegin`       | JSON    | `{"partition":"<label>"}` → opens session |
 | `updateWrite`       | raw     | image bytes → active session, chunked    |
 | `updateEnd`         | JSON    | finalize, report result                  |
-| `downloadPartition` | mixed   | JSON request `{"partition":label}`, raw partition bytes out |
-| `updateFromUrl`     | JSON    | `{"url":...}` — device pulls the image itself (esp_http_client → Begin/Write/Finalize). Fast path. |
+| `downloadPartition` | mixed   | JSON request `{"partition":"<label>"}`, raw partition bytes out |
+| `updateFromUrl`     | JSON    | `{"url":..., "partition"?:"<label>"}` (default: next OTA slot) — device pulls the image itself. Fast path. |
 
 Frontend firmware page: upload switches to `updateBegin` (WS) →
 `POST /api/command?type=updateWrite` with the file as body (XHR

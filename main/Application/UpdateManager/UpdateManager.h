@@ -27,20 +27,20 @@ private:
     ServiceProvider& serviceProvider_;
     InitState initState_;
 
-    // ── App firmware OTA ──────────────────────────────────────
+    // ── Update session ────────────────────────────────────────
+    // One mechanism for ANY partition, addressed by label. App
+    // partitions go through the esp_ota_* API (image validation +
+    // set-boot-partition, running slot refused); data partitions are
+    // raw erase+write. Driven by updateBegin/updateWrite/updateEnd.
 
-    bool BeginAppUpdate();
-    bool WriteAppChunk(const void* data, size_t size);
-    const char* FinalizeAppUpdate();
+    bool BeginUpdate(const char* label, const char** err);
+    bool WriteChunk(const void* data, size_t size);
+    const char* FinalizeUpdate();
+    void AbortUpdate();   // expects mutex_ held
+    bool HasSession() const { return target_ != nullptr; }
 
     const char* GetRunningPartition() const;
     const char* GetNextPartition() const;
-
-    // ── WWW partition update ─────────────────────────────────
-
-    bool BeginWwwUpdate();
-    bool WriteWwwChunk(const void* data, size_t size);
-    const char* FinalizeWwwUpdate();
 
     // ── Partition inspection ──────────────────────────────────
 
@@ -60,23 +60,10 @@ private:
     /// Enumerate all partitions into `out`. Returns count written.
     int GetPartitions(PartitionInfo* out, int maxCount) const;
 
-    // OTA state
-    esp_ota_handle_t otaHandle_ = 0;
-    const esp_partition_t* otaPartition_ = nullptr;
-    bool otaActive_ = false;
-
-    // WWW state
-    const esp_partition_t* wwwPartition_ = nullptr;
-    size_t wwwOffset_ = 0;
-    bool wwwActive_ = false;
-
-    // Active command-driven update session (updateBegin/Write/End).
-    // Guarded by the single-client assumption: Begin*Update()'s own
-    // otaActive_/wwwActive_ checks protect flash integrity regardless.
-    enum class UpdateTarget { None, App, Www };
-    UpdateTarget activeTarget_ = UpdateTarget::None;
-
-    void AbortOta();
+    // Session state (guarded by mutex_)
+    const esp_partition_t* target_ = nullptr;   // nullptr = no session
+    esp_ota_handle_t otaHandle_ = 0;            // valid while target_ is an app partition
+    size_t writeOffset_ = 0;                    // used for data partitions
 
     Mutex mutex_;
 
@@ -88,8 +75,6 @@ private:
     void Cmd_UpdateEnd(Stream& in, Stream& out);
     void Cmd_UpdateFromUrl(Stream& in, Stream& out);
     void Cmd_DownloadPartition(Stream& in, Stream& out);
-
-    bool WriteActiveChunk(const void* data, size_t size);
 
     inline static CommandEntry commands_[] = {
         { "updateStatus",      &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },

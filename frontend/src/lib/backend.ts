@@ -244,11 +244,11 @@ class BackendService {
 
   /** Upload a .bin into an update session: begin (WS) → write (HTTP, streamed) → end (WS). */
   async uploadPartition(
-    target: "app" | "www",
+    partition: string,
     file: File,
     onProgress?: (percent: number) => void,
   ): Promise<UploadResult> {
-    const begin = await this.send<{ ok: boolean; error?: string }>("updateBegin", { target })
+    const begin = await this.send<{ ok: boolean; error?: string }>("updateBegin", { partition })
     if (!begin.ok) throw new Error(begin.error ?? "updateBegin failed")
 
     // The device's HTTP server is single-threaded, so it can't answer
