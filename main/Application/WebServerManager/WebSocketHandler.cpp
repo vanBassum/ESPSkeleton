@@ -1,5 +1,6 @@
 #include "WebSocketHandler.h"
 #include "CommandManager.h"
+#include "WebServerManager.h"
 #include "JsonHelpers.h"
 #include "BufferStream.h"
 #include "MemoryStream.h"
@@ -14,6 +15,11 @@ static constexpr const char* TAG = "WebSocketHandler";
 void WebSocketHandler::SetCommandManager(CommandManager& commandManager)
 {
     commandManager_ = &commandManager;
+}
+
+void WebSocketHandler::SetAuth(WebServerManager& auth)
+{
+    auth_ = &auth;
 }
 
 void WebSocketHandler::RegisterRoute(httpd_handle_t server)
@@ -34,7 +40,7 @@ void WebSocketHandler::RegisterRoute(httpd_handle_t server)
 // Client tracking
 // ──────────────────────────────────────────────────────────────
 
-void WebSocketHandler::AddWsClient(int fd)
+void WebSocketHandler::AddWsClient(int fd, const char* token)
 {
     LOCK(wsMutex_);
 
@@ -48,6 +54,7 @@ void WebSocketHandler::AddWsClient(int fd)
         if (wsClients_[i] == 0)
         {
             wsClients_[i] = fd;
+            strlcpy(clientTokens_[i], token, sizeof(clientTokens_[i]));
             ESP_LOGI(TAG, "WS client added: fd=%d slot=%d", fd, i);
             return;
         }
@@ -64,10 +71,29 @@ void WebSocketHandler::RemoveWsClient(int fd)
         {
             wsClients_[i] = 0;
             consecBinFails_[i] = 0;
+            clientTokens_[i][0] = 0;
             ESP_LOGI(TAG, "WS client removed: fd=%d slot=%d", fd, i);
             return;
         }
     }
+}
+
+void WebSocketHandler::TouchClient(int fd)
+{
+    char token[SessionTable::TOKEN_LEN] = {};
+    {
+        LOCK(wsMutex_);
+        for (int i = 0; i < MAX_WS_CLIENTS; i++)
+        {
+            if (wsClients_[i] == fd)
+            {
+                strlcpy(token, clientTokens_[i], sizeof(token));
+                break;
+            }
+        }
+    }
+    if (token[0] != 0 && auth_)
+        auth_->TouchSession(token);   // outside wsMutex_ — TouchSession locks its own table
 }
 
 void WebSocketHandler::OnClientDisconnected(int fd)
@@ -158,7 +184,22 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
 
     if (req->method == HTTP_GET)
     {
-        self->AddWsClient(httpd_req_to_sockfd(req));
+        // Auth happens HERE, once. esp_http_server has already sent the
+        // 101 handshake before invoking us; returning ESP_FAIL makes
+        // httpd close the socket immediately, which is how an upgrade
+        // is "refused". The frontend can't read a close reason — it
+        // discriminates bad-token from network failure via an HTTP
+        // ping before connecting (see backend.ts).
+        char query[96] = {};
+        char token[SessionTable::TOKEN_LEN] = {};
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+            httpd_query_key_value(query, "token", token, sizeof(token)) != ESP_OK ||
+            !self->auth_ || !self->auth_->ValidateToken(token))
+        {
+            ESP_LOGW(TAG, "WS upgrade refused: missing/invalid token");
+            return ESP_FAIL;
+        }
+        self->AddWsClient(httpd_req_to_sockfd(req), token);
         return ESP_OK;
     }
 
@@ -172,6 +213,10 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
         self->RemoveWsClient(httpd_req_to_sockfd(req));
         return ret;
     }
+
+    // Any inbound frame (heartbeat included) keeps the session alive —
+    // an open tab never logs out; see spec.
+    self->TouchClient(httpd_req_to_sockfd(req));
 
     if (frame.type == HTTPD_WS_TYPE_CLOSE)
     {

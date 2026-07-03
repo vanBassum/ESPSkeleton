@@ -2,6 +2,12 @@
 #include "CommandManager.h"
 #include "ConsoleManager.h"
 #include "Stream.h"
+#include "SystemManager.h"
+#include "SettingsManager.h"
+#include "JsonReader.h"
+#include "JsonWriter.h"
+#include "BufferStream.h"
+#include "ContextLock.h"
 
 #include <unistd.h>
 #include <esp_log.h>
@@ -28,6 +34,10 @@ void WebServerManager::Init()
     s_instance_ = this;
 
     wsHandler_.SetCommandManager(serviceProvider_.getCommandManager());
+
+    serviceProvider_.getSettingsManager().Register({ &webPassword_ });
+    webPassword_.Get(passwordSnapshot_, sizeof(passwordSnapshot_));
+    wsHandler_.SetAuth(*this);
 
     MountFatPartition();
     StartServer();
@@ -118,6 +128,41 @@ void WebServerManager::RegisterRoutes()
     };
     httpd_register_uri_handler(server_, &api_command_opts);
 
+    // Login — the only open API surface (see spec: everything else that
+    // knows anything sits behind auth).
+    const httpd_uri_t login_get = {
+        .uri = "/api/login",
+        .method = HTTP_GET,
+        .handler = HandleLoginGet,
+        .user_ctx = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    httpd_register_uri_handler(server_, &login_get);
+
+    const httpd_uri_t login_post = {
+        .uri = "/api/login",
+        .method = HTTP_POST,
+        .handler = HandleLoginPost,
+        .user_ctx = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    httpd_register_uri_handler(server_, &login_post);
+
+    const httpd_uri_t login_opts = {
+        .uri = "/api/login",
+        .method = HTTP_OPTIONS,
+        .handler = HandleCorsPreflight,
+        .user_ctx = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    httpd_register_uri_handler(server_, &login_opts);
+
     wsHandler_.RegisterRoute(server_);
     staticFileHandler_.RegisterRoute(server_, BASE_PATH);
 }
@@ -196,6 +241,12 @@ esp_err_t WebServerManager::HandleApiCommand(httpd_req_t* req)
 {
     auto* self = static_cast<WebServerManager*>(req->user_ctx);
 
+    if (!self->CheckBearer(req))
+    {
+        SendUnauthorized(req);
+        return ESP_FAIL;
+    }
+
     char query[96] = {};
     char type[32] = {};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
@@ -229,8 +280,8 @@ esp_err_t WebServerManager::HandleApiCommand(httpd_req_t* req)
 void WebServerManager::SetCorsHeaders(httpd_req_t* req)
 {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin",  "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "POST, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
 
 esp_err_t WebServerManager::HandleCorsPreflight(httpd_req_t* req)
@@ -238,6 +289,108 @@ esp_err_t WebServerManager::HandleCorsPreflight(httpd_req_t* req)
     SetCorsHeaders(req);
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, nullptr, 0);
+    return ESP_OK;
+}
+
+// ──────────────────────────────────────────────────────────────
+// Auth — sessions at the transport edge. Nothing below this layer
+// (commands, streams) ever sees a token or password.
+// ──────────────────────────────────────────────────────────────
+
+void WebServerManager::CheckPasswordEpoch()
+{
+    LOCK(authMutex_);
+    char current[64] = {};
+    webPassword_.Get(current, sizeof(current));
+    if (strcmp(current, passwordSnapshot_) != 0)
+    {
+        ESP_LOGI(TAG, "web.password changed — clearing all sessions");
+        sessions_.Clear();
+        strlcpy(passwordSnapshot_, current, sizeof(passwordSnapshot_));
+    }
+}
+
+bool WebServerManager::ValidateToken(const char* token)
+{
+    CheckPasswordEpoch();
+    return sessions_.Touch(token);
+}
+
+void WebServerManager::TouchSession(const char* token)
+{
+    sessions_.Touch(token);
+}
+
+bool WebServerManager::CheckBearer(httpd_req_t* req)
+{
+    char hdr[48] = {};
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK)
+        return false;
+    if (strncmp(hdr, "Bearer ", 7) != 0)
+        return false;
+    return ValidateToken(hdr + 7);
+}
+
+void WebServerManager::SendUnauthorized(httpd_req_t* req)
+{
+    // Manual 401 (esp_http_server's httpd_err_code_t has no 401) with
+    // CORS headers so cross-origin JS can read the status.
+    SetCorsHeaders(req);
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"error\":\"unauthorized\"}");
+}
+
+esp_err_t WebServerManager::HandleLoginGet(httpd_req_t* req)
+{
+    auto* self = static_cast<WebServerManager*>(req->user_ctx);
+
+    char name[33] = {};
+    self->serviceProvider_.getSystemManager().GetDeviceName(name, sizeof(name));
+
+    char body[80];
+    BufferStream out(body, sizeof(body));
+    JsonWriter json(out);
+    json.beginObject();
+    json.field("name", name);
+    json.endObject();
+
+    SetCorsHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, out.data(), out.length());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::HandleLoginPost(httpd_req_t* req)
+{
+    auto* self = static_cast<WebServerManager*>(req->user_ctx);
+    self->CheckPasswordEpoch();
+
+    HttpRequestStream in(req);
+    JsonReader<256> json(in);
+    char password[64] = {};
+    json.GetString("password", password, sizeof(password));
+
+    char expected[64] = {};
+    webPassword_.Get(expected, sizeof(expected));
+
+    if (strcmp(password, expected) != 0)
+    {
+        // No delay, no lockout — deliberately (spec): this layer keeps
+        // out the pleps, it is not a security boundary.
+        SendUnauthorized(req);
+        return ESP_OK;
+    }
+
+    char token[SessionTable::TOKEN_LEN] = {};
+    self->sessions_.Create(token);
+
+    char body[64];
+    int n = snprintf(body, sizeof(body), "{\"token\":\"%s\"}", token);
+
+    SetCorsHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, body, n);
     return ESP_OK;
 }
 

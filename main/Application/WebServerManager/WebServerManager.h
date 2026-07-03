@@ -5,6 +5,9 @@
 #include "InitState.h"
 #include "StaticFileHandler.h"
 #include "WebSocketHandler.h"
+#include "SessionTable.h"
+#include "TypedSettings.h"
+#include "Mutex.h"
 
 class WebServerManager {
     static constexpr const char* TAG = "WebServerManager";
@@ -22,6 +25,16 @@ public:
     void Broadcast(const char* json, int len);
     void BroadcastBinary(const uint8_t* data, size_t len);
 
+    // ── Transport-edge auth (also used by WebSocketHandler) ──
+    /// Full check: detects a changed web.password (clears all sessions),
+    /// then validates + refreshes the token. Reads NVS — use at request/
+    /// upgrade granularity, not per WS frame.
+    bool ValidateToken(const char* token);
+    /// Refresh only — no settings read. Safe per WS frame. A token that
+    /// no longer exists is a silent no-op (live connections stay trusted
+    /// for their lifetime; see spec).
+    void TouchSession(const char* token);
+
 private:
     ServiceProvider& serviceProvider_;
 
@@ -30,6 +43,23 @@ private:
 
     StaticFileHandler staticFileHandler_;
     WebSocketHandler wsHandler_;
+
+    // ── Auth state ────────────────────────────────────────────
+    inline static StringSetting webPassword_{ "web.password", "Web Password", "admin" };
+    SessionTable sessions_;
+    char passwordSnapshot_[64] = {};   // last-seen password; mismatch → sessions cleared
+    Mutex authMutex_;                  // guards passwordSnapshot_
+
+    /// Compare web.password against the snapshot; on change, clear all
+    /// sessions and take a new snapshot. The "hook" for password edits —
+    /// SettingsManager has no change notification, so we detect lazily
+    /// in every HTTP auth path (login, /api/command, WS upgrade).
+    void CheckPasswordEpoch();
+    bool CheckBearer(httpd_req_t* req);
+
+    static esp_err_t HandleLoginGet(httpd_req_t* req);
+    static esp_err_t HandleLoginPost(httpd_req_t* req);
+    static void SendUnauthorized(httpd_req_t* req);
 
     void MountFatPartition();
     void StartServer();
