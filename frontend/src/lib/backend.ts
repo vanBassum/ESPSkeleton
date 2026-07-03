@@ -15,6 +15,7 @@ interface PendingRequest {
 
 export type ConnectionStatus = "connected" | "connecting" | "disconnected"
 type StatusHandler = (status: ConnectionStatus) => void
+type AuthHandler = (authenticated: boolean) => void
 
 // ── Service ──────────────────────────────────────────────────────
 
@@ -30,9 +31,49 @@ class BackendService {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private connecting: Promise<void> | null = null
   private _status: ConnectionStatus = "disconnected"
+  private token: string | null = sessionStorage.getItem("strux.token")
+  private authHandlers = new Set<AuthHandler>()
+  private _authenticated = false
 
   get status(): ConnectionStatus {
     return this._status
+  }
+
+  get authenticated(): boolean {
+    return this._authenticated
+  }
+
+  get hasToken(): boolean {
+    return this.token !== null
+  }
+
+  onAuthChange(fn: AuthHandler): () => void {
+    this.authHandlers.add(fn)
+    return () => {
+      this.authHandlers.delete(fn)
+    }
+  }
+
+  private setAuthenticated(auth: boolean) {
+    if (auth !== this._authenticated) {
+      this._authenticated = auth
+      this.authHandlers.forEach((fn) => fn(auth))
+    }
+  }
+
+  private clearAuth() {
+    this.token = null
+    sessionStorage.removeItem("strux.token")
+    this.setAuthenticated(false)
+  }
+
+  private authHeaders(): Record<string, string> {
+    return this.token ? { Authorization: `Bearer ${this.token}` } : {}
+  }
+
+  private apiUrl(path: string): string {
+    const host = import.meta.env.DEV ? `http://${DEV_HOST}` : ""
+    return `${host}${path}`
   }
 
   private setStatus(s: ConnectionStatus) {
@@ -65,84 +106,116 @@ class BackendService {
       this.reconnectTimer = null
     }
 
+    if (!this.token) {
+      this.setStatus("disconnected")
+      return Promise.reject(new Error("Not authenticated"))
+    }
+
     this.setStatus("connecting")
-    this.connecting = new Promise<void>((resolve, reject) => {
-      const host = import.meta.env.DEV ? DEV_HOST : location.host
-      const proto = location.protocol === "https:" ? "wss:" : "ws:"
-      const url = `${proto}//${host}/ws`
-      console.log(`[BackendService] connecting to ${url} (DEV=${import.meta.env.DEV})`)
-      const ws = new WebSocket(url)
-      ws.binaryType = "arraybuffer"
-      let opened = false
 
-      ws.onopen = () => {
-        opened = true
-        this.ws = ws
-        this.connecting = null
-        this.setStatus("connected")
-        this.startHeartbeat()
-        resolve()
+    const p = (async () => {
+      // Validate the token over HTTP first: the browser WS API cannot
+      // distinguish a refused upgrade (bad token) from a network
+      // failure, and we must not clear a good token on a flaky link.
+      try {
+        const res = await fetch(this.commandUrl("ping"), {
+          method: "POST",
+          headers: this.authHeaders(),
+          body: "{}",
+        })
+        if (res.status === 401) {
+          this.clearAuth()
+          this.setStatus("disconnected")
+          throw new Error("Not authenticated")
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message === "Not authenticated") throw e
+        // Network error: fall through — the WS attempt below owns retries.
       }
 
-      ws.onmessage = (ev) => {
-        // Binary frames are dispatched to binary subscribers.
-        if (ev.data instanceof ArrayBuffer) {
-          this.binaryHandlers.forEach((fn) => fn(ev.data))
-          return
+      await new Promise<void>((resolve, reject) => {
+        const host = import.meta.env.DEV ? DEV_HOST : location.host
+        const proto = location.protocol === "https:" ? "wss:" : "ws:"
+        const url = `${proto}//${host}/ws?token=${this.token}`
+        console.log(`[BackendService] connecting to ${url} (DEV=${import.meta.env.DEV})`)
+        const ws = new WebSocket(url)
+        ws.binaryType = "arraybuffer"
+        let opened = false
+
+        ws.onopen = () => {
+          opened = true
+          this.ws = ws
+          this.setStatus("connected")
+          this.setAuthenticated(true)
+          this.startHeartbeat()
+          resolve()
         }
-        // Defensive: some browsers may deliver the first frame as a Blob if
-        // binaryType wasn't applied in time. Convert and dispatch.
-        if (typeof Blob !== "undefined" && ev.data instanceof Blob) {
-          ev.data.arrayBuffer().then((buf) => {
-            this.binaryHandlers.forEach((fn) => fn(buf))
-          })
-          return
-        }
-        try {
-          const msg = JSON.parse(ev.data)
-          if (typeof msg.id === "number") {
-            const req = this.pending.get(msg.id)
-            if (req) {
-              this.pending.delete(msg.id)
-              clearTimeout(req.timer)
-              if (msg.error) {
-                req.reject(new Error(msg.error))
-              } else {
-                req.resolve(msg.payload)
-              }
-            }
-          } else {
-            this.broadcastHandlers.forEach((fn) => fn(msg))
+
+        ws.onmessage = (ev) => {
+          // Binary frames are dispatched to binary subscribers.
+          if (ev.data instanceof ArrayBuffer) {
+            this.binaryHandlers.forEach((fn) => fn(ev.data))
+            return
           }
-        } catch (e) {
-          const sample = typeof ev.data === "string" ? ev.data.slice(-80) : "(non-string)"
-          console.warn(
-            `[BackendService] failed to parse WS frame (${typeof ev.data === "string" ? ev.data.length : "?"} bytes); tail: ${sample}`,
-            e,
-          )
+          // Defensive: some browsers may deliver the first frame as a Blob if
+          // binaryType wasn't applied in time. Convert and dispatch.
+          if (typeof Blob !== "undefined" && ev.data instanceof Blob) {
+            ev.data.arrayBuffer().then((buf) => {
+              this.binaryHandlers.forEach((fn) => fn(buf))
+            })
+            return
+          }
+          try {
+            const msg = JSON.parse(ev.data)
+            if (typeof msg.id === "number") {
+              const req = this.pending.get(msg.id)
+              if (req) {
+                this.pending.delete(msg.id)
+                clearTimeout(req.timer)
+                if (msg.error) {
+                  req.reject(new Error(msg.error))
+                } else {
+                  req.resolve(msg.payload)
+                }
+              }
+            } else {
+              this.broadcastHandlers.forEach((fn) => fn(msg))
+            }
+          } catch (e) {
+            const sample = typeof ev.data === "string" ? ev.data.slice(-80) : "(non-string)"
+            console.warn(
+              `[BackendService] failed to parse WS frame (${typeof ev.data === "string" ? ev.data.length : "?"} bytes); tail: ${sample}`,
+              e,
+            )
+          }
         }
-      }
 
-      ws.onclose = () => {
-        this.ws = null
-        this.connecting = null
-        this.stopHeartbeat()
-        this.setStatus("disconnected")
-        for (const [, req] of this.pending) {
-          clearTimeout(req.timer)
-          req.reject(new Error("WebSocket closed"))
+        ws.onclose = () => {
+          this.ws = null
+          this.stopHeartbeat()
+          this.setStatus("disconnected")
+          for (const [, req] of this.pending) {
+            clearTimeout(req.timer)
+            req.reject(new Error("WebSocket closed"))
+          }
+          this.pending.clear()
+          if (!opened) reject(new Error("Connection failed"))
+          if (this.token) {
+            this.reconnectTimer = setTimeout(() => {
+              this.doConnect().catch(() => {})
+            }, 2000)
+          }
         }
-        this.pending.clear()
-        if (!opened) reject(new Error("Connection failed"))
-        this.reconnectTimer = setTimeout(() => {
-          this.doConnect().catch(() => {})
-        }, 2000)
-      }
 
-      ws.onerror = () => ws.close()
+        ws.onerror = () => ws.close()
+      })
+    })()
+
+    this.connecting = p
+    p.catch(() => {}).then(() => {
+      if (this.connecting === p) this.connecting = null
     })
-
-    return this.connecting
+    return p
   }
 
   private startHeartbeat() {
@@ -238,8 +311,31 @@ class BackendService {
   }
 
   private commandUrl(type: string): string {
-    const host = import.meta.env.DEV ? `http://${DEV_HOST}` : ""
-    return `${host}/api/command?type=${encodeURIComponent(type)}`
+    return this.apiUrl(`/api/command?type=${encodeURIComponent(type)}`)
+  }
+
+  /** Open endpoint: device name for the login page's brand slot. */
+  async getLoginInfo(): Promise<{ name: string }> {
+    const res = await fetch(this.apiUrl("/api/login"))
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    return res.json()
+  }
+
+  /** Returns false on wrong password; throws on network failure. */
+  async login(password: string): Promise<boolean> {
+    const res = await fetch(this.apiUrl("/api/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    })
+    if (res.status === 401) return false
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    const { token } = (await res.json()) as { token: string }
+    this.token = token
+    sessionStorage.setItem("strux.token", token)
+    this.setAuthenticated(true)
+    this.connect()
+    return true
   }
 
   /** Upload a .bin into an update session: begin (WS) → write (HTTP, streamed) → end (WS). */
@@ -300,8 +396,13 @@ class BackendService {
     try {
       const res = await fetch(this.commandUrl("downloadPartition"), {
         method: "POST",
+        headers: this.authHeaders(),
         body: JSON.stringify({ partition: label }),
       })
+      if (res.status === 401) {
+        this.clearAuth()
+        throw new Error("Not authenticated")
+      }
       if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
 
       const reader = res.body.getReader()
@@ -338,6 +439,7 @@ class BackendService {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       xhr.open("POST", this.commandUrl(type))
+      if (this.token) xhr.setRequestHeader("Authorization", `Bearer ${this.token}`)
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) {
@@ -346,7 +448,10 @@ class BackendService {
       }
 
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
+        if (xhr.status === 401) {
+          this.clearAuth()
+          reject(new Error("Not authenticated"))
+        } else if (xhr.status >= 200 && xhr.status < 300) {
           resolve(JSON.parse(xhr.responseText))
         } else {
           reject(new Error(xhr.responseText || `${xhr.status} ${xhr.statusText}`))
