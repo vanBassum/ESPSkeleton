@@ -7,6 +7,7 @@ set(SOURCE_FILES_LIST
     "Application/WebServerManager/WebServerManager.cpp"
     "Application/WebServerManager/StaticFileHandler.cpp"
     "Application/WebServerManager/WebSocketHandler.cpp"
+    "Application/WebServerManager/SessionTable.cpp"
     "Application/CommandManager/CommandManager.cpp"
     "Application/UpdateManager/UpdateManager.cpp"
     "Application/SettingsManager/SettingsManager.cpp"
