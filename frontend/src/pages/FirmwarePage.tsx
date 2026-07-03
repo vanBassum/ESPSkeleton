@@ -98,6 +98,7 @@ function PartitionRow({
   const p = partition
   const fileRef = useRef<HTMLInputElement>(null)
   const [progress, setProgress] = useState<number | null>(null)
+  const [downProgress, setDownProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const canUpload = p.uploadable && !p.running
@@ -164,7 +165,15 @@ function PartitionRow({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => backend.downloadPartitionFile(p.label).catch((e) => setError(e.message))}
+            disabled={downProgress !== null}
+            onClick={() => {
+              setError(null)
+              setDownProgress(0)
+              backend
+                .downloadPartitionFile(p.label, p.size, setDownProgress)
+                .catch((e) => setError(e.message))
+                .finally(() => setDownProgress(null))
+            }}
           >
             <DownloadIcon className="mr-1.5 size-3.5" />
             Download
@@ -182,6 +191,21 @@ function PartitionRow({
             <div
               className="h-full bg-primary transition-all"
               style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {downProgress !== null && (
+        <div className="mt-3">
+          <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+            <span>Downloading…</span>
+            <span>{downProgress}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{ width: `${downProgress}%` }}
             />
           </div>
         </div>

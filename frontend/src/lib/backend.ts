@@ -286,23 +286,48 @@ class BackendService {
     }
   }
 
-  /** Fetch a partition image through the command pipe and save it as <label>.bin. */
-  async downloadPartitionFile(label: string): Promise<void> {
-    const res = await fetch(this.commandUrl("downloadPartition"), {
-      method: "POST",
-      body: JSON.stringify({ partition: label }),
-    })
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-    const blob = await res.blob()
-    const text = blob.size < 256 ? await blob.slice(0, 256).text() : ""
-    if (text.startsWith('{"ok":false')) throw new Error(JSON.parse(text).error ?? "download failed")
+  /** Fetch a partition image through the command pipe and save it as <label>.bin.
+   *  The response is chunked (no Content-Length), so progress is computed
+   *  against expectedSize — the UI knows it from the partition table. */
+  async downloadPartitionFile(
+    label: string,
+    expectedSize?: number,
+    onProgress?: (percent: number) => void,
+  ): Promise<void> {
+    // Same single-threaded-server precaution as uploads: don't let our
+    // heartbeat race a server that is busy streaming to us.
+    this.stopHeartbeat()
+    try {
+      const res = await fetch(this.commandUrl("downloadPartition"), {
+        method: "POST",
+        body: JSON.stringify({ partition: label }),
+      })
+      if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
 
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `${label}.bin`
-    a.click()
-    URL.revokeObjectURL(url)
+      const reader = res.body.getReader()
+      const chunks: BlobPart[] = []
+      let received = 0
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+        received += value.length
+        if (expectedSize) onProgress?.(Math.min(100, Math.round((received / expectedSize) * 100)))
+      }
+
+      const blob = new Blob(chunks)
+      const text = blob.size < 256 ? await blob.slice(0, 256).text() : ""
+      if (text.startsWith('{"ok":false')) throw new Error(JSON.parse(text).error ?? "download failed")
+
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${label}.bin`
+      a.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      this.startHeartbeat()
+    }
   }
 
   private postCommand(
