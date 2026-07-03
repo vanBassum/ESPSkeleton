@@ -1,0 +1,28 @@
+# Multiplexed command channels (transport-level sessions/chunking)
+
+Idea (Bas, 2026-07-03): the WS protocol (and later the relay pipe)
+should do chunking and sessions itself — frames tagged with a channel
+id, many logical streams interleaved over one connection. Then upload,
+download, commands, and live logs all run in parallel over one socket,
+and no application has to build its own chunking. This is the pattern
+HTTP/2 / SSH channels / yamux use.
+
+Fits the stream-commands contract exactly: one channel = one command
+invocation; the handler's `(Stream& in, Stream& out)` are fed/ drained
+frame-by-frame by the transport. Registry and handlers unchanged.
+
+**Prerequisite that makes or breaks it:** handler execution must move
+off the transport task (worker task/pool). Multiplexed framing without
+concurrent execution just queues channels behind the running handler —
+during a 12 s flash write nothing else would run anyway. Budget:
+per-channel buffers + backpressure + task stacks on 320 KB RAM.
+
+**When:** as the core of the relay transport design (see
+`remote-access.md` — this subsumes its open "envelope request ids"
+point). Not worth retrofitting today's WS first: only the update flow
+needed chunking and it lives in one frontend function; browsers get
+parallelism free via extra HTTP connections.
+
+Might eventually let the update session commands (updateBegin/Write/
+End) collapse into a single streamed command; keep them until then —
+serial-style transports still want explicit chunk framing.
