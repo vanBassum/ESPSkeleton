@@ -131,7 +131,14 @@ class BackendService {
           body: "{}",
         })
         if (res.status === 401) {
-          if (this.token === attemptToken) this.clearAuth()
+          if (this.token === attemptToken) {
+            this.clearAuth()
+          } else if (this.token) {
+            // Token replaced mid-attempt (fresh login) — hand off to it.
+            this.reconnectTimer = setTimeout(() => {
+              this.doConnect().catch(() => {})
+            }, 2000)
+          }
           this.setStatus("disconnected")
           throw new Error("Not authenticated")
         }
@@ -207,7 +214,7 @@ class BackendService {
           }
           this.pending.clear()
           if (!opened) reject(new Error("Connection failed"))
-          if (this.token === attemptToken) {
+          if (this.token) {
             this.reconnectTimer = setTimeout(() => {
               this.doConnect().catch(() => {})
             }, 2000)
