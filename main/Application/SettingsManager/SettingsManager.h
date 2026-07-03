@@ -3,50 +3,20 @@
 #include "ServiceProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
+#include "Setting.h"
+#include "TypedSettings.h"
+#include "Mutex.h"
 #include <nvs_handle.hpp>
 
 class JsonWriter;
 
 // ──────────────────────────────────────────────────────────────
-// Setting definition table
+// Schema registry + NVS storage. Managers own their settings as
+// typed inline static members (TypedSettings.h) and register them
+// in Init(). Nothing about JSON, UI, or any presentation format
+// lives here — converters (e.g. the getSettings/setSetting command
+// handlers below) walk the chain via begin()/end().
 // ──────────────────────────────────────────────────────────────
-
-// Calling a non-constexpr function from inside a constant-evaluated
-// constexpr context fails the compile with a clear, named diagnostic.
-// (We can't use `throw` because IDF builds with -fno-exceptions.)
-inline void NvsKeyExceedsNvsKeyNameMaxSize() {}
-
-// Opaque key type — accepts string literals directly.
-// Implicit const char* conversion lets the NVS layer use it transparently.
-// Constructor enforces NVS's 15-char key limit at compile time when used
-// in a constant-evaluated context (i.e. inside `constexpr SETTINGS_DEFS`).
-struct SettingKey {
-    const char* key;
-    constexpr SettingKey(const char* k) : key(k)
-    {
-        // NVS_KEY_NAME_MAX_SIZE includes the null terminator, so the usable
-        // key length is NVS_KEY_NAME_MAX_SIZE - 1 (= 15).
-        size_t n = 0;
-        while (k[n]) ++n;
-        if (n >= NVS_KEY_NAME_MAX_SIZE)
-            NvsKeyExceedsNvsKeyNameMaxSize();
-    }
-    constexpr operator const char*() const { return key; }
-};
-
-enum class SettingType : uint8_t { String, Int, Bool };
-
-struct SettingDef {
-    SettingKey  key;
-    SettingType type;
-    const char* label;       // human-readable name for the frontend
-    const char* strDefault;  // default for String (also "true"/"false" for Bool, number string for Int)
-};
-
-// ──────────────────────────────────────────────────────────────
-// Manager
-// ──────────────────────────────────────────────────────────────
-
 class SettingsManager {
     static constexpr const char* TAG = "SettingsManager";
     static constexpr const char* NVS_NAMESPACE = "settings";
@@ -59,37 +29,54 @@ public:
 
     void Init();
 
-    // ── Typed access ─────────────────────────────────────────
+    // ── Schema registration ──────────────────────────────────
+    // Called from a manager's Init(). Entries MUST have static storage
+    // duration (see ~Setting). Heterogeneous leaves register through
+    // base pointers; the initializer_list lives on the caller's stack.
+    //
+    // SettingsManager is the NVS link, so registration enforces NVS
+    // rules — boot-deterministically.
+    void Register(std::initializer_list<Setting*> settings);
 
-    bool getString(SettingKey key, char* out, size_t maxLen) const;
-    bool setString(SettingKey key, const char* value);
-
-    int32_t getInt(SettingKey key, int32_t defaultVal = 0) const;
-    bool setInt(SettingKey key, int32_t value);
-
-    bool getBool(SettingKey key, bool defaultVal = false) const;
-    bool setBool(SettingKey key, bool value);
+    // ── Iteration ────────────────────────────────────────────
+    // begin() takes the lock only to read the head; the links behind it
+    // are write-once and the entries immortal, so the walk itself needs
+    // no lock.
+    //
+    //   for (Setting& s : settingsManager) { ... }
+    SettingIterator begin();
+    SettingIterator end() { return SettingIterator(nullptr); }
 
     // ── Persistence ──────────────────────────────────────────
-
     bool Save();
+    /// Erase the NVS namespace and commit. That's all — defaults resolve
+    /// at read, so nothing needs to be written back.
     bool ResetToDefaults();
 
-    // ── Enumeration ──────────────────────────────────────────
-
-    const SettingDef* GetDefinitions() const;
-    int GetDefinitionCount() const;
-
-    void WriteAllSettings(JsonWriter& writer) const;
+    // ── NVS primitives (used by the typed leaves via Manager()) ──
+    // Return false when the key has no stored value (caller falls back
+    // to the entry's default) or when NVS is unavailable.
+    bool ReadI32(const char* key, int32_t& out) const;
+    bool WriteI32(const char* key, int32_t v);
+    bool ReadU32(const char* key, uint32_t& out) const;
+    bool WriteU32(const char* key, uint32_t v);
+    bool ReadU8(const char* key, uint8_t& out) const;
+    bool WriteU8(const char* key, uint8_t v);
+    bool ReadString(const char* key, char* out, size_t maxLen) const;
+    bool WriteString(const char* key, const char* v);
 
 private:
     ServiceProvider& serviceProvider_;
     InitState initState_;
     std::unique_ptr<nvs::NVSHandle> handle_;
 
-    void ApplyDefaults();
+    Mutex mutex_;              // guards the chain (Register/begin)
+    Setting* head_ = nullptr;
 
-    // ── WebSocket commands (registered with CommandManager in Init) ──
+    const Setting* FindLocked(const char* key) const;
+
+    // ── WebSocket commands (the JSON converter lives HERE, at the
+    //    edge — not in the schema/storage core above) ──────────
     static void Cmd_GetSettings(void* ctx, const char* json, JsonWriter& resp);
     static void Cmd_SetSetting(void* ctx, const char* json, JsonWriter& resp);
     static void Cmd_SaveSettings(void* ctx, const char* json, JsonWriter& resp);

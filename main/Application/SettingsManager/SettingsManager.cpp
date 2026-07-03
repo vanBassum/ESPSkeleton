@@ -1,12 +1,15 @@
 #include "SettingsManager.h"
-#include "SettingsDefs.h"
 #include "CommandManager.h"
+#include "SystemManager.h"
+#include "ContextLock.h"
 #include "JsonWriter.h"
 #include "JsonHelpers.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "nvs_flash.h"
 #include <cstring>
 #include <cstdlib>
+#include <cassert>
 
 // ──────────────────────────────────────────────────────────────
 // Init
@@ -47,98 +50,54 @@ void SettingsManager::Init()
         return;
     }
 
-    ApplyDefaults();
-
     initAttempt.SetReady();
-    ESP_LOGI(TAG, "Initialized (%d settings)", GetDefinitionCount());
+    ESP_LOGI(TAG, "Initialized");
 }
 
-void SettingsManager::ApplyDefaults()
-{
-    const auto* defs = GetDefinitions();
-    int count = GetDefinitionCount();
+// ──────────────────────────────────────────────────────────────
+// Schema registration + iteration
+// ──────────────────────────────────────────────────────────────
 
-    for (int i = 0; i < count; i++)
+void SettingsManager::Register(std::initializer_list<Setting*> settings)
+{
+    LOCK(mutex_);
+    for (Setting* s : settings)
     {
-        const auto& def = defs[i];
+        // Chain-corruption class → FATAL (survives NDEBUG): re-linking a
+        // registered entry would cycle the chain and hang every walk.
+        if (s->registered)
+            FATAL("setting '%s' registered twice", s->key);
+        if (FindLocked(s->key) != nullptr)
+            FATAL("duplicate setting key '%s'", s->key);
 
-        switch (def.type)
-        {
-        case SettingType::String:
-        {
-            size_t len = 0;
-            if (handle_->get_item_size(nvs::ItemType::SZ, def.key, len) != ESP_OK)
-            {
-                handle_->set_string(def.key, def.strDefault);
-            }
-            break;
-        }
-        case SettingType::Int:
-        {
-            int32_t val;
-            if (handle_->get_item(def.key, val) != ESP_OK)
-            {
-                handle_->set_item(def.key, static_cast<int32_t>(atoi(def.strDefault)));
-            }
-            break;
-        }
-        case SettingType::Bool:
-        {
-            uint8_t val;
-            if (handle_->get_item(def.key, val) != ESP_OK)
-            {
-                handle_->set_item<uint8_t>(def.key, strcmp(def.strDefault, "true") == 0 ? 1 : 0);
-            }
-            break;
-        }
-        }
+        // Sloppiness class → assert is fine. NVS caps keys at 15 chars;
+        // key/label/string-default must be string literals (flash) so the
+        // registry never holds a pointer that can dangle.
+        assert(strlen(s->key) < NVS_KEY_NAME_MAX_SIZE && "NVS keys are max 15 chars");
+        assert(esp_ptr_in_drom(s->key) && "setting key must be a string literal");
+        assert(esp_ptr_in_drom(s->label) && "setting label must be a string literal");
+        if (s->type == SettingType::String)
+            assert(esp_ptr_in_drom(s->asString().def) && "string default must be a string literal");
+
+        s->mgr = this;
+        s->registered = true;
+        s->next = head_;
+        head_ = s;
     }
-
-    handle_->commit();
 }
 
-// ──────────────────────────────────────────────────────────────
-// Typed access
-// ──────────────────────────────────────────────────────────────
-
-bool SettingsManager::getString(SettingKey key, char* out, size_t maxLen) const
+SettingIterator SettingsManager::begin()
 {
-    if (!handle_) return false;
-    return handle_->get_string(key, out, maxLen) == ESP_OK;
+    LOCK(mutex_);
+    return SettingIterator(head_);
 }
 
-bool SettingsManager::setString(SettingKey key, const char* value)
+const Setting* SettingsManager::FindLocked(const char* key) const
 {
-    if (!handle_) return false;
-    return handle_->set_string(key, value) == ESP_OK;
-}
-
-int32_t SettingsManager::getInt(SettingKey key, int32_t defaultVal) const
-{
-    if (!handle_) return defaultVal;
-    int32_t val = defaultVal;
-    handle_->get_item(key, val);
-    return val;
-}
-
-bool SettingsManager::setInt(SettingKey key, int32_t value)
-{
-    if (!handle_) return false;
-    return handle_->set_item(key, value) == ESP_OK;
-}
-
-bool SettingsManager::getBool(SettingKey key, bool defaultVal) const
-{
-    if (!handle_) return defaultVal;
-    uint8_t val = defaultVal ? 1 : 0;
-    handle_->get_item(key, val);
-    return val != 0;
-}
-
-bool SettingsManager::setBool(SettingKey key, bool value)
-{
-    if (!handle_) return false;
-    return handle_->set_item<uint8_t>(key, value ? 1 : 0) == ESP_OK;
+    for (Setting* s = head_; s != nullptr; s = s->next)
+        if (strcmp(key, s->key) == 0)
+            return s;
+    return nullptr;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -162,105 +121,106 @@ bool SettingsManager::ResetToDefaults()
 {
     if (!handle_) return false;
 
+    // Defaults resolve at read, so erasing IS resetting.
     handle_->erase_all();
-
-    const auto* defs = GetDefinitions();
-    int count = GetDefinitionCount();
-
-    for (int i = 0; i < count; i++)
-    {
-        const auto& def = defs[i];
-        switch (def.type)
-        {
-        case SettingType::String:
-            handle_->set_string(def.key, def.strDefault);
-            break;
-        case SettingType::Int:
-            handle_->set_item(def.key, static_cast<int32_t>(atoi(def.strDefault)));
-            break;
-        case SettingType::Bool:
-            handle_->set_item<uint8_t>(def.key, strcmp(def.strDefault, "true") == 0 ? 1 : 0);
-            break;
-        }
-    }
-
     handle_->commit();
     ESP_LOGI(TAG, "Reset to defaults");
     return true;
 }
 
 // ──────────────────────────────────────────────────────────────
-// Enumeration
+// NVS primitives
 // ──────────────────────────────────────────────────────────────
 
-const SettingDef* SettingsManager::GetDefinitions() const
+bool SettingsManager::ReadI32(const char* key, int32_t& out) const
 {
-    return SETTINGS_DEFS;
+    if (!handle_) return false;
+    return handle_->get_item(key, out) == ESP_OK;
 }
 
-int SettingsManager::GetDefinitionCount() const
+bool SettingsManager::WriteI32(const char* key, int32_t v)
 {
-    return SETTINGS_DEFS_COUNT;
+    if (!handle_) return false;
+    return handle_->set_item(key, v) == ESP_OK;
 }
 
-void SettingsManager::WriteAllSettings(JsonWriter& writer) const
+bool SettingsManager::ReadU32(const char* key, uint32_t& out) const
 {
-    const auto* defs = GetDefinitions();
-    int count = GetDefinitionCount();
+    if (!handle_) return false;
+    return handle_->get_item(key, out) == ESP_OK;
+}
 
-    writer.fieldArray("settings");
+bool SettingsManager::WriteU32(const char* key, uint32_t v)
+{
+    if (!handle_) return false;
+    return handle_->set_item(key, v) == ESP_OK;
+}
 
-    for (int i = 0; i < count; i++)
-    {
-        const auto& def = defs[i];
+bool SettingsManager::ReadU8(const char* key, uint8_t& out) const
+{
+    if (!handle_) return false;
+    return handle_->get_item(key, out) == ESP_OK;
+}
 
-        writer.beginObject();
-        writer.field("key", def.key);
-        writer.field("label", def.label);
+bool SettingsManager::WriteU8(const char* key, uint8_t v)
+{
+    if (!handle_) return false;
+    return handle_->set_item(key, v) == ESP_OK;
+}
 
-        switch (def.type)
-        {
-        case SettingType::String:
-        {
-            writer.field("type", "string");
-            char buf[128] = {};
-            getString(def.key, buf, sizeof(buf));
-            writer.field("value", buf);
-            break;
-        }
-        case SettingType::Int:
-        {
-            writer.field("type", "int");
-            writer.field("value", getInt(def.key));
-            break;
-        }
-        case SettingType::Bool:
-        {
-            writer.field("type", "bool");
-            writer.field("value", getBool(def.key));
-            break;
-        }
-        }
+bool SettingsManager::ReadString(const char* key, char* out, size_t maxLen) const
+{
+    if (!handle_) return false;
+    return handle_->get_string(key, out, maxLen) == ESP_OK;
+}
 
-        writer.endObject();
-    }
-
-    writer.endArray();
+bool SettingsManager::WriteString(const char* key, const char* v)
+{
+    if (!handle_) return false;
+    return handle_->set_string(key, v) == ESP_OK;
 }
 
 // ──────────────────────────────────────────────────────────────
-// WebSocket commands
+// WebSocket commands — the JSON converter. This is edge code: it
+// walks the schema via iteration and the type tag; the core above
+// knows nothing about JSON. Anyone wanting YAML writes their own.
 // ──────────────────────────────────────────────────────────────
 
 void SettingsManager::Cmd_GetSettings(void* ctx, const char* json, JsonWriter& resp)
 {
-    static_cast<SettingsManager*>(ctx)->WriteAllSettings(resp);
+    auto* self = static_cast<SettingsManager*>(ctx);
+
+    resp.fieldArray("settings");
+    for (const Setting& s : *self)
+    {
+        resp.beginObject();
+        resp.field("key", s.key);
+        resp.field("label", s.label);
+        resp.field("type", SettingTypeToString(s.type));
+
+        switch (s.type)   // NO default → new SettingType values must be handled here
+        {
+        case SettingType::Int32:  resp.field("value", s.asInt32().Get());  break;
+        case SettingType::UInt32: resp.field("value", s.asUInt32().Get()); break;
+        case SettingType::Float:  resp.field("value", s.asFloat().Get());  break;
+        case SettingType::Bool:   resp.field("value", s.asBool().Get());   break;
+        case SettingType::String:
+        {
+            char buf[128] = {};
+            s.asString().Get(buf, sizeof(buf));
+            resp.field("value", buf);
+            break;
+        }
+        }
+        resp.endObject();
+    }
+    resp.endArray();
 }
 
 void SettingsManager::Cmd_SetSetting(void* ctx, const char* json, JsonWriter& resp)
 {
     auto* self = static_cast<SettingsManager*>(ctx);
-    if (!self->serviceProvider_.getCommandManager().CheckAuth(json, resp))
+    if (!self->serviceProvider_.getSystemManager().CheckAuth(json, resp))
         return;
 
     char key[64] = {};
@@ -275,29 +235,33 @@ void SettingsManager::Cmd_SetSetting(void* ctx, const char* json, JsonWriter& re
         return;
     }
 
-    const auto* defs = self->GetDefinitions();
-    int count = self->GetDefinitionCount();
-
-    for (int i = 0; i < count; i++)
+    for (Setting& s : *self)
     {
-        if (strcmp(defs[i].key, key) == 0)
-        {
-            switch (defs[i].type)
-            {
-            case SettingType::String:
-                self->setString(defs[i].key, value);
-                break;
-            case SettingType::Int:
-                self->setInt(defs[i].key, atoi(value));
-                break;
-            case SettingType::Bool:
-                self->setBool(defs[i].key, strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
-                break;
-            }
+        if (strcmp(s.key, key) != 0)
+            continue;
 
-            resp.field("ok", true);
-            return;
+        bool ok = false;
+        switch (s.type)   // NO default → new SettingType values must be handled here
+        {
+        case SettingType::Int32:
+            ok = s.asInt32().Set(static_cast<int32_t>(strtol(value, nullptr, 10)));
+            break;
+        case SettingType::UInt32:
+            ok = s.asUInt32().Set(static_cast<uint32_t>(strtoul(value, nullptr, 10)));
+            break;
+        case SettingType::Float:
+            ok = s.asFloat().Set(strtof(value, nullptr));
+            break;
+        case SettingType::Bool:
+            ok = s.asBool().Set(strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+            break;
+        case SettingType::String:
+            ok = s.asString().Set(value);
+            break;
         }
+
+        resp.field("ok", ok);
+        return;
     }
 
     resp.field("ok", false);
@@ -307,7 +271,7 @@ void SettingsManager::Cmd_SetSetting(void* ctx, const char* json, JsonWriter& re
 void SettingsManager::Cmd_SaveSettings(void* ctx, const char* json, JsonWriter& resp)
 {
     auto* self = static_cast<SettingsManager*>(ctx);
-    if (!self->serviceProvider_.getCommandManager().CheckAuth(json, resp))
+    if (!self->serviceProvider_.getSystemManager().CheckAuth(json, resp))
         return;
 
     resp.field("ok", self->Save());

@@ -10,6 +10,7 @@ set(SOURCE_FILES_LIST
     "Application/CommandManager/CommandManager.cpp"
     "Application/UpdateManager/UpdateManager.cpp"
     "Application/SettingsManager/SettingsManager.cpp"
+    "Application/SettingsManager/Setting.cpp"
     "Application/ConsoleManager/ConsoleManager.cpp"
     "Application/TimeManager/TimeManager.cpp"
     "Application/MqttManager/MqttManager.cpp"
