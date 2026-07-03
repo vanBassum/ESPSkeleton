@@ -2,9 +2,11 @@
 #include "CommandManager.h"
 #include "JsonHelpers.h"
 #include "BufferStream.h"
+#include "MemoryStream.h"
 #include "JsonWriter.h"
 #include "esp_log.h"
 
+#include <cinttypes>
 #include <cstring>
 
 static constexpr const char* TAG = "WebSocketHandler";
@@ -194,26 +196,33 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
 
 void WebSocketHandler::DispatchMessage(httpd_req_t* req, int32_t id, const char* type, const char* json)
 {
-    BufferStream stream(wsBuf_, sizeof(wsBuf_));
-    JsonWriter resp(stream);
+    BufferStream out(wsBuf_, sizeof(wsBuf_));
 
-    resp.beginObject();
-    resp.field("id", id);
+    // Envelope by concatenation: the handler writes one complete JSON
+    // object into `out`; we wrap it as {"id":N,"payload":<object>}.
+    char head[48];
+    int n = snprintf(head, sizeof(head), "{\"id\":%" PRId32 ",\"payload\":", id);
+    out.write(head, n);
 
-    if (commandManager_ && commandManager_->Execute(type, json, resp))
+    MemoryStream in(json, strlen(json));
+
+    if (commandManager_ && commandManager_->Execute(type, in, out))
     {
-        // Command wrote its fields
+        out.write("}", 1);
     }
     else
     {
-        resp.field("error", type);
+        out.reset();
+        JsonWriter err(out);   // reuse JsonWriter's escaping for the type echo
+        err.beginObject();
+        err.field("id", id);
+        err.field("error", type);
+        err.endObject();
     }
-
-    resp.endObject();
 
     httpd_ws_frame_t frame = {};
     frame.type = HTTPD_WS_TYPE_TEXT;
-    frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(stream.data()));
-    frame.len = stream.length();
+    frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(out.data()));
+    frame.len = out.length();
     httpd_ws_send_frame(req, &frame);
 }

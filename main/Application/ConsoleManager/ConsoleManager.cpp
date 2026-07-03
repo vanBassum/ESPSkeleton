@@ -1,6 +1,7 @@
 #include "ConsoleManager.h"
 #include "CommandManager.h"
 #include "JsonWriter.h"
+#include "JsonScope.h"
 #include "BufferStream.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -146,27 +147,26 @@ void ConsoleManager::BroadcastTaskLoop()
     }
 }
 
-void ConsoleManager::WriteHistory(JsonWriter& writer) const
+void ConsoleManager::WriteHistory(JsonObject& resp) const
 {
     LOCK(mutex_);
 
-    writer.fieldArray("lines");
+    JsonArray lines = resp.array("lines");
 
     int32_t start = (count_ < MAX_LINES) ? 0 : head_;
     for (int32_t i = 0; i < count_; i++)
     {
         int32_t idx = (start + i) % MAX_LINES;
-        writer.value(lines_[idx]);
+        lines.value(lines_[idx]);
     }
-
-    writer.endArray();
-}
+}   // `lines` closes here; caller's `resp` stays usable (auto-detached)
 
 // ──────────────────────────────────────────────────────────────
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void ConsoleManager::Cmd_GetLogs(const char* json, JsonWriter& resp)
+void ConsoleManager::Cmd_GetLogs(Stream& in, Stream& out)
 {
+    JsonObject resp(out);
     WriteHistory(resp);
 }

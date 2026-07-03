@@ -7,7 +7,7 @@
 #include <esp_ota_ops.h>
 #include <esp_vfs_fat.h>
 
-class JsonWriter;
+class Stream;
 
 class UpdateManager {
     static constexpr const char* TAG = "UpdateManager";
@@ -72,8 +72,8 @@ private:
     Mutex mutex_;
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    void Cmd_UpdateStatus(const char* json, JsonWriter& resp);
-    void Cmd_Partitions(const char* json, JsonWriter& resp);
+    void Cmd_UpdateStatus(Stream& in, Stream& out);
+    void Cmd_Partitions(Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "updateStatus", &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },

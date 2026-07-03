@@ -1,5 +1,4 @@
 #include "CommandManager.h"
-#include "JsonWriter.h"
 #include "esp_log.h"
 #include <cstring>
 
@@ -21,7 +20,7 @@ void CommandManager::Init()
     ESP_LOGI(TAG, "Initialized");
 }
 
-bool CommandManager::Execute(const char* type, const char* json, JsonWriter& resp)
+bool CommandManager::Execute(const char* type, Stream& in, Stream& out)
 {
     const CommandEntry* e = Find(type);
     if (e == nullptr)
@@ -30,7 +29,7 @@ bool CommandManager::Execute(const char* type, const char* json, JsonWriter& res
     // Handler runs OUTSIDE the lock: entries are immortal, so the pointer
     // stays valid, and a handler may register commands or dispatch nested
     // commands without deadlocking.
-    e->handler(e->ctx, json, resp);
+    e->handler(e->ctx, in, out);
     return true;
 }
 

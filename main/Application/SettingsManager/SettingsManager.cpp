@@ -1,8 +1,8 @@
 #include "SettingsManager.h"
 #include "CommandManager.h"
 #include "ContextLock.h"
-#include "JsonWriter.h"
-#include "JsonHelpers.h"
+#include "JsonScope.h"
+#include "JsonReader.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "nvs_flash.h"
@@ -185,41 +185,44 @@ bool SettingsManager::WriteString(const char* key, const char* v)
 // knows nothing about JSON. Anyone wanting YAML writes their own.
 // ──────────────────────────────────────────────────────────────
 
-void SettingsManager::Cmd_GetSettings(const char* json, JsonWriter& resp)
+void SettingsManager::Cmd_GetSettings(Stream& in, Stream& out)
 {
-    resp.fieldArray("settings");
+    JsonObject root(out);
+    JsonArray settings = root.array("settings");
+
     for (const Setting& s : *this)
     {
-        resp.beginObject();
-        resp.field("key", s.key);
-        resp.field("label", s.label);
-        resp.field("type", SettingTypeToString(s.type));
+        JsonObject o = settings.object();
+        o.field("key", s.key);
+        o.field("label", s.label);
+        o.field("type", SettingTypeToString(s.type));
 
         switch (s.type)   // NO default → new SettingType values must be handled here
         {
-        case SettingType::Int32:  resp.field("value", s.asInt32().Get());  break;
-        case SettingType::UInt32: resp.field("value", s.asUInt32().Get()); break;
-        case SettingType::Float:  resp.field("value", s.asFloat().Get());  break;
-        case SettingType::Bool:   resp.field("value", s.asBool().Get());   break;
+        case SettingType::Int32:  o.field("value", s.asInt32().Get());  break;
+        case SettingType::UInt32: o.field("value", s.asUInt32().Get()); break;
+        case SettingType::Float:  o.field("value", s.asFloat().Get());  break;
+        case SettingType::Bool:   o.field("value", s.asBool().Get());   break;
         case SettingType::String:
         {
             char buf[128] = {};
             s.asString().Get(buf, sizeof(buf));
-            resp.field("value", buf);
+            o.field("value", buf);
             break;
         }
         }
-        resp.endObject();
-    }
-    resp.endArray();
+    }   // each `o` closes at end of iteration; `settings` and `root` at return
 }
 
-void SettingsManager::Cmd_SetSetting(const char* json, JsonWriter& resp)
+void SettingsManager::Cmd_SetSetting(Stream& in, Stream& out)
 {
+    JsonReader<512> req(in);
+    JsonObject resp(out);
+
     char key[64] = {};
     char value[128] = {};
-    ExtractJsonString(json, "key", key, sizeof(key));
-    ExtractJsonString(json, "value", value, sizeof(value));
+    req.GetString("key", key, sizeof(key));
+    req.GetString("value", value, sizeof(value));
 
     if (key[0] == '\0')
     {
@@ -261,7 +264,8 @@ void SettingsManager::Cmd_SetSetting(const char* json, JsonWriter& resp)
     resp.field("error", "unknown key");
 }
 
-void SettingsManager::Cmd_SaveSettings(const char* json, JsonWriter& resp)
+void SettingsManager::Cmd_SaveSettings(Stream& in, Stream& out)
 {
+    JsonObject resp(out);
     resp.field("ok", Save());
 }

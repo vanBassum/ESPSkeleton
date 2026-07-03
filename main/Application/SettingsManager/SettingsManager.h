@@ -8,7 +8,7 @@
 #include "Mutex.h"
 #include <nvs_handle.hpp>
 
-class JsonWriter;
+class Stream;
 
 // ──────────────────────────────────────────────────────────────
 // Schema registry + NVS storage. Managers own their settings as
@@ -77,9 +77,9 @@ private:
 
     // ── WebSocket commands (the JSON converter lives HERE, at the
     //    edge — not in the schema/storage core above) ──────────
-    void Cmd_GetSettings(const char* json, JsonWriter& resp);
-    void Cmd_SetSetting(const char* json, JsonWriter& resp);
-    void Cmd_SaveSettings(const char* json, JsonWriter& resp);
+    void Cmd_GetSettings(Stream& in, Stream& out);
+    void Cmd_SetSetting(Stream& in, Stream& out);
+    void Cmd_SaveSettings(Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "getSettings",  &InvokeCommand<&SettingsManager::Cmd_GetSettings> },

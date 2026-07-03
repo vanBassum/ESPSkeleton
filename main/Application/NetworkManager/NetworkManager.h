@@ -10,7 +10,7 @@
 #include "TypedSettings.h"
 #include "Timer.h"
 
-class JsonWriter;
+class Stream;
 
 class NetworkManager {
     static constexpr const char* TAG = "NetworkManager";
@@ -54,7 +54,7 @@ private:
     void FallbackToAP();
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    void Cmd_WifiScan(const char* json, JsonWriter& resp);
+    void Cmd_WifiScan(Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "wifiScan", &InvokeCommand<&NetworkManager::Cmd_WifiScan> },

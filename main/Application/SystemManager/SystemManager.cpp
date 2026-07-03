@@ -1,7 +1,7 @@
 #include "SystemManager.h"
 #include "SettingsManager.h"
 #include "CommandManager.h"
-#include "JsonWriter.h"
+#include "JsonScope.h"
 #include "DateTime.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -43,13 +43,16 @@ void SystemManager::GetDeviceName(char* out, size_t maxLen)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void SystemManager::Cmd_Ping(const char* json, JsonWriter& resp)
+void SystemManager::Cmd_Ping(Stream& in, Stream& out)
 {
+    JsonObject resp(out);
     resp.field("pong", true);
 }
 
-void SystemManager::Cmd_Info(const char* json, JsonWriter& resp)
+void SystemManager::Cmd_Info(Stream& in, Stream& out)
 {
+    JsonObject resp(out);
+
     const esp_app_desc_t* app = esp_app_get_description();
 
     resp.field("project", app->project_name);
@@ -68,9 +71,13 @@ void SystemManager::Cmd_Info(const char* json, JsonWriter& resp)
     resp.field("deviceTime", deviceTimeStr);
 }
 
-void SystemManager::Cmd_Reboot(const char* json, JsonWriter& resp)
+void SystemManager::Cmd_Reboot(Stream& in, Stream& out)
 {
-    resp.field("ok", true);
+    {
+        JsonObject resp(out);
+        resp.field("ok", true);
+    }   // close the scope BEFORE restarting so the reply is complete
+
     // Delay to allow WS response to be sent before restarting
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();

@@ -1,7 +1,7 @@
 #include "UpdateManager.h"
 #include "CommandManager.h"
 #include "ContextLock.h"
-#include "JsonWriter.h"
+#include "JsonScope.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_app_desc.h"
@@ -271,8 +271,10 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void UpdateManager::Cmd_UpdateStatus(const char* json, JsonWriter& resp)
+void UpdateManager::Cmd_UpdateStatus(Stream& in, Stream& out)
 {
+    JsonObject resp(out);
+
     const esp_app_desc_t* app = esp_app_get_description();
 
     resp.field("firmware", app->version);
@@ -280,27 +282,27 @@ void UpdateManager::Cmd_UpdateStatus(const char* json, JsonWriter& resp)
     resp.field("nextSlot", GetNextPartition());
 }
 
-void UpdateManager::Cmd_Partitions(const char* json, JsonWriter& resp)
+void UpdateManager::Cmd_Partitions(Stream& in, Stream& out)
 {
     static constexpr int MAX_PARTITIONS = 16;
     PartitionInfo parts[MAX_PARTITIONS];
     int count = GetPartitions(parts, MAX_PARTITIONS);
 
-    resp.fieldArray("partitions");
+    JsonObject root(out);
+    JsonArray arr = root.array("partitions");
+
     for (int i = 0; i < count; i++)
     {
         const auto& p = parts[i];
-        resp.beginObject();
-        resp.field("label",      p.label);
-        resp.field("type",       p.type);
-        resp.field("subtype",    p.subtype);
-        resp.field("offset",     p.offset);
-        resp.field("size",       p.size);
-        resp.field("running",    p.running);
-        resp.field("nextOta",    p.nextOta);
-        resp.field("uploadable", p.uploadable);
-        resp.field("version",    p.version);
-        resp.endObject();
+        JsonObject o = arr.object();
+        o.field("label",      p.label);
+        o.field("type",       p.type);
+        o.field("subtype",    p.subtype);
+        o.field("offset",     p.offset);
+        o.field("size",       p.size);
+        o.field("running",    p.running);
+        o.field("nextOta",    p.nextOta);
+        o.field("uploadable", p.uploadable);
+        o.field("version",    p.version);
     }
-    resp.endArray();
 }

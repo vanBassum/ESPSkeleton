@@ -5,7 +5,7 @@
 #include "CommandEntry.h"
 #include "TypedSettings.h"
 
-class JsonWriter;
+class Stream;
 
 // ──────────────────────────────────────────────────────────────
 // SystemManager owns device identity and lifecycle — and nothing
@@ -41,9 +41,9 @@ private:
     inline static StringSetting name_{ "device.name", "Device Name", "Strux" };
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    void Cmd_Ping(const char* json, JsonWriter& resp);
-    void Cmd_Info(const char* json, JsonWriter& resp);
-    void Cmd_Reboot(const char* json, JsonWriter& resp);
+    void Cmd_Ping(Stream& in, Stream& out);
+    void Cmd_Info(Stream& in, Stream& out);
+    void Cmd_Reboot(Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "ping",   &InvokeCommand<&SystemManager::Cmd_Ping> },

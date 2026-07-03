@@ -2,7 +2,7 @@
 #include "SettingsManager.h"
 #include "SystemManager.h"
 #include "CommandManager.h"
-#include "JsonWriter.h"
+#include "JsonScope.h"
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
@@ -188,23 +188,21 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void NetworkManager::Cmd_WifiScan(const char* json, JsonWriter& resp)
+void NetworkManager::Cmd_WifiScan(Stream& in, Stream& out)
 {
     WiFiInterface::ScanResult results[20] = {};
     int count = wifi().Scan(results, 20);
 
-    resp.field("ok", true);
-    resp.fieldArray("networks");
+    JsonObject root(out);
+    root.field("ok", true);
+    JsonArray networks = root.array("networks");
 
     for (int i = 0; i < count; i++)
     {
-        resp.beginObject();
-        resp.field("ssid", results[i].ssid);
-        resp.field("rssi", static_cast<int32_t>(results[i].rssi));
-        resp.field("channel", static_cast<int32_t>(results[i].channel));
-        resp.field("secure", results[i].secure);
-        resp.endObject();
+        JsonObject n = networks.object();
+        n.field("ssid", results[i].ssid);
+        n.field("rssi", static_cast<int32_t>(results[i].rssi));
+        n.field("channel", static_cast<int32_t>(results[i].channel));
+        n.field("secure", results[i].secure);
     }
-
-    resp.endArray();
 }

@@ -9,7 +9,7 @@
 #include <cassert>
 #include <cstddef>
 
-class JsonWriter;
+class Stream;
 
 // Pure dispatcher — knows no commands and no other managers. Every
 // command lives in the manager that owns its domain and is registered
@@ -53,10 +53,11 @@ public:
         }
     }
 
-    /// Execute a command by type name. Writes response fields into the JsonWriter.
-    /// The caller is responsible for the outer object and transport-specific fields (e.g. "id").
+    /// Execute a command by type name. `in` carries the request payload;
+    /// the handler writes its complete reply (e.g. one JSON object) to
+    /// `out`. The caller owns any transport envelope around it.
     /// Returns true if the command was recognized.
-    bool Execute(const char* type, const char* json, JsonWriter& resp);
+    bool Execute(const char* type, Stream& in, Stream& out);
 
 private:
     ServiceProvider& serviceProvider_;
