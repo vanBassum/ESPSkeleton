@@ -75,10 +75,18 @@ CORS preflight stays open (it carries no credentials by definition).
 
 ### LoginPage (`frontend/src/pages/LoginPage.tsx`)
 
-Adapted from the KC1080 Barrier Controller's login card — form half
-only: centered card with device name header, one password field
-(`autocomplete="current-password"`), sign-in button, inline error line.
-No username field, no device-discovery panel.
+Based on the shadcn **login-03** block (`npx shadcn@latest add login-03`):
+centered card on a muted background with a brand slot above the form.
+Scaffold it, then strip it down:
+
+- brand slot shows the device name (fetched like KC1080 does, falls
+  back to "Strux"),
+- **keep**: one password field (`autocomplete="current-password"`),
+  submit button, inline error line,
+- **strip**: email/username field, social-login buttons ("Login with
+  Google" etc.), sign-up and forgot-password links, terms footer.
+
+No device-discovery panel (KC1080 feature, out of scope).
 
 ### backend.ts
 
