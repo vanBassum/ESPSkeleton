@@ -2,7 +2,6 @@
 
 #include "ContextLock.h"
 #include "IMutex.h"
-#include "InitGuard.h"
 #include "InitState.h"
 #include "Mutex.h"
 #include "RecursiveMutex.h"
