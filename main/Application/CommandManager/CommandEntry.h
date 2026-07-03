@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Fatal.h"
+#include <type_traits>
 
 class JsonWriter;
 
@@ -42,28 +43,42 @@ struct CommandEntry
 };
 
 // ──────────────────────────────────────────────────────────────
-// Member-handler trampoline.
+// Handler trampoline.
 //
-// Handlers are ordinary (non-static, usually private) member
-// functions with no ctx in sight:
+// Handlers are ordinary functions with no ctx in sight — either a
+// (usually private, non-static) member of the owning manager:
 //
 //     void Ping(const char* json, JsonWriter& resp);
-//
-// The table entry instantiates the ctx-cast trampoline at compile
-// time — the owning class is deduced from the method itself, so the
-// cast can never target the wrong type:
-//
 //     { "ping", &InvokeCommand<&SystemManager::Ping> },
+//
+// or a free/static function (e.g. quick hacking in main.cpp —
+// register with ctx = nullptr):
+//
+//     static void Test(const char* json, JsonWriter& resp);
+//     { "test", &InvokeCommand<&Test> },
+//
+// The trampoline is instantiated at compile time; for members the
+// owning class is deduced from the method pointer itself, so the
+// ctx cast can never target the wrong type. The if constexpr branch
+// resolves during instantiation — there is no runtime check.
 //
 // The void* plumbing still exists (it is the type erasure that lets
 // one chain hold commands of many classes) but it lives only here.
 // ──────────────────────────────────────────────────────────────
 template <typename T> struct CommandOwner;
-template <typename C> struct CommandOwner<void (C::*)(const char*, JsonWriter&)> { using type = C; };
+template <typename C> struct CommandOwner<void (C::*)(const char*, JsonWriter&)>       { using type = C; };
+template <typename C> struct CommandOwner<void (C::*)(const char*, JsonWriter&) const> { using type = const C; };
 
-template <auto Method>
+template <auto Handler>
 void InvokeCommand(void* ctx, const char* json, JsonWriter& resp)
 {
-    using C = typename CommandOwner<decltype(Method)>::type;
-    (static_cast<C*>(ctx)->*Method)(json, resp);
+    if constexpr (std::is_member_function_pointer_v<decltype(Handler)>)
+    {
+        using C = typename CommandOwner<decltype(Handler)>::type;
+        (static_cast<C*>(ctx)->*Handler)(json, resp);
+    }
+    else
+    {
+        Handler(json, resp);   // free/static function — ctx unused
+    }
 }

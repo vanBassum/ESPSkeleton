@@ -27,18 +27,31 @@ struct CommandEntry
     // ~CommandEntry aborts if a registered entry dies (omitted here)
 };
 
-// The trampoline GENERATOR. For every distinct Method it is used with,
-// the compiler emits one concrete function with the fn-ptr signature
-// above. The owning class C is deduced FROM the method pointer itself,
-// so the cast below can never target the wrong type.
-template <typename T> struct CommandOwner;
-template <typename C> struct CommandOwner<void (C::*)(const char*, JsonWriter&)> { using type = C; };
+// The trampoline GENERATOR. For every distinct Handler it is used
+// with, the compiler emits one concrete function with the fn-ptr
+// signature above. Accepts:
+//   - member methods (const or not) — class deduced from the method
+//     pointer itself, so the ctx cast can never target the wrong type
+//   - free/static functions — ctx unused (register with nullptr)
+// The if constexpr resolves at instantiation; no runtime branch.
+#include <type_traits>
 
-template <auto Method>
+template <typename T> struct CommandOwner;
+template <typename C> struct CommandOwner<void (C::*)(const char*, JsonWriter&)>       { using type = C; };
+template <typename C> struct CommandOwner<void (C::*)(const char*, JsonWriter&) const> { using type = const C; };
+
+template <auto Handler>
 void InvokeCommand(void* ctx, const char* json, JsonWriter& resp)
 {
-    using C = typename CommandOwner<decltype(Method)>::type;
-    (static_cast<C*>(ctx)->*Method)(json, resp);
+    if constexpr (std::is_member_function_pointer_v<decltype(Handler)>)
+    {
+        using C = typename CommandOwner<decltype(Handler)>::type;
+        (static_cast<C*>(ctx)->*Handler)(json, resp);
+    }
+    else
+    {
+        Handler(json, resp);   // free/static function — ctx unused
+    }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -70,6 +83,19 @@ private:
         { "fooStatus", &InvokeCommand<&FooManager::Cmd_FooStatus> },
     };
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ──────────────────────────────────────────────────────────────
 // The complete path of {"type":"fooStatus"}, in order
@@ -117,6 +143,31 @@ private:
 // entry, one strcmp walk per dispatch. No heap, no std::function, no
 // vtable, no RTTI. The void* exists ONLY inside InvokeCommand and the
 // entry it flows through — no handler or manager code sees it.
+
+// ──────────────────────────────────────────────────────────────
+// Quick hacking — a command with NO manager, straight in main.cpp
+// ──────────────────────────────────────────────────────────────
+//
+//  static void Test(const char* json, JsonWriter& resp)
+//  {
+//      resp.field("ok", true);
+//  }
+//
+//  static CommandEntry testCommands[] = {        // file scope → immortal
+//      { "test", &InvokeCommand<&Test> },
+//  };
+//
+//  extern "C" void app_main(void)
+//  {
+//      ...
+//      g_appContext.getCommandManager().Register(nullptr, testCommands);
+//      ...
+//  }
+//
+// Note the signature: dispatch always passes (json, resp), so the
+// function must take them — a plain void Test() does not fit. Const
+// member methods also work: &InvokeCommand<&Foo::ConstMethod> — the
+// CommandOwner specialization maps them to const Foo*.
 
 // ──────────────────────────────────────────────────────────────
 // DEAD END — storing the member pointer directly (tried 2026-07-03)
