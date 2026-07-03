@@ -757,3 +757,12 @@ git push
 - Webserver login (added 2026-07-03): PIN auth was ripped out entirely.
   It returns as a login in the webserver layer; authentication checking
   stays at that edge and never leaks into command handlers.
+- Remote access / relay server (added 2026-07-03): devices connect
+  OUTBOUND to a server (NAT-friendly) so Bas can reach them remotely.
+  This is the driving reason CommandManager is the star point: the relay
+  is just another dumb-pipe transport that gets ALL commands for free
+  (incl. firmware update). Prerequisites it stresses: envelope needs
+  request ids (relay multiplexes many clients over one connection);
+  auth = device credential to server + user login at server, handlers
+  stay oblivious. Depends on the stream-commands rework
+  (`ideas/stream-commands-example.h`).
