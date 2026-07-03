@@ -766,3 +766,13 @@ git push
   auth = device credential to server + user login at server, handlers
   stay oblivious. Depends on the stream-commands rework
   (`ideas/stream-commands-example.h`).
+  Vision (2026-07-03): login to a server page, see connected devices,
+  click one → the device's OWN web UI opens, served THROUGH the command
+  pipe (chosen over WireGuard and over server-hosted frontend copies —
+  device-served UI can never version-skew from firmware). Server caches
+  device files keyed on firmware version for fast page loads. Open fork:
+  `readFile` (raw FAT bytes, server owns HTTP semantics) vs `httpGet`
+  (device owns status/headers/SPA-fallback; server is a pure proxy).
+  Possibly dogfood: the device's own StaticFileHandler fetches bytes via
+  the same command, keeping one file-access path — HTTP decisions stay
+  in the route layer, the command stays "give me bytes".
