@@ -1,7 +1,7 @@
 # Stream-Based Commands — Design
 
 **Date:** 2026-07-03
-**Status:** Approved in discussion (this doc records it); sketch in `ideas/stream-commands-example.h`
+**Status:** Approved in discussion (this doc records it)
 
 ## Goal
 
