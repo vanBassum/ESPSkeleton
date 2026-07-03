@@ -1,8 +1,8 @@
 #include "SystemManager.h"
 #include "SettingsManager.h"
 #include "CommandManager.h"
+#include "CommandAuth.h"
 #include "JsonWriter.h"
-#include "JsonHelpers.h"
 #include "DateTime.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -40,7 +40,7 @@ void SystemManager::GetDeviceName(char* out, size_t maxLen)
         snprintf(out, maxLen, "Strux");
 }
 
-bool SystemManager::CheckAuth(const char* json, JsonWriter& resp)
+bool SystemManager::CheckPin(const char* candidate)
 {
     char storedPin[64] = {};
     pin_.Get(storedPin, sizeof(storedPin));
@@ -49,15 +49,10 @@ bool SystemManager::CheckAuth(const char* json, JsonWriter& resp)
     if (storedPin[0] == '\0')
         return true;
 
-    char pin[64] = {};
-    ExtractJsonString(json, "pin", pin, sizeof(pin));
-
-    if (strcmp(pin, storedPin) == 0)
+    if (strcmp(candidate, storedPin) == 0)
         return true;
 
-    ESP_LOGW(TAG, "Auth failed for command");
-    resp.field("ok", false);
-    resp.field("error", "auth");
+    ESP_LOGW(TAG, "PIN check failed");
     return false;
 }
 
@@ -93,7 +88,7 @@ void SystemManager::Cmd_Info(void* ctx, const char* json, JsonWriter& resp)
 void SystemManager::Cmd_Reboot(void* ctx, const char* json, JsonWriter& resp)
 {
     auto* self = static_cast<SystemManager*>(ctx);
-    if (!self->CheckAuth(json, resp))
+    if (!CheckCommandAuth(self->serviceProvider_, json, resp))
         return;
 
     resp.field("ok", true);

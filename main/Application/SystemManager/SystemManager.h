@@ -35,10 +35,12 @@ public:
     /// stored value is empty.
     void GetDeviceName(char* out, size_t maxLen);
 
-    /// PIN check for handlers that guard state-changing commands. Call as
-    /// the FIRST line of such handlers. Returns true if authorized;
-    /// otherwise writes {ok:false, error:"auth"} into resp.
-    bool CheckAuth(const char* json, JsonWriter& resp);
+    /// Compares a candidate PIN against the stored one. True when they
+    /// match, or when no PIN is configured (auth disabled). The stored PIN
+    /// never leaves this manager. Transport concerns (extracting the
+    /// candidate from a JSON payload, writing an error response) live at
+    /// the edge — see CommandManager/CommandAuth.h.
+    bool CheckPin(const char* candidate);
 
 private:
     ServiceProvider& serviceProvider_;
