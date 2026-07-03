@@ -237,34 +237,62 @@ class BackendService {
     return this.send("reboot")
   }
 
-  partitionDownloadUrl(label: string): string {
+  private commandUrl(type: string): string {
     const host = import.meta.env.DEV ? `http://${DEV_HOST}` : ""
-    return `${host}/api/download?partition=${encodeURIComponent(label)}`
+    return `${host}/api/command?type=${encodeURIComponent(type)}`
   }
 
-  async uploadFirmware(
+  /** Upload a .bin into an update session: begin (WS) → write (HTTP, streamed) → end (WS). */
+  async uploadPartition(
+    target: "app" | "www",
     file: File,
     onProgress?: (percent: number) => void,
   ): Promise<UploadResult> {
-    return this.upload("/api/upload/app", file, onProgress)
+    const begin = await this.send<{ ok: boolean; error?: string }>("updateBegin", { target })
+    if (!begin.ok) throw new Error(begin.error ?? "updateBegin failed")
+
+    try {
+      const write = await this.postCommand("updateWrite", file, onProgress)
+      if (!write.ok) throw new Error(write.error ?? "updateWrite failed")
+
+      const end = await this.send<{ ok: boolean; error?: string }>("updateEnd")
+      if (!end.ok) throw new Error(end.error ?? "updateEnd failed")
+
+      return { ok: true, size: write.size ?? file.size }
+    } catch (e) {
+      // Best effort: close a dangling session so the next attempt isn't "busy".
+      this.send("updateEnd").catch(() => {})
+      throw e
+    }
   }
 
-  async uploadWww(
-    file: File,
-    onProgress?: (percent: number) => void,
-  ): Promise<UploadResult> {
-    return this.upload("/api/upload/www", file, onProgress)
+  /** Fetch a partition image through the command pipe and save it as <label>.bin. */
+  async downloadPartitionFile(label: string): Promise<void> {
+    const res = await fetch(this.commandUrl("downloadPartition"), {
+      method: "POST",
+      body: JSON.stringify({ partition: label }),
+    })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    const blob = await res.blob()
+    const text = blob.size < 256 ? await blob.slice(0, 256).text() : ""
+    if (text.startsWith('{"ok":false')) throw new Error(JSON.parse(text).error ?? "download failed")
+
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${label}.bin`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
-  private upload(
-    url: string,
-    file: File,
+  private postCommand(
+    type: string,
+    body: Blob,
     onProgress?: (percent: number) => void,
-  ): Promise<UploadResult> {
-    const host = import.meta.env.DEV ? `http://${DEV_HOST}` : ""
+  ): Promise<{ ok: boolean; size?: number; error?: string }> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open("POST", `${host}${url}`)
+      xhr.open("POST", this.commandUrl(type))
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) {
@@ -284,7 +312,7 @@ class BackendService {
       xhr.ontimeout = () => reject(new Error("Upload timed out"))
       xhr.timeout = 120000
 
-      xhr.send(file)
+      xhr.send(body)
     })
   }
 }

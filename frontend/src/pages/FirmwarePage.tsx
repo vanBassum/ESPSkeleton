@@ -10,10 +10,10 @@ function fmtSize(bytes: number): string {
   return `${bytes} B`
 }
 
-function chooseUploadFn(p: Partition) {
+function uploadTarget(p: Partition): "app" | "www" | null {
   if (!p.uploadable) return null
-  if (p.type === "app") return (file: File, onProgress: (n: number) => void) => backend.uploadFirmware(file, onProgress)
-  if (p.label === "www") return (file: File, onProgress: (n: number) => void) => backend.uploadWww(file, onProgress)
+  if (p.type === "app") return "app"
+  if (p.label === "www") return "www"
   return null
 }
 
@@ -106,19 +106,19 @@ function PartitionRow({
   const [progress, setProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const uploadFn = chooseUploadFn(p)
-  const canUpload = !!uploadFn && !p.running
+  const target = uploadTarget(p)
+  const canUpload = !!target && !p.running
   const uploading = progress !== null
 
   async function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ""
-    if (!file || !uploadFn) return
+    if (!file || !target) return
 
     setError(null)
     setProgress(0)
     try {
-      await uploadFn(file, setProgress)
+      await backend.uploadPartition(target, file, setProgress)
       onAfterUpload()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed")
@@ -158,7 +158,7 @@ function PartitionRow({
             disabled={!canUpload || uploading}
             onClick={() => fileRef.current?.click()}
             title={
-              !uploadFn
+              !target
                 ? "This partition can't be updated over HTTP"
                 : p.running
                   ? "Cannot overwrite the running slot"
@@ -168,11 +168,13 @@ function PartitionRow({
             <UploadIcon className="mr-1.5 size-3.5" />
             Upload
           </Button>
-          <Button variant="outline" size="sm" asChild>
-            <a href={backend.partitionDownloadUrl(p.label)} download={`${p.label}.bin`}>
-              <DownloadIcon className="mr-1.5 size-3.5" />
-              Download
-            </a>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => backend.downloadPartitionFile(p.label).catch((e) => setError(e.message))}
+          >
+            <DownloadIcon className="mr-1.5 size-3.5" />
+            Download
           </Button>
         </div>
       </div>
