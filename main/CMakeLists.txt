@@ -103,3 +103,8 @@ idf_component_register(
 # Board identity define for the (rare) code-level conditionals.
 string(TOUPPER "${BOARD}" BOARD_UPPER)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE BOARD_${BOARD_UPPER})
+
+# Switches over enums (e.g. SettingType) deliberately have no default case
+# so that adding an enum value flags every converter that wasn't updated.
+# That flag is only a warning by default — make it the error it's meant to be.
+target_compile_options(${COMPONENT_LIB} PRIVATE -Werror=switch)
