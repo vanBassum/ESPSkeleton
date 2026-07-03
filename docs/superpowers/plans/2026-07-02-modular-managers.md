@@ -743,7 +743,7 @@ git push
 
 Moved to `docs/backlog/` (2026-07-03), one doc per topic:
 
-- `stream-commands.md` — streams as command contract, JSON as dialect (NEXT UP)
+- ~~stream-commands~~ — DONE 2026-07-03 (both phases on main)
 - `remote-access.md` — relay server + device-served remote UI vision
 - `webserver-login.md` — auth returns at the webserver edge
 - `mqtt-registration.md` — MQTT hooks cleanup + HA entity inversion (spec §6)

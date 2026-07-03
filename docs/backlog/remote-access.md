@@ -23,7 +23,9 @@ Possible dogfooding: the device's own StaticFileHandler fetches bytes
 via the same command, keeping one file-access path. Guardrail: HTTP
 decisions stay in the route layer; the command stays "give me bytes".
 
-Prerequisites: stream-commands rework (see `stream-commands.md`);
+Prerequisites: stream-commands rework (DONE 2026-07-03, on main —
+spec: `docs/superpowers/specs/2026-07-03-stream-commands-design.md`);
 envelope request ids (WS protocol already has them); auth = device
 credential to server + user login at server (see `webserver-login.md`)
-— handlers stay oblivious.
+— handlers stay oblivious. See also `multiplexed-channels.md` (low
+prio per Bas) for the transport this would ideally ride on.
