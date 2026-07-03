@@ -13,12 +13,14 @@
 // writes the error response on failure. Call as the FIRST line of
 // any handler that guards a state-changing command:
 //
-//   if (!CheckCommandAuth(self->serviceProvider_, json, resp))
+//   if (!CheckCommandAuth(serviceProvider_, json, resp))
 //       return;
 //
-// This lives with the command layer on purpose: JSON in/out is edge
-// business. SystemManager only answers "does this PIN match?" and
-// the stored PIN never leaves it.
+// This lives next to SystemManager on purpose: the PIN is its
+// credential, so the glue that checks it belongs to it too — and
+// the CommandManager folder stays free of manager dependencies.
+// SystemManager itself only answers "does this PIN match?"; the
+// stored PIN never leaves it, and JSON stays out of its domain API.
 // ──────────────────────────────────────────────────────────────
 inline bool CheckCommandAuth(ServiceProvider& sp, const char* json, JsonWriter& resp)
 {
