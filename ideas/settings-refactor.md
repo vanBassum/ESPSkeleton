@@ -116,6 +116,40 @@ Candidates considered:
 from CommandManager, or only the two settings. Also undecided: UI grouping
 mechanism (`group` field vs key-prefix sort).
 
+## Decisions from the sketch review (2026-07-03)
+
+See `ideas/settings-registry-example.h` (third revision) for the code shape.
+
+- Explicit types: `Int32Setting`/`UInt32Setting`/`FloatSetting`/`BoolSetting`/
+  `StringSetting`. No bare `int`. Float bit-casts through u32 (NVS has no
+  float). Double deferred (ESP32 FPU is single-precision; no-default switches
+  make adding it loud later).
+- Defaults are `const`. Managed fields private/protected — encapsulation is
+  the compiler's job.
+- `Get()`/`Set()` before `Register()` **crashes** (with the key name): a
+  forgotten registration is found on the first test run, never shipped as a
+  silent default.
+- Guard policy: failures that would corrupt the chain (double-register,
+  destroy-registered) are unconditional log+abort; sloppiness checks (key
+  length, flash residency of key/label/string-default via `esp_ptr_in_drom`)
+  may be `assert`. Flash residency cannot be checked at compile time
+  (pointer values don't exist until link time).
+- `ResetToDefaults()` becomes: erase NVS namespace + commit. Nothing is
+  written back — defaults resolve at read.
+- Out of scope, recorded: validation (valid-but-wrong passes any validator —
+  "bad config" is not the schema's job) and onChange hooks (only real use
+  case is hot-applying UI changes without reboot; today's save→reboot UX is
+  fine and nothing blocks adding hooks later).
+
+## Next up (separate small feature)
+
+A `FATAL(fmt, ...)` helper in `lib/` for unrecoverable situations:
+unconditional (never compiled out, unlike assert under NDEBUG), logs the
+message + `__FILE__:__LINE__`, then aborts into the ESP-IDF panic backtrace —
+the informativeness of assert with the reliability of abort. The registration
+pattern's abort() guards (settings sketch AND the shipped command registry)
+switch to it once it exists.
+
 ## Relation to other work
 
 - Mechanism: `ideas/registration-pattern.h` (bare pattern),
