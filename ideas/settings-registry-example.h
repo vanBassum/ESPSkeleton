@@ -5,57 +5,69 @@
 // Companion to ideas/settings-refactor.md.
 //
 // Distributed, strongly-typed settings using the registration
-// pattern (see ideas/registration-pattern.h and the CommandManager
-// registry). Each manager owns its settings as typed inline static
-// members and registers them in Init(). SettingsManager becomes a
-// pure schema registry + NVS storage; SettingsDefs.h dies.
+// pattern. Revised per Bas's pressure points (2026-07-03):
 //
-// Key properties (beyond the pattern's usual ones):
-//   • Typed defaults: 1883 as an int, false as a bool — not "1883"
-//     strings parsed at boot. ApplyDefaults() disappears: Get()
-//     falls back to the entry's default when NVS has no value, so
-//     "never changed" stays distinguishable from "set to default".
-//   • Settings are PRIVATE to their owner. Cross-cutting reads go
-//     through the owner's typed API (getSystemManager().
-//     GetDeviceName(...)), never by string key. Each key string
-//     exists in exactly ONE place: here, in the owner's definition.
-//   • Registration in Init(), unconditionally — never register-on-
-//     first-use (unused settings must still show in the frontend).
-//     Stamping mgr/linking needs no NVS; owners read their own
-//     settings in their own Init(), which runs after
-//     SettingsManager::Init().
+//   • SEPARATION OF CONCERNS: the core knows nothing about JSON or
+//     any other presentation. No WriteJson/ApplyFromString in the
+//     Setting. Instead: a type tag + iteration + checked downcasts,
+//     and converters live at the edge (the getSettings/setSetting
+//     command handlers, or whatever wants YAML next).
+//   • KEEP IT SIMPLE: Setting = key + label + type + chain link.
+//     Typed leaves add a typed default and Get/Set. That's all.
+//   • Registration validates NVS constraints (key < 15 chars,
+//     duplicates) — SettingsManager is the NVS link, so it guards
+//     NVS rules, boot-deterministically.
+//   • Getters/setters live ON the typed setting (not descriptor-
+//     as-key style, which would reintroduce type mistakes at every
+//     call site). The MqttManager usage below stays elegant.
+//
+// NOTE: the "switch with no default" safety net is only a WARNING
+// by default (-Wswitch). To make it the compile error we want, add
+// to main/CMakeLists.txt:
+//   target_compile_options(${COMPONENT_LIB} PRIVATE -Werror=switch)
 // ══════════════════════════════════════════════════════════════
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <cassert>
 #include <initializer_list>
 #include "esp_log.h"
-#include "JsonWriter.h"
 
 class SettingsManager;
+struct IntSetting;
+struct BoolSetting;
+struct StringSetting;
+
+// Grows rarely. Every switch over it has NO default case, so (with
+// -Werror=switch) adding a type here breaks the build at every
+// converter that hasn't been updated — exactly what we want.
+enum class SettingType : uint8_t { String, Int, Bool };
 
 // ──────────────────────────────────────────────────────────────
-// Base entry — the intrusive chain link. Owners declare the typed
-// leaves below, never this directly.
+// Base entry — the intrusive chain link + schema facts.
+// Owners declare the typed leaves below, never this directly.
 // ──────────────────────────────────────────────────────────────
 
 struct Setting
 {
-    const char* key;    // NVS key — a storage detail, not an API
-    const char* label;  // shown in the generated settings UI
+    const char* key;         // NVS key — a storage detail, not an API
+    const char* label;       // shown in the generated settings UI
+    const SettingType type;  // plain member set by the leaf ctor — no virtual needed
 
     // Managed by SettingsManager::Register() — owners never touch these.
     SettingsManager* mgr = nullptr;
     Setting* next = nullptr;
     bool registered = false;
 
-    // Writes {key, label, type, value} for the settings UI, and applies
-    // a value arriving from the frontend (setSetting path). Virtual so
-    // the generic UI/dispatch code never switches on a type tag; costs
-    // one vtable pointer per entry.
-    virtual void WriteJson(JsonWriter& json) const = 0;
-    virtual bool ApplyFromString(const char* value) = 0;
+    // Checked downcasts for generic consumers (converters). Each leaf
+    // overrides exactly one. Calling the wrong one is a bug → log +
+    // abort. The settings UI iterates on every getSettings, so a
+    // wrong-type conversion cannot hide — it dies the first time the
+    // settings page is opened.
+    virtual IntSetting&    asInt()    { Die("int");    }
+    virtual BoolSetting&   asBool()   { Die("bool");   }
+    virtual StringSetting& asString() { Die("string"); }
 
     // Same guard as CommandEntry: a registered entry is a live chain
     // link; destroying it aborts on the first run of the offending code.
@@ -70,12 +82,19 @@ struct Setting
     }
 
 protected:
-    Setting(const char* key, const char* label) : key(key), label(label) {}
+    Setting(const char* key, const char* label, SettingType type)
+        : key(key), label(label), type(type) {}
+
+    [[noreturn]] void Die(const char* want) const
+    {
+        ESP_LOGE("Setting", "setting '%s' is not of type %s", key, want);
+        abort();
+    }
 };
 
 // ──────────────────────────────────────────────────────────────
-// Typed leaves — what owners actually declare. Typed defaults,
-// typed Get/Set; the string key never leaks into calling code.
+// Typed leaves — what owners declare. Typed defaults, typed
+// Get/Set; the string key never leaks into calling code.
 // ──────────────────────────────────────────────────────────────
 
 struct IntSetting : Setting
@@ -83,13 +102,12 @@ struct IntSetting : Setting
     int32_t def;
 
     IntSetting(const char* key, const char* label, int32_t def)
-        : Setting(key, label), def(def) {}
+        : Setting(key, label, SettingType::Int), def(def) {}
 
-    int32_t Get() const;         // NVS value, or `def` when absent/unregistered
-    bool Set(int32_t v);         // writes NVS (commit via Save(), as today)
+    int32_t Get() const;   // NVS value via mgr, or `def` when absent
+    bool Set(int32_t v);
 
-    void WriteJson(JsonWriter& json) const override;   // type:"int", value:Get()
-    bool ApplyFromString(const char* value) override;  // Set(atoi(value))
+    IntSetting& asInt() override { return *this; }
 };
 
 struct BoolSetting : Setting
@@ -97,13 +115,12 @@ struct BoolSetting : Setting
     bool def;
 
     BoolSetting(const char* key, const char* label, bool def)
-        : Setting(key, label), def(def) {}
+        : Setting(key, label, SettingType::Bool), def(def) {}
 
     bool Get() const;
     bool Set(bool v);
 
-    void WriteJson(JsonWriter& json) const override;
-    bool ApplyFromString(const char* value) override;
+    BoolSetting& asBool() override { return *this; }
 };
 
 struct StringSetting : Setting
@@ -111,37 +128,39 @@ struct StringSetting : Setting
     const char* def;
 
     StringSetting(const char* key, const char* label, const char* def)
-        : Setting(key, label), def(def) {}
+        : Setting(key, label, SettingType::String), def(def) {}
 
     bool Get(char* out, size_t maxLen) const;  // copies NVS value or `def`
     bool Set(const char* v);
 
-    void WriteJson(JsonWriter& json) const override;
-    bool ApplyFromString(const char* value) override;
+    StringSetting& asString() override { return *this; }
 };
 
 // ──────────────────────────────────────────────────────────────
-// SettingsManager side
+// SettingsManager side — schema registry + NVS storage. NOTHING
+// about JSON, UI, or any presentation format lives here.
 // ──────────────────────────────────────────────────────────────
 
 class SettingsManager
 {
     static constexpr const char* TAG = "SettingsManager";
 
-    // Same locking story as the command registry: a mutex guards the
-    // chain; NVS access goes through the existing handle_ (which the
-    // typed Get/Set reach via the stamped `mgr` pointer).
+    // Mutex mutex_;            // guards the chain, same as the command registry
     Setting* head_ = nullptr;
 
 public:
-    // Heterogeneous types register through base pointers; an
+    // Heterogeneous leaves register through base pointers; an
     // initializer_list lives on the caller's stack — still no heap.
+    //
+    // SettingsManager is the NVS link, so registration enforces NVS
+    // rules — boot-deterministically, like every guard in this pattern.
     void Register(std::initializer_list<Setting*> settings)
     {
         // LOCK(mutex_);
         for (Setting* s : settings)
         {
             assert(!s->registered && "setting registered twice");
+            assert(strlen(s->key) < 15 && "NVS keys are max 15 chars"); // NVS_KEY_NAME_MAX_SIZE
             // assert(FindLocked(s->key) == nullptr && "duplicate key");
 
             s->mgr = this;
@@ -151,32 +170,61 @@ public:
         }
     }
 
-    // The generated settings UI: walk the chain, each entry writes
-    // itself. Replaces the SETTINGS_DEFS walk in WriteAllSettings().
-    void WriteAllSettings(JsonWriter& json) const
-    {
-        json.fieldArray("settings");
-        for (const Setting* s = head_; s != nullptr; s = s->next)
-        {
-            json.beginObject();
-            s->WriteJson(json);
-            json.endObject();
-        }
-        json.endArray();
-    }
+    // Iteration for generic consumers. First() takes the lock only to
+    // read head_; the links behind it are write-once and the entries
+    // immortal, so the walk itself needs no lock (same reasoning as
+    // dispatching command handlers outside the lock).
+    //
+    //   for (Setting* s = settings.First(); s; s = s->next) { ... }
+    Setting* First();
 
-    // The frontend setSetting path: find by key, apply.
-    bool ApplySetting(const char* key, const char* value);  // walks chain
-
-    // NVS primitives used by the typed leaves (roughly today's
-    // getString/setString/getInt/... made key-private):
+    // NVS primitives used by the typed leaves via the stamped `mgr`
+    // pointer (roughly today's getString/getInt/... made key-private):
     // bool ReadInt(const char* key, int32_t& out);
     // bool WriteInt(const char* key, int32_t v);
     // ...
+    // bool Save();   // commit, unchanged from today
 };
 
 // ──────────────────────────────────────────────────────────────
-// Owner side — what a manager writes
+// A converter — lives at the EDGE (e.g. inside the getSettings
+// command handler), not in SettingsManager. Whoever wants YAML or
+// an MQTT dump writes their own ten-line walk just like it.
+// ──────────────────────────────────────────────────────────────
+//
+//  for (Setting* s = settings.First(); s != nullptr; s = s->next)
+//  {
+//      json.beginObject();
+//      json.field("key", s->key);
+//      json.field("label", s->label);
+//
+//      switch (s->type)   // NO default → compile error on new types
+//      {
+//      case SettingType::Int:
+//          json.field("type", "int");
+//          json.field("value", s->asInt().Get());
+//          break;
+//      case SettingType::Bool:
+//          json.field("type", "bool");
+//          json.field("value", s->asBool().Get());
+//          break;
+//      case SettingType::String:
+//      {
+//          json.field("type", "string");
+//          char buf[128] = {};
+//          s->asString().Get(buf, sizeof(buf));
+//          json.field("value", buf);
+//          break;
+//      }
+//      }
+//      json.endObject();
+//  }
+//
+// The setSetting path is the same shape: find the entry by key while
+// walking, switch on type, parse the string, call the typed Set().
+
+// ──────────────────────────────────────────────────────────────
+// Owner side — what a manager writes (unchanged, still elegant)
 // ──────────────────────────────────────────────────────────────
 
 class MqttManager
@@ -197,7 +245,6 @@ public:
     }
 
 private:
-    // ~40 bytes RAM each (key/label/def pointers + chain + vtable).
     // Delete this manager's folder and its settings vanish from the
     // UI and NVS schema with it.
     inline static BoolSetting   enabled_{ "mqtt.enabled", "MQTT Enabled", false };
@@ -206,21 +253,16 @@ private:
 };
 
 // ──────────────────────────────────────────────────────────────
-// Cross-cutting settings — the ownership rule
+// Rejected along the way (see ideas/settings-refactor.md for more)
 // ──────────────────────────────────────────────────────────────
+// - WriteJson/ApplyFromString virtuals on Setting: leaks one
+//   presentation format into the schema core; next format explodes it.
+// - Descriptor-as-key (settingsManager.GetString(brokerUrl, ...)):
+//   reintroduces type mistakes at every call site; typed Get/Set on
+//   the leaf makes the wrong call unrepresentable.
+// - Bare getInt(key)/getString(key) only: today's system minus the
+//   schema — cannot generate the settings UI, which is the point.
 //
-// A manager that doesn't own a setting has no key to read it with —
-// that's the point. It asks the owner:
-//
-//   class SystemManager {           // ← candidate owner, see the .md
-//   public:
-//       void GetDeviceName(char* out, size_t maxLen) { name_.Get(out, maxLen); }
-//   private:
-//       inline static StringSetting name_{ "device.name", "Device Name", "Strux" };
-//   };
-//
-//   // NetworkManager: sp.getSystemManager().GetDeviceName(host, sizeof(host));
-//
-// OPEN (per ideas/settings-refactor.md): does SystemManager also take
-// device.pin + CheckAuth + ping/info/reboot? UI grouping: `group`
-// field vs key-prefix sort.
+// STILL OPEN: SystemManager for device.name/device.pin (and maybe
+// CheckAuth + ping/info/reboot); UI grouping (group field vs key-
+// prefix sort).
