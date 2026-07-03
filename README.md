@@ -41,12 +41,14 @@ Strux/
 │   ├── Application/                   # Application logic (managers)
 │   │   ├── ApplicationContext.h       # Service locator — owns all managers
 │   │   ├── ServiceProvider.h          # Dependency injection interface
-│   │   ├── CommandManager/            # WebSocket RPC dispatch
+│   │   ├── CommandManager/            # Command dispatch (WebSocket + HTTP)
+│   │   ├── ConsoleManager/            # Log capture + WebSocket broadcast
 │   │   ├── DeviceManager/            # Hardware driver instances + HA entities
-│   │   ├── LogManager/               # Log capture + WebSocket broadcast
-│   │   ├── MqttManager/              # MQTT + Home Assistant discovery
+│   │   ├── HomeAssistantManager/     # MQTT discovery publishing
+│   │   ├── MqttManager/              # MQTT connection + entity registration
 │   │   ├── NetworkManager/            # WiFi STA/AP with retry and fallback
 │   │   ├── SettingsManager/           # NVS key-value store
+│   │   ├── SystemManager/             # Device identity, ping/info/reboot
 │   │   ├── TimeManager/              # SNTP + timezone
 │   │   ├── UpdateManager/            # OTA firmware + www partition
 │   │   └── WebServerManager/         # HTTP + WebSocket server
@@ -58,8 +60,8 @@ Strux/
 │   │   └── drivers/                   # Shared drivers, usable by any board
 │   │       └── Led.h                  # GPIO LED driver (HA-controllable)
 │   └── lib/                           # Reusable utilities
-│       ├── common/                    # Stream, BufferStream, EnumOperators
-│       ├── json/                      # JsonWriter, JsonHelpers
+│       ├── common/                    # Stream, MemoryStream, BufferStream, Fatal
+│       ├── json/                      # JsonWriter, JsonReader, JsonScope
 │       ├── rtos/                      # Task, Mutex, Timer, InitState
 │       └── system/                    # DateTime, TimeSpan
 ├── frontend/                          # React web UI (Vite + Tailwind + shadcn)
@@ -151,16 +153,18 @@ All managers follow the same pattern: they receive a `ServiceProvider&` referenc
 
 ```
 ApplicationContext (owns everything)
-├── LogManager          — Captures ESP-IDF logs, broadcasts via WebSocket
-├── SettingsManager     — NVS read/write with typed accessors
-├── NetworkManager      — WiFi STA/AP with retry and fallback
-│   └── WiFiInterface   — ESP WiFi abstraction (swappable for Ethernet)
-├── TimeManager         — SNTP time sync with timezone support
-├── CommandManager      — Routes JSON commands to handlers
-├── MqttManager         — MQTT client with Home Assistant auto-discovery
-├── DeviceManager       — Hardware driver instances (LED, sensors, etc.)
-├── UpdateManager       — OTA writes to app or www partition
-└── WebServerManager    — HTTP + WebSocket server, static file serving
+├── ConsoleManager        — Captures ESP-IDF logs, broadcasts via WebSocket
+├── SettingsManager       — NVS read/write behind typed setting objects
+├── SystemManager         — Device identity, ping/info/reboot commands
+├── NetworkManager        — WiFi STA/AP with retry and fallback
+│   └── WiFiInterface     — ESP WiFi abstraction (swappable for Ethernet)
+├── TimeManager           — SNTP time sync with timezone support
+├── CommandManager        — Pure dispatcher for commands registered by other managers
+├── MqttManager           — MQTT client connection + entity registration
+├── DeviceManager         — Hardware driver instances (LED, sensors, etc.)
+├── HomeAssistantManager  — Publishes MQTT discovery for registered entities
+├── UpdateManager         — Session-based updates to any partition by label
+└── WebServerManager      — HTTP + WebSocket server, static file serving
     ├── StaticFileHandler
     └── WebSocketHandler
 ```
@@ -168,13 +172,15 @@ ApplicationContext (owns everything)
 ### Boot sequence (main.cpp)
 
 ```cpp
-g_appContext.getLogManager().Init();
+g_appContext.getConsoleManager().Init();
 g_appContext.getSettingsManager().Init();
+g_appContext.getSystemManager().Init();
 g_appContext.getNetworkManager().Init();
 g_appContext.getTimeManager().Init();
 g_appContext.getCommandManager().Init();
 g_appContext.getMqttManager().Init();
 g_appContext.getDeviceManager().Init();
+g_appContext.getHomeAssistantManager().Init();
 g_appContext.getUpdateManager().Init();
 g_appContext.getWebServerManager().Init();
 ```
@@ -270,20 +276,21 @@ The CI pipeline produces three artifacts per release:
 
 ## Settings
 
-All settings are stored in NVS (non-volatile storage) and configurable through the web UI's Settings page. The settings table is defined in [`SettingsDefs.h`](main/Application/SettingsManager/SettingsDefs.h):
+All settings are stored in NVS (non-volatile storage) and configurable through the web UI's Settings page. Each setting is a typed object declared in the manager that owns it and registered in that manager's `Init()`:
 
 ```cpp
-inline const SettingDef SETTINGS_DEFS[] = {
-    { "wifi.ssid",      SettingType::String, "WiFi SSID",      "" },
-    { "wifi.password",  SettingType::String, "WiFi Password",  "" },
-    { "device.name",    SettingType::String, "Device Name",    "Strux" },
-    { "mqtt.enabled",   SettingType::Bool,   "MQTT Enabled",   "0" },
-    { "mqtt.broker",    SettingType::String, "MQTT Broker",    "" },
-    // ... add your own settings here
-};
+// In your manager's header:
+inline static StringSetting broker_{ "mqtt.broker", "MQTT Broker", ""   };
+inline static Int32Setting  port_  { "mqtt.port",   "MQTT Port",   1883 };
+
+// In your manager's Init():
+serviceProvider_.getSettingsManager().Register({ &broker_, &port_ });
+
+// Anywhere in the owner — typed, no string keys:
+int32_t port = port_.Get();   // NVS value, or the default if unset
 ```
 
-The web UI auto-generates form fields for each entry, grouped by prefix. Adding a new setting is one line.
+The web UI auto-generates form fields for each registered setting, grouped by key prefix. Adding a new setting is a declaration plus a `Register()` entry — no central table to edit.
 
 ---
 
@@ -334,7 +341,7 @@ This is a template — copy it, rename it, and build on top of it:
 4. **Add application logic** as new managers in `Application/`
 5. **Register HA entities** via `MqttManager::RegisterCommand()` and `RegisterDiscovery()`
 6. **Extend the web UI** — add pages in `frontend/src/pages/`, register routes in the sidebar
-7. **Add settings** by adding entries to `SettingsDefs.h`
+7. **Add settings** by declaring typed setting members in the owning manager and registering them in its `Init()` (see [Settings](#settings))
 
 ### Adding a New Manager
 
@@ -347,7 +354,21 @@ This is a template — copy it, rename it, and build on top of it:
 
 ### Adding a New Command
 
-Commands are dispatched by `CommandManager`. Add an entry to the command table with a type string and handler function. The handler receives a JSON payload and writes its response to a `JsonWriter`. The frontend calls it via the WebSocket RPC layer in `backend.ts`.
+Commands are dispatched by `CommandManager`, but each command lives in the manager that owns its domain. Declare a static command table in your manager and register it in `Init()`:
+
+```cpp
+// In your manager's header:
+void Cmd_MyThing(Stream& in, Stream& out);
+
+inline static CommandEntry commands_[] = {
+    { "myThing", &InvokeCommand<&MyManager::Cmd_MyThing> },
+};
+
+// In Init():
+serviceProvider_.getCommandManager().Register(this, commands_);
+```
+
+Handlers read the request payload from `in` and write their complete reply to `out` — for JSON, construct a `JsonReader`/`JsonObject` on the streams. The frontend calls commands via the WebSocket RPC layer in `backend.ts`; large transfers (uploads/downloads) go through the same commands over `POST /api/command`.
 
 ### Adding a Hardware Driver
 
