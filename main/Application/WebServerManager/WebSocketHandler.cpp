@@ -92,6 +92,7 @@ void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int le
     frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(json));
     frame.len = len;
 
+    LOCK(sendMutex_);
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
     {
         if (clients[i] != 0)
@@ -120,6 +121,7 @@ void WebSocketHandler::BroadcastBinary(httpd_handle_t server, const uint8_t* dat
     frame.payload = const_cast<uint8_t*>(data);
     frame.len = len;
 
+    LOCK(sendMutex_);
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
     {
         if (clients[i] == 0) continue;
@@ -224,5 +226,7 @@ void WebSocketHandler::DispatchMessage(httpd_req_t* req, int32_t id, const char*
     frame.type = HTTPD_WS_TYPE_TEXT;
     frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(out.data()));
     frame.len = out.length();
+
+    LOCK(sendMutex_);
     httpd_ws_send_frame(req, &frame);
 }

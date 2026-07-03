@@ -23,6 +23,13 @@ private:
     CommandManager* commandManager_ = nullptr;
 
     Mutex wsMutex_;
+
+    // Serializes ALL outgoing frame writes. Broadcasts run on the
+    // ConsoleManager task while command responses are written by the
+    // httpd task — unserialized, their bytes interleave on the socket
+    // and corrupt the WS framing (client sees "Invalid frame header").
+    Mutex sendMutex_;
+
     int wsClients_[MAX_WS_CLIENTS] = {};
     int consecBinFails_[MAX_WS_CLIENTS] = {};
     static constexpr int MAX_BIN_FAILS = 10;
