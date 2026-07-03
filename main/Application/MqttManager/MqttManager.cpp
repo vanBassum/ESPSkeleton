@@ -1,5 +1,6 @@
 #include "MqttManager.h"
 #include "SettingsManager/SettingsManager.h"
+#include "SystemManager/SystemManager.h"
 #include "JsonWriter.h"
 #include "BufferStream.h"
 #include "esp_log.h"
@@ -32,7 +33,12 @@ void MqttManager::Init()
         return;
     }
 
-    enabled_ = serviceProvider_.getSettingsManager().getBool("mqtt.enabled", false);
+    // Registered before the enabled check: the settings must exist in the
+    // UI even when MQTT is off, or it could never be enabled again.
+    serviceProvider_.getSettingsManager().Register({
+        &mqttEnabled_, &mqttBroker_, &mqttPort_, &mqttUser_, &mqttPass_, &mqttPrefix_ });
+
+    enabled_ = mqttEnabled_.Get();
 
     if (!enabled_)
     {
@@ -44,7 +50,7 @@ void MqttManager::Init()
     BuildDeviceId();
 
     char prefix[32] = {};
-    serviceProvider_.getSettingsManager().getString("mqtt.prefix", prefix, sizeof(prefix));
+    mqttPrefix_.Get(prefix, sizeof(prefix));
     if (prefix[0] == '\0')
         snprintf(prefix, sizeof(prefix), "strux");
     snprintf(baseTopic_, sizeof(baseTopic_), "%s/%s", prefix, deviceId_);
@@ -107,15 +113,13 @@ void MqttManager::RegisterDiscovery(std::function<void()> callback)
 
 void MqttManager::StartClient()
 {
-    auto &settings = serviceProvider_.getSettingsManager();
-
     char broker[64] = {};
     char user[32] = {};
     char pass[64] = {};
-    settings.getString("mqtt.broker", broker, sizeof(broker));
-    settings.getString("mqtt.user", user, sizeof(user));
-    settings.getString("mqtt.pass", pass, sizeof(pass));
-    int port = settings.getInt("mqtt.port", 1883);
+    mqttBroker_.Get(broker, sizeof(broker));
+    mqttUser_.Get(user, sizeof(user));
+    mqttPass_.Get(pass, sizeof(pass));
+    int32_t port = mqttPort_.Get();
 
     if (broker[0] == '\0')
     {
@@ -124,7 +128,7 @@ void MqttManager::StartClient()
     }
 
     char uri[128];
-    snprintf(uri, sizeof(uri), "mqtt://%s:%d", broker, port);
+    snprintf(uri, sizeof(uri), "mqtt://%s:%ld", broker, static_cast<long>(port));
 
     char lwtTopic[128];
     snprintf(lwtTopic, sizeof(lwtTopic), "%s/status", baseTopic_);
@@ -326,9 +330,7 @@ void MqttManager::PublishEntityDiscovery(const char *component, const char *obje
     const esp_app_desc_t *app = esp_app_get_description();
 
     char deviceName[32] = {};
-    serviceProvider_.getSettingsManager().getString("device.name", deviceName, sizeof(deviceName));
-    if (deviceName[0] == '\0')
-        snprintf(deviceName, sizeof(deviceName), "Strux");
+    serviceProvider_.getSystemManager().GetDeviceName(deviceName, sizeof(deviceName));
 
     char availTopic[128];
     snprintf(availTopic, sizeof(availTopic), "%s/status", baseTopic_);
@@ -359,9 +361,7 @@ void MqttManager::PublishDiscovery()
     const esp_app_desc_t *app = esp_app_get_description();
 
     char deviceName[32] = {};
-    serviceProvider_.getSettingsManager().getString("device.name", deviceName, sizeof(deviceName));
-    if (deviceName[0] == '\0')
-        snprintf(deviceName, sizeof(deviceName), "Strux");
+    serviceProvider_.getSystemManager().GetDeviceName(deviceName, sizeof(deviceName));
 
     char stateTopic[128];
     snprintf(stateTopic, sizeof(stateTopic), "%s/state", baseTopic_);

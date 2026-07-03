@@ -7,7 +7,7 @@
 TimeManager *TimeManager::instance = nullptr;
 
 TimeManager::TimeManager(ServiceProvider &ctx)
-    : settingsManager(ctx.getSettingsManager())
+    : serviceProvider_(ctx)
 {
 }
 
@@ -18,6 +18,8 @@ void TimeManager::Init()
         return;
 
     instance = this;
+
+    serviceProvider_.getSettingsManager().Register({ &ntpServerSetting_, &ntpTimezone_ });
 
     ApplyTimezone();
     LoadServerName();
@@ -30,25 +32,19 @@ void TimeManager::Init()
 void TimeManager::ApplyTimezone()
 {
     char tz[64] = {};
-    settingsManager.getString("ntp.timezone", tz, sizeof(tz));
+    ntpTimezone_.Get(tz, sizeof(tz));
+    if (tz[0] == '\0')
+        snprintf(tz, sizeof(tz), "UTC0");
 
-    if (tz[0] != '\0')
-    {
-        setenv("TZ", tz, 1);
-        tzset();
-        ESP_LOGI(TAG, "Timezone set to: %s", tz);
-    }
-    else
-    {
-        setenv("TZ", "UTC0", 1);
-        tzset();
-        ESP_LOGI(TAG, "No timezone configured, using UTC");
-    }
+    setenv("TZ", tz, 1);
+    tzset();
+    ESP_LOGI(TAG, "Timezone set to: %s", tz);
 }
 
 void TimeManager::LoadServerName()
 {
-    if (!settingsManager.getString("ntp.server", ntpServer, sizeof(ntpServer)) || ntpServer[0] == '\0')
+    ntpServerSetting_.Get(ntpServer, sizeof(ntpServer));
+    if (ntpServer[0] == '\0')
         snprintf(ntpServer, sizeof(ntpServer), "pool.ntp.org");
 }
 

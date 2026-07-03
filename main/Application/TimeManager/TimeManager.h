@@ -1,9 +1,8 @@
 #pragma once
 #include "ServiceProvider.h"
 #include "InitState.h"
+#include "TypedSettings.h"
 #include "DateTime.h"
-
-class SettingsManager;
 
 class TimeManager
 {
@@ -18,7 +17,7 @@ public:
     bool IsTimeValid() const;
 
 private:
-    SettingsManager &settingsManager;
+    ServiceProvider &serviceProvider_;
     InitState initState;
 
     volatile bool synced = false;
@@ -30,4 +29,8 @@ private:
 
     static void TimeSyncCallback(struct timeval *tv);
     static TimeManager *instance;
+
+    // ── Settings (registered with SettingsManager in Init) ──
+    inline static StringSetting ntpServerSetting_{ "ntp.server",   "NTP Server",   "pool.ntp.org" };
+    inline static StringSetting ntpTimezone_     { "ntp.timezone", "NTP Timezone", "UTC0"         };
 };

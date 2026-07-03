@@ -1,5 +1,6 @@
 #include "NetworkManager.h"
 #include "SettingsManager.h"
+#include "SystemManager.h"
 #include "CommandManager.h"
 #include "JsonWriter.h"
 #include "nvs_flash.h"
@@ -46,12 +47,9 @@ void NetworkManager::Init()
     wifi_interface_.SetEventHandler([this](const NetworkEvent& e) { HandleNetworkEvent(e); });
     wifi_interface_.Init();
 
-    // Set hostname from device.name setting so it shows in the router
-    auto& settings = serviceProvider_.getSettingsManager();
+    // Set hostname from the device name so it shows in the router
     char deviceName[33] = {};
-    settings.getString("device.name", deviceName, sizeof(deviceName));
-    if (deviceName[0] == '\0')
-        strncpy(deviceName, "Strux", sizeof(deviceName) - 1);
+    serviceProvider_.getSystemManager().GetDeviceName(deviceName, sizeof(deviceName));
     wifi_interface_.SetHostname(deviceName);
 
     // mDNS — <deviceName>.local
@@ -80,13 +78,14 @@ void NetworkManager::Init()
     });
 
     serviceProvider_.getCommandManager().Register(this, commands_);
+    serviceProvider_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_ });
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
 
     // Load WiFi credentials from settings and try to connect
-    settings.getString("wifi.ssid", staSsid_, sizeof(staSsid_));
-    settings.getString("wifi.password", staPassword_, sizeof(staPassword_));
+    wifiSsid_.Get(staSsid_, sizeof(staSsid_));
+    wifiPassword_.Get(staPassword_, sizeof(staPassword_));
 
     if (staSsid_[0] != '\0')
     {

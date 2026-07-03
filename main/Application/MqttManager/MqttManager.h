@@ -2,6 +2,7 @@
 
 #include "ServiceProvider.h"
 #include "InitState.h"
+#include "TypedSettings.h"
 #include "Timer.h"
 #include "mqtt_client.h"
 #include <functional>
@@ -51,6 +52,14 @@ private:
     esp_mqtt_client_handle_t client_ = nullptr;
     volatile bool connected_ = false;
     bool enabled_ = false;
+
+    // ── Settings (registered with SettingsManager in Init) ──
+    inline static BoolSetting   mqttEnabled_{ "mqtt.enabled", "MQTT Enabled",  false   };
+    inline static StringSetting mqttBroker_ { "mqtt.broker",  "MQTT Broker",   ""      };
+    inline static Int32Setting  mqttPort_   { "mqtt.port",    "MQTT Port",     1883    };
+    inline static StringSetting mqttUser_   { "mqtt.user",    "MQTT User",     ""      };
+    inline static StringSetting mqttPass_   { "mqtt.pass",    "MQTT Password", ""      };
+    inline static StringSetting mqttPrefix_ { "mqtt.prefix",  "MQTT Prefix",   "strux" };
 
     char deviceId_[16] = {};   // Last 4 bytes of MAC, hex (e.g. "a1b2c3d4")
     char baseTopic_[96] = {};  // "{prefix}/{deviceId}"

@@ -7,6 +7,7 @@
 #include "ServiceProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
+#include "TypedSettings.h"
 #include "Timer.h"
 
 class JsonWriter;
@@ -58,4 +59,8 @@ private:
     inline static CommandEntry commands_[] = {
         { "wifiScan", &NetworkManager::Cmd_WifiScan },
     };
+
+    // ── Settings (registered with SettingsManager in Init) ──
+    inline static StringSetting wifiSsid_    { "wifi.ssid",     "WiFi SSID",     "" };
+    inline static StringSetting wifiPassword_{ "wifi.password", "WiFi Password", "" };
 };
