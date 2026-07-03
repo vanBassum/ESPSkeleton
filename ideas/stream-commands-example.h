@@ -1,51 +1,29 @@
 #pragma once
 
 // ══════════════════════════════════════════════════════════════
-// MINIMAL EXAMPLE — commands over streams instead of JSON.
-// Not built; sketches the plumbing only.
+// MINIMAL EXAMPLE — commands over streams. Not built; plumbing only.
 //
-// Idea (2026-07-03): CommandManager is the device's single API
-// surface. Every entrance (WebSocket, HTTP, serial, ...) is a dumb
-// pipe. The registry signature drops its JSON coupling:
-//
-//     void handler(void* ctx, Stream& in,  Stream& out)
-//                             ~~~~~~~~~~   ~~~~~~~~~~~
-//                             request      response
-//                             payload      payload
-//
-// Stream is the lowest common denominator: anything can be faked
-// with a memory stream (at the price of a size cap), but a buffer
-// can never become limitless. JSON stays available as a CONVENIENCE
-// — adapted in ONE place (the trampoline), not baked into every
-// handler's contract.
+// Decided 2026-07-03:
+//   - CommandManager is the device's single API surface. Every
+//     entrance (WebSocket, HTTP, serial, ...) is a dumb pipe.
+//   - ONE handler signature: (Stream& in, Stream& out). Streams are
+//     the CONTRACT — the lowest common denominator; anything can be
+//     faked with a memory stream (bounded), but a buffer can never
+//     become limitless.
+//   - JSON is the default DIALECT, not the contract. A handler with
+//     structured data constructs the JSON adapters on line one; a
+//     bulk handler (firmware bytes) never mentions JSON. Nothing
+//     below the handler knows which choice it made. If a command
+//     ever wants CBOR/plain text, only that handler changes.
+//   - UpdateManager goes PURE: its HTTP routes disappear; upload/
+//     download become commands. Fast path = updateFromUrl (device
+//     pulls the image itself). Works-anywhere path = begin/write/end.
 // ══════════════════════════════════════════════════════════════
 
 #include <type_traits>
 #include <cstddef>
 
 class Stream;      // [lib/common/Stream.h]  write/read/available/flush
-class JsonWriter;  // [lib/json/JsonWriter.h] already writes to a Stream
-
-// ──────────────────────────────────────────────────────────────
-// [lib/common/MemoryStream.h] — NEW small lib piece.
-// The "fake it" adapter: wraps an existing byte range so that
-// non-stream sources (a received WS frame, a serial line buffer)
-// can be handed to a stream-consuming handler. Bounded, obviously.
-// ──────────────────────────────────────────────────────────────
-//
-//  class MemoryStream : public Stream
-//  {
-//      const char* buf_; size_t len_; size_t pos_ = 0;
-//  public:
-//      MemoryStream(const void* buf, size_t len);
-//      size_t read(void* dst, size_t n, TickType_t) override;  // copies, advances pos_
-//      size_t available() const override { return len_ - pos_; }
-//      size_t write(...) override { return 0; }                // read-only
-//  };
-//
-// (BufferStream already covers the other direction: a handler that
-// wants to COMPOSE a bounded response in RAM writes into one, then
-// the transport ships buf/len however it likes.)
 
 // ──────────────────────────────────────────────────────────────
 // [CommandManager/CommandEntry.h] — entry v2
@@ -62,158 +40,154 @@ struct CommandEntry
     // ~CommandEntry: FATAL if a registered entry dies (unchanged)
 };
 
-// ──────────────────────────────────────────────────────────────
-// The dual-shape trampoline. Handlers come in TWO flavors, and the
-// trampoline — not the handler, not the transport — adapts:
-//
-//   json-style   void Cmd_Foo(const char* json, JsonWriter& resp)
-//                → trampoline slurps `in` to a stack buffer and
-//                  wraps `out` in a JsonWriter. Every existing
-//                  handler keeps its exact current body.
-//
-//   stream-style void Cmd_Bar(Stream& in, Stream& out)
-//                → passed through untouched. For bulk transfer:
-//                  read chunks straight to flash, write megabytes
-//                  out with no response buffer.
-//
-// Wrong signature → HandlerTraits has no specialization → compile
-// error at the table line, same guarantee as today.
-// ──────────────────────────────────────────────────────────────
-
-template <typename T> struct HandlerTraits;   // no primary definition on purpose
-
-// member, json-style
-template <typename C> struct HandlerTraits<void (C::*)(const char*, JsonWriter&)>       { using Owner = C;       static constexpr bool json = true;  };
-template <typename C> struct HandlerTraits<void (C::*)(const char*, JsonWriter&) const> { using Owner = const C; static constexpr bool json = true;  };
-// member, stream-style
-template <typename C> struct HandlerTraits<void (C::*)(Stream&, Stream&)>               { using Owner = C;       static constexpr bool json = false; };
-template <typename C> struct HandlerTraits<void (C::*)(Stream&, Stream&) const>         { using Owner = const C; static constexpr bool json = false; };
-// free/static, both styles (register with ctx = nullptr)
-template <> struct HandlerTraits<void (*)(const char*, JsonWriter&)>                    { using Owner = void;    static constexpr bool json = true;  };
-template <> struct HandlerTraits<void (*)(Stream&, Stream&)>                            { using Owner = void;    static constexpr bool json = false; };
-
-inline constexpr size_t COMMAND_JSON_MAX = 2048;   // slurp cap for json-style handlers
+// The trampoline barely changes — same owner-deduction trick, new
+// argument list. Const members and free functions as before.
+template <typename T> struct CommandOwner;
+template <typename C> struct CommandOwner<void (C::*)(Stream&, Stream&)>       { using type = C; };
+template <typename C> struct CommandOwner<void (C::*)(Stream&, Stream&) const> { using type = const C; };
 
 template <auto Handler>
 void InvokeCommand(void* ctx, Stream& in, Stream& out)
 {
-    using T = HandlerTraits<decltype(Handler)>;
-
-    auto call = [&](auto&&... args)
+    if constexpr (std::is_member_function_pointer_v<decltype(Handler)>)
     {
-        if constexpr (std::is_member_function_pointer_v<decltype(Handler)>)
-            (static_cast<typename T::Owner*>(ctx)->*Handler)(args...);
-        else
-            Handler(args...);
-    };
-
-    if constexpr (T::json)
-    {
-        // The adapter, in one place: drain the (bounded) request into
-        // a stack buffer, hand the response stream to a JsonWriter.
-        char json[COMMAND_JSON_MAX];
-        size_t n = 0; // = in.read(json, sizeof(json) - 1);
-        json[n] = '\0';
-
-        // JsonWriter resp(out);   // JsonWriter already takes a Stream
-        // resp.beginObject();  call(json, resp);  resp.endObject();
-        (void)json;
+        using C = typename CommandOwner<decltype(Handler)>::type;
+        (static_cast<C*>(ctx)->*Handler)(in, out);
     }
     else
     {
-        call(in, out);
+        Handler(in, out);   // free/static function — ctx unused
     }
 }
 
 // ──────────────────────────────────────────────────────────────
-// [UpdateManager] — the stress test. Pure: no HTTP routes left.
+// The adapter classes (JSON dialect + stream fakes)
+// ──────────────────────────────────────────────────────────────
+//
+// JsonWriter   [lib/json/JsonWriter.h] — EXISTS, already takes a
+//              Stream. Unchanged.
+//
+// JsonReader   [lib/json/JsonReader.h] — NEW. Buffered, not
+//              streaming: consumes `in` into an internal bounded
+//              buffer at construction, then serves typed getters
+//              (today's JsonHelpers become methods):
+//
+//                  JsonReader<1024> req(in);       // capacity as template
+//                  char url[128];                  // param, sane default
+//                  req.GetString("url", url, sizeof(url));
+//                  int32_t port = req.GetInt("port", 1883);
+//
+//              A true streaming parser can replace the internals
+//              later — handlers only see the getters.
+//
+// JsonResponse [lib/json/ or CommandManager/] — NEW, optional sugar.
+//              RAII: wraps a JsonWriter, writes beginObject() at
+//              construction, endObject() on destruction. Kills the
+//              brace boilerplate; a handler that wants full control
+//              uses JsonWriter directly.
+//
+// MemoryStream [lib/common/MemoryStream.h] — NEW. Read-only Stream
+//              view over existing bytes (a received WS frame, a
+//              serial line buffer). The transport-side fake.
+//
+// BufferStream [lib/common/BufferStream.h] — EXISTS. Write-side
+//              compose-in-RAM adapter for transports that must send
+//              whole frames.
+
+// ──────────────────────────────────────────────────────────────
+// [UpdateManager] — the two extremes side by side
 // ──────────────────────────────────────────────────────────────
 
 class UpdateManagerSketch
 {
-    // json-style — small request/response, exactly like today:
-    void Cmd_UpdateStatus (const char* json, JsonWriter& resp);
-    void Cmd_UpdateFromUrl(const char* json, JsonWriter& resp);  // {"url": ...} → device PULLS the
-                                                                 // image itself (esp_http_client →
-                                                                 // Begin/Write/Finalize). Fast path.
-    void Cmd_UpdateBegin  (const char* json, JsonWriter& resp);  // {"target":"app"|"www"}
-    void Cmd_UpdateEnd    (const char* json, JsonWriter& resp);
+    // JSON-dialect handler — structured request/response:
+    void Cmd_UpdateFromUrl(Stream& in, Stream& out)
+    {
+        // JsonReader<512> req(in);            // dialect chosen HERE,
+        // JsonResponse resp(out);             // not by the contract
+        //
+        // char url[256];
+        // if (!req.GetString("url", url, sizeof(url)))
+        //     { resp.field("ok", false); resp.field("error", "no url"); return; }
+        //
+        // ... esp_http_client GET url → Begin/WriteChunk/Finalize ...
+        // resp.field("ok", true);
+    }                                          // } written by ~JsonResponse
 
-    // stream-style — bulk, works over ANY transport, no base64:
+    // Raw handler — firmware bytes, JSON never mentioned:
     void Cmd_UpdateWrite(Stream& in, Stream& out)
     {
         // char buf[1024];
         // while (size_t n = in.read(buf, sizeof(buf), timeout))
-        //     if (!WriteAppChunk(buf, n)) { /* write error to out; return */ }
-        // out.write("{\"ok\":true}", ...);   // response format is the
-        //                                    // handler's own business here
-    }
+        //     if (!WriteAppChunk(buf, n)) { /* error reply; return */ }
+        // out.write("{\"ok\":true}", 11);     // reply format is the
+    }                                          // handler's own business
 
-    void Cmd_DownloadPartition(Stream& in, Stream& out)
-    {
-        // slurp `in` (tiny JSON: {"partition":"ota_0"}), then stream
-        // the partition out chunk by chunk — megabytes, no buffer.
-    }
+    // downloadPartition mirrors it: tiny JSON request in, megabytes
+    // of raw partition bytes streamed out. No response buffer.
 
     inline static CommandEntry commands_[] = {
-        { "updateStatus",      &InvokeCommand<&UpdateManagerSketch::Cmd_UpdateStatus> },
-        { "updateFromUrl",     &InvokeCommand<&UpdateManagerSketch::Cmd_UpdateFromUrl> },
-        { "updateBegin",       &InvokeCommand<&UpdateManagerSketch::Cmd_UpdateBegin> },
-        { "updateWrite",       &InvokeCommand<&UpdateManagerSketch::Cmd_UpdateWrite> },   // ← stream
-        { "updateEnd",         &InvokeCommand<&UpdateManagerSketch::Cmd_UpdateEnd> },
-        { "downloadPartition", &InvokeCommand<&UpdateManagerSketch::Cmd_DownloadPartition> }, // ← stream
+        { "updateStatus",      /* &InvokeCommand<&UpdateManagerSketch::Cmd_UpdateStatus> */ },
+        { "updateFromUrl",     /* &InvokeCommand<&UpdateManagerSketch::Cmd_UpdateFromUrl> */ },
+        { "updateBegin",       /* ... */ },   // {"target":"app"|"www"}
+        { "updateWrite",       /* ... */ },   // raw payload
+        { "updateEnd",         /* ... */ },
+        { "downloadPartition", /* ... */ },   // raw response
+        { "partitions",        /* ... */ },
     };
+    // HandleUploadApp/HandleUploadWww/HandleDownloadPartition and all
+    // /api/upload|download routes in WebServerManager: DELETED. The
+    // Begin/Write/Finalize state machine stays exactly as it is.
 };
 
 // ──────────────────────────────────────────────────────────────
 // The transports become dumb pipes
 // ──────────────────────────────────────────────────────────────
 //
-// Each entrance does exactly two jobs: (1) parse the ENVELOPE —
-// which command, where does the reply go; (2) present payload and
-// reply as streams. How it frames that on the wire is its own
-// business; handlers never know.
+// Each entrance does two jobs: (1) parse the ENVELOPE — which
+// command, where does the reply go; (2) present payload and reply
+// as streams. Wire framing is the transport's own business.
 //
 //   WebSocket   text frame {"type":"ping",...} as today:
-//                 in  = MemoryStream(frame bytes)       ← faked, bounded
-//                 out = BufferStream(respBuf) → send 1 frame ← faked, bounded
-//               (bulk over WS needs fragmented/binary frames — check
-//               what esp_http_server allows before promising this)
+//                 in  = MemoryStream(frame bytes)          ← fake, bounded
+//                 out = BufferStream(respBuf) → one frame  ← fake, bounded
+//               Fine for every structured command. Bulk over WS
+//               would need fragmented/binary frames — don't promise
+//               it; HTTP and serial cover bulk.
 //
 //   HTTP        POST /api/command — the ONE route that remains:
-//                 in  = stream over httpd_req_recv       ← real stream
-//                 out = stream over httpd_resp_send_chunk ← real stream
-//               true streaming both ways; uploads/downloads at full
-//               speed with zero UpdateManager knowledge in the server.
+//                 in  = stream over httpd_req_recv          ← real
+//                 out = stream over httpd_resp_send_chunk   ← real
+//               Full-speed upload/download with zero UpdateManager
+//               knowledge in WebServerManager.
 //
 //   Serial      "updateWrite <len>\n" + raw bytes:
-//                 in  = bounded view over the UART stream ← real stream
-//                 out = UART                              ← real stream
-//               full device API on a bench with no network.
+//                 in  = length-bounded view over UART       ← real
+//                 out = UART                                ← real
+//               Full device API on a bench with no network.
 //
 // CommandManager::Execute(name, in, out): Find under lock, handler
 // outside lock — unchanged.
-//
+
 // ──────────────────────────────────────────────────────────────
 // Open points (NOT decided by this sketch)
 // ──────────────────────────────────────────────────────────────
 //
-// 1. Envelope composition: today WebSocketHandler shares one
-//    JsonWriter between envelope fields and handler fields. With
-//    opaque payloads the transport instead wraps by concatenation:
-//    write `{"id":7,"payload":` … handler bytes … `}`. Requires
-//    json-style responses to be one complete JSON value — they are
-//    (the trampoline writes exactly one object).
+// 1. Envelope composition: transports wrap the handler's reply by
+//    concatenation — write `{"id":7,"payload":`, then the handler
+//    bytes, then `}`. Requires a JSON-dialect reply to be one
+//    complete JSON value (it is: one object). Raw replies need a
+//    different envelope rule per transport (e.g. HTTP: body IS the
+//    reply; content-type from the envelope request).
 //
-// 2. COMMAND_JSON_MAX (slurp cap for json-style handlers): 2 KB
-//    matches today's message sizes; bulk commands bypass it by
-//    being stream-style.
+// 2. How `in` knows its end: length known upfront (bounded view,
+//    from Content-Length / frame size / serial <len>) vs read-until-
+//    close. Bounded view fits all three transports — prefer it.
 //
-// 3. How `in` signals end-of-payload: length known upfront from the
-//    envelope/Content-Length (bounded stream view) vs read-until-
-//    close. Bounded view is simpler and fits all three transports.
+// 3. JsonReader capacity: template param with a sane default. Lives
+//    on the handler's stack — watch task stack sizes (httpd: 8 KB).
 //
-// 4. Frontend impact: SettingsPage etc. unchanged (same JSON over
-//    WS). Firmware page switches from POST /api/upload/* to either
-//    updateFromUrl or chunked updateWrite over /api/command.
+// 4. Frontend: SettingsPage etc. unchanged (same JSON over WS).
+//    Firmware page moves from POST /api/upload/* to updateFromUrl,
+//    or chunked updateWrite via POST /api/command.
 // ══════════════════════════════════════════════════════════════
