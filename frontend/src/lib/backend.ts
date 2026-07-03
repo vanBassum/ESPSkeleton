@@ -108,7 +108,7 @@ class BackendService {
               if (msg.error) {
                 req.reject(new Error(msg.error))
               } else {
-                req.resolve(msg)
+                req.resolve(msg.payload)
               }
             }
           } else {
