@@ -64,6 +64,7 @@ required for long-lived dashboards (e.g. a 4-hour graph). Sessions die
 
 | Route | Auth | Behavior |
 |---|---|---|
+| `GET /api/login` | open | Returns `{"name":"<device name>"}` for the login page's brand slot — everything else that knows the name is behind auth. |
 | `POST /api/login` | open | Body `{"password":"..."}`. Match → `{"token":"..."}`. Mismatch → ~1 s delay, then 401 (brute-force damping). |
 | `POST /api/command` | Bearer header | Missing/unknown/expired token → 401 before touching the body. |
 | `/ws` | `?token=` query param | Checked during the upgrade GET; bad token → upgrade refused. Accepted connections are bound to their session; inbound frames refresh it. |
@@ -95,7 +96,10 @@ No device-discovery panel (KC1080 feature, out of scope).
   `authenticated` flag with an `onAuthChange` subscription for the UI.
 - WS connect appends `?token=`; `/api/command` fetches add the Bearer
   header.
-- A 401 from HTTP or a refused WS upgrade clears the token and flips
+- A browser cannot see *why* a WS connect failed (refused upgrade and
+  network failure look identical), so before each WS connect the token
+  is validated with an authenticated `ping` over HTTP; a 401 there —
+  or on any other HTTP call — clears the token and flips
   `authenticated` to false. **The password is never stored** — no
   credential-based auto-re-login (deliberate difference from KC1080).
   On reconnect the token either still works or the user sees the login
