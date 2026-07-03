@@ -11,6 +11,13 @@ Fits the stream-commands contract exactly: one channel = one command
 invocation; the handler's `(Stream& in, Stream& out)` are fed/ drained
 frame-by-frame by the transport. Registry and handlers unchanged.
 
+Related idea (Bas, 2026-07-03, parked): CommandManager owns a worker
+task + work queue — entrances hand over (entry, in, out) and return.
+Fixes the "every entrance task needs stack for the heaviest command"
+tax (one worker sized for the worst case instead of N transports), and
+is the natural place for "while one command waits on stream data, run
+the next" — cooperative scheduling. Same prerequisite as below.
+
 **Prerequisite that makes or breaks it:** handler execution must move
 off the transport task (worker task/pool). Multiplexed framing without
 concurrent execution just queues channels behind the running handler —
