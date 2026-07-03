@@ -61,7 +61,10 @@ unchanged.
 - **`MemoryStream`** (`lib/common/MemoryStream.h`): read-only `Stream`
   view over an existing byte range (`buf`, `len`, advancing `pos`).
   `write()` returns 0; `available()` reports remaining. Used by
-  transports to present received frames as streams.
+  transports to present received frames as streams. Deliberately NOT
+  folded into BufferStream: BufferStream's concept is chunked I/O
+  buffering (e.g. relieving SPI of byte-per-byte reads); MemoryStream
+  is "a stream backed by memory". Different things, different names.
 - **`JsonReader`** (`lib/json/JsonReader.h`): buffered, not streaming.
   Template capacity with internal buffer: `JsonReader<1024> req(in);`
   consumes `in` at construction (truncating past capacity, logging like
@@ -69,10 +72,28 @@ unchanged.
   JsonHelpers: `GetString(key, out, maxLen) -> bool`,
   `GetInt(key, default)`, `GetBool(key, default)`. A streaming parser
   can replace the internals later; handlers only see getters.
-- **`JsonResponse`** (`lib/json/JsonResponse.h`): RAII envelope sugar.
-  Derives from `JsonWriter`; constructor takes `Stream&` and writes
-  `beginObject()`, destructor writes `endObject()`. A handler that
-  wants full control uses `JsonWriter` directly.
+- **`JsonObject` / `JsonArray`** (`lib/json/JsonScope.h`): RAII scope
+  writers — the early-return fix at EVERY nesting level, not just the
+  outer braces. A scope writes its opener at construction and its
+  closer at destruction; C++ reverse-declaration destruction order
+  closes inner scopes first, so JSON is well-formed on every return
+  path:
+
+  ```cpp
+  JsonObject root(out);                 // { … } via RAII
+  root.field("firmware", ...);
+  JsonObject nested = root.object("xx"); // "xx":{ … }
+  nested.field("y", 1);
+  ```                                    // } } on scope exit
+
+  `field(key, value)` for leaves; `object(key)` / `array(key)` return
+  child scopes (guaranteed copy elision — no copies, one destructor).
+  The one misuse RAII cannot prevent — writing to a parent while a
+  child scope is open, or two live siblings — is caught by a
+  `childOpen` flag + assert: dies loudly on first run. Copy/assignment
+  deleted. Existing naked `beginObject/endObject` JsonWriter callers
+  (MQTT discovery, PublishState) may migrate opportunistically; not
+  part of this rework.
 
 `BufferStream` (write-side compose-in-RAM) and `JsonWriter` (writes to
 any `Stream`) already exist and are unchanged.
@@ -83,7 +104,7 @@ any `Stream`) already exist and are unchanged.
 // JSON dialect — typical structured command:
 void SystemManager::Cmd_Info(Stream& in, Stream& out)
 {
-    JsonResponse resp(out);              // {  ... } via RAII
+    JsonObject resp(out);                // {  ... } via RAII
     resp.field("firmware", ...);
 }
 
