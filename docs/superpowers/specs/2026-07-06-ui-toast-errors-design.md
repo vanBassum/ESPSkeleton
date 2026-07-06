@@ -47,3 +47,22 @@ success toasts.
 
 `pnpm typecheck`, `pnpm build`; runtime pass against a device via `pnpm dev`
 where reachable.
+
+## Addendum: polish follow-up (same day)
+
+The parked items were picked up immediately after:
+
+- Reboot `confirm()` replaced with a shadcn AlertDialog
+  (`components/ui/alert-dialog.tsx`, styled to match the existing
+  `dialog.tsx`). The description warns about the connection drop and,
+  when the dirty flag is set, that unsaved settings changes are lost.
+- Success feedback, decided **Save + reboot only**:
+  `toast.success("Settings saved")` after a flash write and
+  `toast.info("Rebooting device…")` once the reboot command is
+  acknowledged (the firmware replies, waits 500 ms, then restarts —
+  so the reply always arrives first). Uploads stay quiet on success
+  (the persistent "reboot to apply" banner already covers it), as do
+  per-setting changes and reloads.
+- FirmwarePage's hand-rolled badge replaced by a shared
+  `components/ui/badge.tsx`; the emerald/sky tones stay in a local
+  `StatusBadge` wrapper.

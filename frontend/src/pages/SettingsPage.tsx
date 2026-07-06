@@ -5,6 +5,17 @@ import { SaveIcon, Undo2Icon, PowerIcon, SearchIcon, LockIcon, BracesIcon } from
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
 import Editor from "react-simple-code-editor"
@@ -136,10 +147,17 @@ export default function SettingsPage() {
     try {
       await backend.saveSettings()
       setDirty(false)
+      toast.success("Settings saved")
     } catch (e) {
       toast.error("Failed to save settings", { description: errorMessage(e) })
     }
     setSaving(false)
+  }
+
+  function handleReboot() {
+    backend.reboot()
+      .then(() => toast.info("Rebooting device…", { description: "The connection will drop for a few seconds." }))
+      .catch((e) => toast.error("Reboot command failed", { description: errorMessage(e) }))
   }
 
   async function handleReload() {
@@ -196,19 +214,31 @@ export default function SettingsPage() {
             <p className="flex-1 text-sm text-amber-500">Unsaved changes — press Save to write to flash.</p>
           )}
           <div className="ml-auto flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-destructive hover:text-destructive"
-              onClick={() => {
-                if (confirm("Reboot the device?")) {
-                  backend.reboot().catch((e) => toast.error("Reboot command failed", { description: errorMessage(e) }))
-                }
-              }}
-            >
-              <PowerIcon className="mr-1.5 size-3.5" />
-              Reboot
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                >
+                  <PowerIcon className="mr-1.5 size-3.5" />
+                  Reboot
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Reboot the device?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The device restarts and drops this connection for a few seconds.
+                    {dirty && " Unsaved settings changes will be lost."}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleReboot}>Reboot</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             <Button variant="outline" size="sm" onClick={openJsonEditor}>
               <BracesIcon className="mr-1.5 size-3.5" />
               JSON

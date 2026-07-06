@@ -3,6 +3,7 @@ import { backend, type Partition } from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
 import { UploadIcon, DownloadIcon, RefreshCwIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 
 function errorMessage(e: unknown): string {
@@ -84,19 +85,17 @@ export default function FirmwarePage() {
   )
 }
 
-// ── Badge ─────────────────────────────────────────────────────
+// ── Status badge ──────────────────────────────────────────────
 
-function Badge({ children, tone }: { children: React.ReactNode; tone: "emerald" | "sky" }) {
+function StatusBadge({ children, tone }: { children: React.ReactNode; tone: "emerald" | "sky" }) {
   const cls =
     tone === "emerald"
       ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
       : "border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400"
   return (
-    <span
-      className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}
-    >
+    <Badge variant="outline" className={`text-[10px] uppercase tracking-wide ${cls}`}>
       {children}
-    </span>
+    </Badge>
   )
 }
 
@@ -139,8 +138,8 @@ function PartitionRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-mono font-medium">{p.label}</span>
-            {p.running && <Badge tone="emerald">running</Badge>}
-            {p.nextOta && <Badge tone="sky">next OTA</Badge>}
+            {p.running && <StatusBadge tone="emerald">running</StatusBadge>}
+            {p.nextOta && <StatusBadge tone="sky">next OTA</StatusBadge>}
             {p.version && (
               <span className="font-mono text-xs text-muted-foreground">v{p.version}</span>
             )}
