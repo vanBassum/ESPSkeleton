@@ -1,24 +1,35 @@
 # Flash-based circular logging (influx-like entries)
 
-Idea (Bas, 2026-07-06, deliberately not worked out yet): a flash ring
-logger whose unit is an **entry: a set of key/value pairs** — think
-InfluxDB points, not console text lines. This is NOT about persisting
-the console log; ConsoleManager has nothing to do with it.
+Idea (Bas, 2026-07-06): a flash ring logger whose unit is an **entry
+(Record): a set of key/value pairs (Fields)** — InfluxDB-style points,
+not console text lines. ConsoleManager is unrelated.
 
-Shape agreed so far, nothing more:
+**Prior art: `C:\Workspace\FlashLoggerV2` — continue there, don't
+restart.** It is a live strict-TDD project (CMake + GoogleTest, its
+own CLAUDE.md workflow: failing test first, user owns design,
+LogBook.md is Bas-only) whose LogBook already settled much of the
+design:
 
-- Build it as a reusable **component** (something ESP-IDF doesn't
-  have), developed with **TDD** — an IDF-free core against an abstract
-  flash interface, host-compiled tests (MSVC is available on the dev
-  machine), a thin esp_partition adapter. The manager in Strux is then
-  just a wrapper around the component.
+- Record = multiple Fields; repeated keys continue one value (e.g.
+  8-byte timestamp over two 4-byte fields).
+- Variable-length records with **Option B** overhead (one header field
+  per record, CRC, header written last for crash safety) — chosen via
+  flash-efficiency analysis over static layouts.
+- Record start: reserved keys (`0xFF` empty, `0x00` erased), NOT
+  timestamp-as-marker (considered and rejected — leaks housekeeping
+  into application keys).
+- `format(key_size, value_size)` / `init()` with magic+CRC header:
+  implemented. Field layer (fixed-size indexed fields, append,
+  validation): implemented. **Record layer: not started** — that's the
+  continuation point, then circular/sector behavior.
+- Thread safety: field layer has none by decision (caller's
+  responsibility) — in Strux that lands in the wrapping manager.
 
-Facts discovered, useful whenever this gets designed:
+Strux side, whenever the library is usable: consume it as a component
+(esp_partition adapter implementing its `IFlash`), one thin manager as
+the thread-safe wrapper. Facts to remember: the 4 MB flash map is
+currently exactly full — a log partition means shrinking something
+(www uses ~140 KB of 896 KB), and partition layout changes cost
+existing devices one factory reflash.
 
-- The 4 MB flash map is currently exactly full; a log partition means
-  shrinking something (www uses ~140 KB of its 896 KB FAT partition,
-  so it has room to give). Partition layout changes cost existing
-  devices one factory reflash.
-
-Priority: behind the remote-access server. Work out the entry model
-(schema? tags vs fields? query/read-back story?) before any code.
+Priority: behind the remote-access server.
