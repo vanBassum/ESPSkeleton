@@ -1,12 +1,12 @@
-#include "DeviceManager.h"
+#include "Board.h"
 #include "esp_log.h"
 
-DeviceManager::DeviceManager(ServiceProvider &ctx)
+Board::Board(ServiceProvider &ctx)
     : serviceProvider_(ctx)
 {
 }
 
-void DeviceManager::Init()
+void Board::Init()
 {
     auto init = initState_.TryBeginInit();
     if (!init)

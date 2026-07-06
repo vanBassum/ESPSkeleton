@@ -7,3 +7,5 @@
 # in main/CMakeLists.txt: managed deps go in main/idf_component.yml, IDF
 # built-ins in COMPONENT_REQUIRES.
 # ──────────────────────────────────────────────────────────────
+
+list(APPEND BOARD_SOURCES "${CMAKE_CURRENT_LIST_DIR}/Board.cpp")

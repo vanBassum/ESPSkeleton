@@ -1,8 +1,8 @@
 #pragma once
 
+class Board;
 class CommandManager;
 class ConsoleManager;
-class DeviceManager;
 class HomeAssistantManager;
 class MqttManager;
 class NetworkManager;
@@ -15,9 +15,9 @@ class WebServerManager;
 class ServiceProvider
 {
 public:
+    virtual Board& getBoard() = 0;
     virtual CommandManager& getCommandManager() = 0;
     virtual ConsoleManager& getConsoleManager() = 0;
-    virtual DeviceManager& getDeviceManager() = 0;
     virtual HomeAssistantManager& getHomeAssistantManager() = 0;
     virtual MqttManager& getMqttManager() = 0;
     virtual NetworkManager& getNetworkManager() = 0;

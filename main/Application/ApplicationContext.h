@@ -1,8 +1,8 @@
 #pragma once
 #include "ServiceProvider.h"
+#include "Board.h"
 #include "CommandManager/CommandManager.h"
 #include "ConsoleManager/ConsoleManager.h"
-#include "DeviceManager/DeviceManager.h"
 #include "HomeAssistantManager/HomeAssistantManager.h"
 #include "MqttManager/MqttManager.h"
 #include "NetworkManager/NetworkManager.h"
@@ -20,9 +20,9 @@ public:
     ApplicationContext(const ApplicationContext&) = delete;
     ApplicationContext& operator=(const ApplicationContext&) = delete;
 
+    Board& getBoard() override { return m_board; }
     CommandManager& getCommandManager() override { return m_commandManager; }
     ConsoleManager& getConsoleManager() override { return m_consoleManager; }
-    DeviceManager& getDeviceManager() override { return m_deviceManager; }
     HomeAssistantManager& getHomeAssistantManager() override { return m_homeAssistantManager; }
     MqttManager& getMqttManager() override { return m_mqttManager; }
     NetworkManager& getNetworkManager() override { return m_networkManager; }
@@ -40,7 +40,7 @@ private:
     TimeManager m_timeManager{*this};
     CommandManager m_commandManager{*this};
     MqttManager m_mqttManager{*this};
-    DeviceManager m_deviceManager{*this};
+    Board m_board{*this};
     HomeAssistantManager m_homeAssistantManager{*this};
     UpdateManager m_updateManager{*this};
     WebServerManager m_webServerManager{*this};

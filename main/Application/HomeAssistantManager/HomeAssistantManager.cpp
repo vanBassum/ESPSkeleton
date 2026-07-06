@@ -1,6 +1,6 @@
 #include "HomeAssistantManager.h"
 #include "MqttManager/MqttManager.h"
-#include "DeviceManager/DeviceManager.h"
+#include "Board.h"
 #include "JsonWriter.h"
 #include "esp_log.h"
 #include <cstring>
@@ -27,7 +27,7 @@ void HomeAssistantManager::Init()
     mqtt.RegisterCommand("led", [this](const char *data, int len)
     {
         bool on = (len >= 2 && strncmp(data, "ON", 2) == 0);
-        serviceProvider_.getDeviceManager().getLed().Set(on);
+        serviceProvider_.getBoard().GetLed().Set(on);
         PublishLedState();
     });
 
@@ -54,7 +54,7 @@ void HomeAssistantManager::Init()
     });
 
     // ── Add more HA entities here ────────────────────────────
-    // Projects wire their DeviceManager hardware to HA entities
+    // Projects wire the board's hardware (getBoard()) to HA entities
     // using the same RegisterCommand / RegisterDiscovery pattern.
 
     init.SetReady();
@@ -63,6 +63,6 @@ void HomeAssistantManager::Init()
 
 void HomeAssistantManager::PublishLedState()
 {
-    bool on = serviceProvider_.getDeviceManager().getLed().IsOn();
+    bool on = serviceProvider_.getBoard().GetLed().IsOn();
     serviceProvider_.getMqttManager().Publish("led/state", on ? "ON" : "OFF", true);
 }
