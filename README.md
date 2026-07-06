@@ -2,7 +2,7 @@
 
 *Start structured. Make it your own.*
 
-Strux is a flexible foundation for building embedded applications on ESP32. It gives you a clean, modular starting point with WiFi, a web UI, OTA updates, MQTT with Home Assistant auto-discovery, and the infrastructure to grow your project without fighting your own codebase.
+Strux is a flexible foundation for building embedded applications on ESP32. It gives you a clean, modular starting point with WiFi, a web UI, OTA updates, and the infrastructure to grow your project without fighting your own codebase.
 
 It's not a framework that forces you into rigid patterns. It's a well-organized starting point that you copy, rename, and shape into whatever you're building.
 
@@ -15,7 +15,6 @@ It's not a framework that forces you into rigid patterns. It's a well-organized 
 - **WiFi** — Station mode with automatic AP fallback (`Strux-AP`) after failed connections
 - **Web UI** — React + TypeScript dashboard served from flash, accessible from any browser
 - **OTA Updates** — Dual-partition firmware updates and independent web UI updates, no USB after initial flash
-- **MQTT** — Connects to any MQTT broker with automatic Home Assistant device discovery
 - **Live Console** — Stream device logs to the browser in real time over WebSocket
 - **Settings** — Key/value store backed by NVS with a dynamic settings UI
 - **Time Sync** — SNTP client with timezone support
@@ -43,8 +42,6 @@ Strux/
 │   │   ├── ServiceProvider.h          # Dependency injection interface
 │   │   ├── CommandManager/            # Command dispatch (WebSocket + HTTP)
 │   │   ├── ConsoleManager/            # Log capture + WebSocket broadcast
-│   │   ├── HomeAssistantManager/     # MQTT discovery publishing
-│   │   ├── MqttManager/              # MQTT connection + entity registration
 │   │   ├── NetworkManager/            # WiFi STA/AP with retry and fallback
 │   │   ├── SettingsManager/           # NVS key-value store
 │   │   ├── SystemManager/             # Device identity, ping/info/reboot
@@ -164,9 +161,7 @@ ApplicationContext (owns everything)
 │   └── WiFiInterface     — ESP WiFi abstraction (swappable for Ethernet)
 ├── TimeManager           — SNTP time sync with timezone support
 ├── CommandManager        — Pure dispatcher for commands registered by other managers
-├── MqttManager           — MQTT client connection + entity registration
 ├── Board                 — The selected board's hardware (LED, sensors, buses)
-├── HomeAssistantManager  — Publishes MQTT discovery for registered entities
 ├── UpdateManager         — Session-based updates to any partition by label
 └── WebServerManager      — HTTP + WebSocket server, static file serving
     ├── StaticFileHandler
@@ -182,73 +177,14 @@ g_appContext.getSystemManager().Init();
 g_appContext.getNetworkManager().Init();
 g_appContext.getTimeManager().Init();
 g_appContext.getCommandManager().Init();
-g_appContext.getMqttManager().Init();
 g_appContext.getBoard().Init();
-g_appContext.getHomeAssistantManager().Init();
 g_appContext.getUpdateManager().Init();
 g_appContext.getWebServerManager().Init();
 ```
 
-The `main.cpp` stays clean — just `Init()` calls. Hardware drivers live in the board's `Board` class; application managers (like `HomeAssistantManager`) reach them through `getBoard()` and wire them to MQTT for Home Assistant control.
+The `main.cpp` stays clean — just `Init()` calls. Hardware drivers live in the board's `Board` class; application managers reach them through `getBoard()`.
 
----
-
-## Home Assistant Integration
-
-When MQTT is enabled and a broker is configured, Strux automatically publishes [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) messages. Your device appears in Home Assistant without manual configuration.
-
-**Built-in entities:**
-
-| Entity | Type | Description |
-|--------|------|-------------|
-| LED | Light | On/off control of the board LED |
-| IP Address | Sensor | Device IP (diagnostic) |
-| WiFi Signal | Sensor | RSSI in dBm (diagnostic) |
-| Uptime | Sensor | Seconds since boot (diagnostic) |
-| Free Heap | Sensor | Available RAM in bytes (diagnostic) |
-| Reboot | Button | Restart the device remotely |
-
-### Adding your own HA entities
-
-The `MqttManager` is extensible. Any manager can register commands and discovery configs:
-
-```cpp
-// In your manager's Init():
-auto& mqtt = serviceProvider_.getMqttManager();
-
-// Handle commands from HA
-mqtt.RegisterCommand("my_thing", [this](const char* data, int len) {
-    // handle ON/OFF or JSON payload
-});
-
-// Register HA discovery (called on every MQTT connect)
-mqtt.RegisterDiscovery([this]() {
-    auto& mqtt = serviceProvider_.getMqttManager();
-    mqtt.PublishEntityDiscovery("switch", "my_thing", [&mqtt](JsonWriter& json) {
-        json.field("name", "My Thing");
-        // ... entity-specific fields
-    });
-});
-```
-
-**MQTT Settings** (configurable via web UI):
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `mqtt.enabled` | off | Enable MQTT connection |
-| `mqtt.broker` | — | Broker hostname or IP |
-| `mqtt.port` | 1883 | Broker port |
-| `mqtt.user` | — | Username (optional) |
-| `mqtt.pass` | — | Password (optional) |
-| `mqtt.prefix` | strux | Topic prefix (`{prefix}/{device_id}/...`) |
-
-**Topic structure:**
-
-```
-{prefix}/{device_id}/status    → "online" / "offline" (LWT)
-{prefix}/{device_id}/state     → JSON with sensor values
-{prefix}/{device_id}/set/#     → Incoming commands (e.g. set/reboot, set/led)
-```
+> **Looking for Home Assistant / MQTT?** That's deliberately not what Strux is for — [ESPHome](https://esphome.io/) does HA-native devices far better. Strux targets product firmware with its own web UI and logic. (An earlier version shipped MQTT + HA discovery; it lives on in git history if a fork wants it.)
 
 ---
 
@@ -284,11 +220,11 @@ All settings are stored in NVS (non-volatile storage) and configurable through t
 
 ```cpp
 // In your manager's header:
-inline static StringSetting broker_{ "mqtt.broker", "MQTT Broker", ""   };
-inline static Int32Setting  port_  { "mqtt.port",   "MQTT Port",   1883 };
+inline static StringSetting host_{ "myfeature.host", "My Feature Host", ""   };
+inline static Int32Setting  port_{ "myfeature.port", "My Feature Port", 1883 };
 
 // In your manager's Init():
-serviceProvider_.getSettingsManager().Register({ &broker_, &port_ });
+serviceProvider_.getSettingsManager().Register({ &host_, &port_ });
 
 // Anywhere in the owner — typed, no string keys:
 int32_t port = port_.Get();   // NVS value, or the default if unset
@@ -320,7 +256,7 @@ namespace BoardConfig
 
 ### Board
 
-Each board folder provides a [`Board`](main/hardware/boards/esp32_devkit/Board.h) class that owns every hardware driver instance (and bus host) and exposes the capability surface the application compiles against. Devices the application addresses by *meaning* go through small role interfaces in `hardware/interfaces/` — the included [`Led`](main/hardware/interfaces/Led.h) role is implemented by [`GpioLed`](main/hardware/drivers/GpioLed.h) and wired to a Home Assistant `light` entity. A board without the hardware binds a mock ([`MockLed`](main/hardware/drivers/MockLed.h)); a driver whose full API the application needs can be exposed directly as an escape hatch.
+Each board folder provides a [`Board`](main/hardware/boards/esp32_devkit/Board.h) class that owns every hardware driver instance (and bus host) and exposes the capability surface the application compiles against. Devices the application addresses by *meaning* go through small role interfaces in `hardware/interfaces/` — the included [`Led`](main/hardware/interfaces/Led.h) role is implemented by [`GpioLed`](main/hardware/drivers/GpioLed.h). A board without the hardware binds a mock ([`MockLed`](main/hardware/drivers/MockLed.h)); a driver whose full API the application needs can be exposed directly as an escape hatch.
 
 This is where you add your project-specific hardware:
 
@@ -349,9 +285,8 @@ This is a template — copy it, rename it, and build on top of it:
 2. **Update `BoardConfig.h`** (or add a new board folder under `hardware/boards/`) with your board's pin assignments
 3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in the board's `Board` class
 4. **Add application logic** as new managers in `Application/`
-5. **Register HA entities** via `MqttManager::RegisterCommand()` and `RegisterDiscovery()`
-6. **Extend the web UI** — add pages in `frontend/src/pages/`, register routes in the sidebar
-7. **Add settings** by declaring typed setting members in the owning manager and registering them in its `Init()` (see [Settings](#settings))
+5. **Extend the web UI** — add pages in `frontend/src/pages/`, register routes in the sidebar
+6. **Add settings** by declaring typed setting members in the owning manager and registering them in its `Init()` (see [Settings](#settings))
 
 ### Adding a New Manager
 
@@ -384,7 +319,7 @@ Handlers read the request payload from `in` and write their complete reply to `o
 
 1. Define pins in the board's `hardware/boards/<name>/BoardConfig.h`
 2. Create your driver in `hardware/drivers/` (e.g., `hardware/drivers/MyDisplay.h`), taking pins/buses as constructor parameters. If the application addresses the device by role, add or implement a small role interface in `hardware/interfaces/`
-3. Instantiate it in the board's `Board` class, expose it (role interface or concrete accessor), and wire up MQTT entities if needed
+3. Instantiate it in the board's `Board` class and expose it (role interface or concrete accessor)
 4. Add component dependencies in `main/CMakeLists.txt` (IDF built-ins) or `main/idf_component.yml` (managed components); board-only source files go in the board's `board.cmake` via `BOARD_SOURCES`
 
 See [`Led.h`](main/hardware/interfaces/Led.h), [`GpioLed.h`](main/hardware/drivers/GpioLed.h), and [`Board.h`](main/hardware/boards/esp32_devkit/Board.h) for a complete example.

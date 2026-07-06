@@ -40,7 +40,6 @@ function groupSettings(settings: SettingEntry[]): { label: string; prefix: strin
   const labels: Record<string, string> = {
     wifi: "WiFi",
     device: "Device",
-    mqtt: "MQTT",
     ntp: "Time & NTP",
   }
 

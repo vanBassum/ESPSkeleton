@@ -17,9 +17,7 @@ extern "C" void app_main(void)
     g_appContext.getNetworkManager().Init();
     g_appContext.getTimeManager().Init();
     g_appContext.getCommandManager().Init();
-    g_appContext.getMqttManager().Init();
     g_appContext.getBoard().Init();
-    g_appContext.getHomeAssistantManager().Init();
     g_appContext.getUpdateManager().Init();
     g_appContext.getWebServerManager().Init();
 

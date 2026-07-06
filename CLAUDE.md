@@ -38,7 +38,7 @@ Everything in firmware is a "manager" owned by `ApplicationContext` ([main/Appli
 - has copy/move deleted,
 - initializes in `Init()` guarded by an `InitState` (`lib/rtos/InitState.h`), not in the constructor.
 
-`main.cpp` is only ordered `Init()` calls — order matters (Console → Settings → System → Network → Time → Command → Mqtt → Board → HomeAssistant → Update → WebServer). Adding a manager means: create the class, add it to `ServiceProvider`, `ApplicationContext`, `main.cpp`, and `main/CMakeLists.txt` (both `SOURCE_FILES_LIST` and `INCLUDE_DIRS_LIST` — sources are listed explicitly, no globbing).
+`main.cpp` is only ordered `Init()` calls — order matters (Console → Settings → System → Network → Time → Command → Board → Update → WebServer). Adding a manager means: create the class, add it to `ServiceProvider`, `ApplicationContext`, `main.cpp`, and `main/CMakeLists.txt` (both `SOURCE_FILES_LIST` and `INCLUDE_DIRS_LIST` — sources are listed explicitly, no globbing).
 
 ### Layer separation
 
@@ -68,16 +68,16 @@ Log lines broadcast to all WebSocket clients via `ConsoleManager`. The frontend 
 Settings are typed leaf objects (`lib`-style, [TypedSettings.h](main/Application/SettingsManager/TypedSettings.h)) declared in the manager that owns them and registered at runtime:
 
 ```cpp
-inline static UInt32Setting port_{ "mqtt.port", "MQTT Port", 1883 };
+inline static UInt32Setting port_{ "myfeature.port", "My Feature Port", 1883 };
 // in Init():  settings.Register({ &port_ });
 uint32_t p = port_.Get();   // NVS value or the typed default
 ```
 
 `SettingsManager` is the NVS link; the settings UI is generated dynamically from the registered definitions.
 
-### Home Assistant integration
+### Deliberately out of scope
 
-`MqttManager` handles the MQTT connection; `HomeAssistantManager` publishes MQTT discovery. Any manager can register HA entities: `mqtt.RegisterCommand(name, handler)` for inbound commands and `mqtt.RegisterDiscovery(...)` / `PublishEntityDiscovery(...)` for discovery configs (re-published on every MQTT connect).
+MQTT and Home Assistant integration were removed 2026-07-06 (last present at tag-time commit `4a41d74`): devices that exist to live in Home Assistant are better served by ESPHome; Strux is for product firmware with its own UI and (planned) relay-based remote access (`docs/backlog/remote-access.md`). Do not reintroduce an MQTT/HA layer in the template — a fork that truly needs it can resurrect the old managers from git history.
 
 ## Conventions
 

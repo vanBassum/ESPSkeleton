@@ -15,8 +15,6 @@ set(SOURCE_FILES_LIST
     "Application/SystemManager/SystemManager.cpp"
     "Application/ConsoleManager/ConsoleManager.cpp"
     "Application/TimeManager/TimeManager.cpp"
-    "Application/MqttManager/MqttManager.cpp"
-    "Application/HomeAssistantManager/HomeAssistantManager.cpp"
     "lib/system/DateTime.cpp"
     "lib/system/TimeSpan.cpp"
 )
@@ -32,8 +30,6 @@ set(INCLUDE_DIRS_LIST
     "Application/SystemManager"
     "Application/ConsoleManager"
     "Application/TimeManager"
-    "Application/MqttManager"
-    "Application/HomeAssistantManager"
     "hardware"
     "lib"
     "lib/common"
@@ -57,7 +53,6 @@ set(COMPONENT_REQUIRES
     wear_levelling
     esp_driver_gpio
     mdns
-    espressif__mqtt
 )
 
 # ── Board selection ────────────────────────────────────────────
