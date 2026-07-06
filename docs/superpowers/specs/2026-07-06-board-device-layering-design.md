@@ -48,6 +48,7 @@ main/hardware/
     Board.h              # class Board — owns GpioLed, exposes Led& GetLed()
     Board.cpp            # added via BOARD_SOURCES in board.cmake
     board.cmake
+    sdkconfig.defaults   # optional per-board overlay (moved from root, see below)
 ```
 
 `main/Application/DeviceManager/` is deleted.
@@ -128,6 +129,20 @@ private:
   include-dir entries. `hardware` is already on the include path, so
   `interfaces/Led.h` and `drivers/GpioLed.h` resolve as-is.
 
+### Per-board sdkconfig moves into the board folder
+
+With `Board` in the board folder, the sdkconfig overlay is the last
+board-specific file left outside it. It moves in: the root
+`CMakeLists.txt` per-board block appends
+`main/hardware/boards/${BOARD}/sdkconfig.defaults` to
+`SDKCONFIG_DEFAULTS` when the file exists, replacing the root-level
+`sdkconfig.defaults.<board>` pattern. sdkconfig fragments cannot
+include one another, so CMake's `SDKCONFIG_DEFAULTS` list remains the
+composition point: root `sdkconfig.defaults` holds shared settings,
+the board file overlays and wins on conflicts. A board folder is then
+fully self-contained. (No `sdkconfig.defaults.<board>` file exists in
+the repo today, so nothing needs migrating.)
+
 ## Deferred (documented, not built)
 
 - **Semantic role enums** (`Sensor::Ambient` → instance mapping via
@@ -144,6 +159,8 @@ private:
   layer-separation section (board folder now provides `Board.h` +
   `Board.cpp`; `hardware/interfaces/` role-interface rules; mock
   idiom; escape-hatch rule), "adding a manager" note unaffected.
+  The sdkconfig sentence changes from "root-level
+  `sdkconfig.defaults.<board>`" to the in-folder overlay.
 - `BoardConfig.h` comment: drop the "set LED_PIN to -1" convention;
   boards without an LED omit the `GpioLed` member and bind `MockLed`.
 - Delete `docs/backlog/board-device-layering.md` (this spec resolves
