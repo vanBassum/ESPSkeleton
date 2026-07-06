@@ -348,7 +348,7 @@ esp_err_t WebServerManager::HandleLoginGet(httpd_req_t* req)
     char name[33] = {};
     self->serviceProvider_.getSystemManager().GetDeviceName(name, sizeof(name));
 
-    char body[80];
+    char body[128];   // 32-char name, worst-case JSON escaping
     BufferStream out(body, sizeof(body));
     JsonWriter json(out);
     json.beginObject();

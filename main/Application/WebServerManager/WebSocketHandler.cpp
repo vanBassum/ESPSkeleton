@@ -40,13 +40,13 @@ void WebSocketHandler::RegisterRoute(httpd_handle_t server)
 // Client tracking
 // ──────────────────────────────────────────────────────────────
 
-void WebSocketHandler::AddWsClient(int fd, const char* token)
+bool WebSocketHandler::AddWsClient(int fd, const char* token)
 {
     LOCK(wsMutex_);
 
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
     {
-        if (wsClients_[i] == fd) return;
+        if (wsClients_[i] == fd) return true;
     }
 
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
@@ -56,10 +56,11 @@ void WebSocketHandler::AddWsClient(int fd, const char* token)
             wsClients_[i] = fd;
             strlcpy(clientTokens_[i], token, sizeof(clientTokens_[i]));
             ESP_LOGI(TAG, "WS client added: fd=%d slot=%d", fd, i);
-            return;
+            return true;
         }
     }
     ESP_LOGW(TAG, "WS client rejected (max reached): fd=%d", fd);
+    return false;
 }
 
 void WebSocketHandler::RemoveWsClient(int fd)
@@ -199,7 +200,11 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
             ESP_LOGW(TAG, "WS upgrade refused: missing/invalid token");
             return ESP_FAIL;
         }
-        self->AddWsClient(httpd_req_to_sockfd(req), token);
+        // A client beyond the table would stay open but untracked: no
+        // broadcasts, no session refresh — a half-alive tab that GCs
+        // after 30 min. Refuse instead so it hits the reconnect loop.
+        if (!self->AddWsClient(httpd_req_to_sockfd(req), token))
+            return ESP_FAIL;
         return ESP_OK;
     }
 

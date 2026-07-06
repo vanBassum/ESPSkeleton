@@ -48,7 +48,8 @@ private:
 
     char wsBuf_[4096];
 
-    void AddWsClient(int fd, const char* token);
+    /// False when the client table is full — caller refuses the upgrade.
+    bool AddWsClient(int fd, const char* token);
     void RemoveWsClient(int fd);
 
     static esp_err_t HandleWs(httpd_req_t* req);
