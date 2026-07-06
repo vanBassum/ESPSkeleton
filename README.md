@@ -43,7 +43,6 @@ Strux/
 │   │   ├── ServiceProvider.h          # Dependency injection interface
 │   │   ├── CommandManager/            # Command dispatch (WebSocket + HTTP)
 │   │   ├── ConsoleManager/            # Log capture + WebSocket broadcast
-│   │   ├── DeviceManager/            # Hardware driver instances + HA entities
 │   │   ├── HomeAssistantManager/     # MQTT discovery publishing
 │   │   ├── MqttManager/              # MQTT connection + entity registration
 │   │   ├── NetworkManager/            # WiFi STA/AP with retry and fallback
@@ -56,9 +55,13 @@ Strux/
 │   │   ├── boards/                    # One folder per target board (-DBOARD=<name>)
 │   │   │   └── esp32_devkit/          # Generic ESP32 DevKit (default)
 │   │   │       ├── BoardConfig.h      # Pin definitions for this board
-│   │   │       └── board.cmake        # Board build fragment
+│   │   │       ├── Board.h/.cpp       # The board's Board class — owns all drivers
+│   │   │       └── board.cmake        # Board build fragment (adds Board.cpp)
+│   │   ├── interfaces/                # Role interfaces (application vocabulary)
+│   │   │   └── Led.h                  # Led role: Set/IsOn + On/Off/Toggle helpers
 │   │   └── drivers/                   # Shared drivers, usable by any board
-│   │       └── Led.h                  # GPIO LED driver (HA-controllable)
+│   │       ├── GpioLed.h              # GPIO implementation of the Led role
+│   │       └── MockLed.h              # Led role without hardware (state only)
 │   └── lib/                           # Reusable utilities
 │       ├── common/                    # Stream, MemoryStream, BufferStream, Fatal
 │       ├── json/                      # JsonWriter, JsonReader, JsonScope
@@ -75,8 +78,9 @@ Strux/
 
 | Folder | Contains | Changes when you... |
 |--------|----------|---------------------|
-| `hardware/boards/<name>/` | Pin definitions, board-specific setup, `board.cmake` | Swap or add a board |
-| `hardware/drivers/` | Board-independent chip/peripheral drivers | Add a peripheral |
+| `hardware/boards/<name>/` | Pin definitions, the board's `Board` class (owns all driver instances), `board.cmake`, optional `sdkconfig.defaults` overlay | Swap or add a board |
+| `hardware/interfaces/` | Role interfaces the application speaks (`Led`) — small, application vocabulary | Application expects a new capability |
+| `hardware/drivers/` | Board-independent chip/peripheral drivers implementing the roles | Add a peripheral |
 | `Application/` | Managers, business logic, orchestration, commands | Add features or change behavior |
 | `lib/` | RTOS wrappers, JSON, time utilities | Rarely — these are stable building blocks |
 
@@ -84,11 +88,11 @@ Strux/
 
 ### Multiple boards
 
-The target board is selected at configure time with `-DBOARD=<name>` (default: `esp32_devkit`). Only the selected board folder is put on the include path, so application code just includes `BoardConfig.h` and gets the right one. To support a new board:
+The target board is selected at configure time with `-DBOARD=<name>` (default: `esp32_devkit`). Only the selected board folder is put on the include path, so application code just includes `BoardConfig.h` or `Board.h` and gets the right one. The application never changes between boards: it compiles against the `Board` class's surface, and each board makes itself compatible — with real hardware or a mock. There is no `IBoard` base class; a board missing something the application uses simply fails to compile. To support a new board:
 
-1. Copy `main/hardware/boards/esp32_devkit/` to `main/hardware/boards/<your_board>/` and edit `BoardConfig.h`
+1. Copy `main/hardware/boards/esp32_devkit/` to `main/hardware/boards/<your_board>/` and edit `BoardConfig.h` and `Board.h`/`Board.cpp` (bind each role to a real driver or a `Mock*` one)
 2. Add extra board-only source files to `BOARD_SOURCES` in its `board.cmake` (optional)
-3. Add `sdkconfig.defaults.<your_board>` in the repo root if the board needs different flash size, PSRAM, or partitions (optional)
+3. Add `sdkconfig.defaults` in the board folder if the board needs different flash size, PSRAM, or partitions (optional)
 4. Build with `idf.py -DBOARD=<your_board> build`
 
 Shared chip drivers (sensors, displays, expanders) go in `main/hardware/drivers/`, parameterized through `BoardConfig` constants so every board can reuse them.
@@ -161,7 +165,7 @@ ApplicationContext (owns everything)
 ├── TimeManager           — SNTP time sync with timezone support
 ├── CommandManager        — Pure dispatcher for commands registered by other managers
 ├── MqttManager           — MQTT client connection + entity registration
-├── DeviceManager         — Hardware driver instances (LED, sensors, etc.)
+├── Board                 — The selected board's hardware (LED, sensors, buses)
 ├── HomeAssistantManager  — Publishes MQTT discovery for registered entities
 ├── UpdateManager         — Session-based updates to any partition by label
 └── WebServerManager      — HTTP + WebSocket server, static file serving
@@ -179,13 +183,13 @@ g_appContext.getNetworkManager().Init();
 g_appContext.getTimeManager().Init();
 g_appContext.getCommandManager().Init();
 g_appContext.getMqttManager().Init();
-g_appContext.getDeviceManager().Init();
+g_appContext.getBoard().Init();
 g_appContext.getHomeAssistantManager().Init();
 g_appContext.getUpdateManager().Init();
 g_appContext.getWebServerManager().Init();
 ```
 
-The `main.cpp` stays clean — just `Init()` calls. Hardware drivers live in the `DeviceManager`, which registers them with MQTT for Home Assistant control.
+The `main.cpp` stays clean — just `Init()` calls. Hardware drivers live in the board's `Board` class; application managers (like `HomeAssistantManager`) reach them through `getBoard()` and wire them to MQTT for Home Assistant control.
 
 ---
 
@@ -314,18 +318,24 @@ namespace BoardConfig
 }
 ```
 
-### DeviceManager
+### Board
 
-The [`DeviceManager`](main/Application/DeviceManager/) owns hardware driver instances and wires them up to MQTT/HA. The included [`Led`](main/hardware/drivers/Led.h) driver is registered as a Home Assistant `light` entity — you can turn it on/off from HA.
+Each board folder provides a [`Board`](main/hardware/boards/esp32_devkit/Board.h) class that owns every hardware driver instance (and bus host) and exposes the capability surface the application compiles against. Devices the application addresses by *meaning* go through small role interfaces in `hardware/interfaces/` — the included [`Led`](main/hardware/interfaces/Led.h) role is implemented by [`GpioLed`](main/hardware/drivers/GpioLed.h) and wired to a Home Assistant `light` entity. A board without the hardware binds a mock ([`MockLed`](main/hardware/drivers/MockLed.h)); a driver whose full API the application needs can be exposed directly as an escape hatch.
 
 This is where you add your project-specific hardware:
 
 ```cpp
-class DeviceManager {
-    Led led_;
-    // Add your drivers:
-    // DPS5020 dps5020_;
-    // TemperatureSensor sensor_;
+class Board {
+public:
+    Led& GetLed() { return led_; }
+    // Add role accessors, or concrete ones when the app needs the full API:
+    // TemperatureSensor& GetTemperatureSensor() { return sensor_; }
+    // Dps5020& GetDps5020() { return dps5020_; }
+
+private:
+    GpioLed led_{ BoardConfig::LED_PIN, BoardConfig::LED_ACTIVE_HIGH };
+    // Ds18b20 sensor_{ oneWire_ };
+    // Dps5020 dps5020_{ uart_ };
 };
 ```
 
@@ -337,7 +347,7 @@ This is a template — copy it, rename it, and build on top of it:
 
 1. **Rename the project** in `CMakeLists.txt` (`project(YourProject)`) and `.github/workflows/release.yml`
 2. **Update `BoardConfig.h`** (or add a new board folder under `hardware/boards/`) with your board's pin assignments
-3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in `DeviceManager`
+3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in the board's `Board` class
 4. **Add application logic** as new managers in `Application/`
 5. **Register HA entities** via `MqttManager::RegisterCommand()` and `RegisterDiscovery()`
 6. **Extend the web UI** — add pages in `frontend/src/pages/`, register routes in the sidebar
@@ -373,11 +383,11 @@ Handlers read the request payload from `in` and write their complete reply to `o
 ### Adding a Hardware Driver
 
 1. Define pins in the board's `hardware/boards/<name>/BoardConfig.h`
-2. Create your driver in `hardware/drivers/` (e.g., `hardware/drivers/MyDisplay.h`), parameterized through `BoardConfig` constants
-3. Instantiate it in `DeviceManager` and wire up MQTT entities if needed
+2. Create your driver in `hardware/drivers/` (e.g., `hardware/drivers/MyDisplay.h`), taking pins/buses as constructor parameters. If the application addresses the device by role, add or implement a small role interface in `hardware/interfaces/`
+3. Instantiate it in the board's `Board` class, expose it (role interface or concrete accessor), and wire up MQTT entities if needed
 4. Add component dependencies in `main/CMakeLists.txt` (IDF built-ins) or `main/idf_component.yml` (managed components); board-only source files go in the board's `board.cmake` via `BOARD_SOURCES`
 
-See [`Led.h`](main/hardware/drivers/Led.h) and [`DeviceManager.cpp`](main/Application/DeviceManager/DeviceManager.cpp) for a complete example.
+See [`Led.h`](main/hardware/interfaces/Led.h), [`GpioLed.h`](main/hardware/drivers/GpioLed.h), and [`Board.h`](main/hardware/boards/esp32_devkit/Board.h) for a complete example.
 
 ---
 

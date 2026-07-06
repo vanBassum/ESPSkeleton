@@ -10,7 +10,8 @@ namespace BoardConfig
 {
     // LED
     // GPIO2 is the built-in LED on most ESP32 DevKit boards.
-    // Set to -1 if the board has no LED.
+    // A board without an LED drops these constants and binds MockLed
+    // in its Board class instead (see hardware/interfaces/Led.h).
     static constexpr int LED_PIN = 2;
     static constexpr bool LED_ACTIVE_HIGH = true;
 

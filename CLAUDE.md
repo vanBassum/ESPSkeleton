@@ -38,14 +38,15 @@ Everything in firmware is a "manager" owned by `ApplicationContext` ([main/Appli
 - has copy/move deleted,
 - initializes in `Init()` guarded by an `InitState` (`lib/rtos/InitState.h`), not in the constructor.
 
-`main.cpp` is only ordered `Init()` calls — order matters (Console → Settings → System → Network → Time → Command → Mqtt → Device → HomeAssistant → Update → WebServer). Adding a manager means: create the class, add it to `ServiceProvider`, `ApplicationContext`, `main.cpp`, and `main/CMakeLists.txt` (both `SOURCE_FILES_LIST` and `INCLUDE_DIRS_LIST` — sources are listed explicitly, no globbing).
+`main.cpp` is only ordered `Init()` calls — order matters (Console → Settings → System → Network → Time → Command → Mqtt → Board → HomeAssistant → Update → WebServer). Adding a manager means: create the class, add it to `ServiceProvider`, `ApplicationContext`, `main.cpp`, and `main/CMakeLists.txt` (both `SOURCE_FILES_LIST` and `INCLUDE_DIRS_LIST` — sources are listed explicitly, no globbing).
 
 ### Layer separation
 
 - `main/hardware/` — changes when you swap the board. Split into:
-  - `boards/<name>/` — one folder per target board: `BoardConfig.h` (pins/constants) plus a `board.cmake` fragment. Selected with `-DBOARD=<name>`; only the chosen board folder is on the include path, so `#include "BoardConfig.h"` resolves to it. An optional root-level `sdkconfig.defaults.<board>` overlays the common `sdkconfig.defaults`.
-  - `drivers/` — board-independent chip/peripheral drivers shared by boards (e.g. `Led.h`), parameterized via `BoardConfig` constants.
-- `main/Application/` — changes when you add a feature. Managers and business logic. Hardware driver *instances* live in `DeviceManager`, which exposes typed accessors (`getLed()`).
+  - `boards/<name>/` — one folder per target board: `BoardConfig.h` (pins/constants), `Board.h`/`Board.cpp` (the board's `Board` class — owns every driver instance and bus host, exposes the capability surface the application compiles against; `Board.cpp` is added via `BOARD_SOURCES` in the `board.cmake` fragment), and an optional `sdkconfig.defaults` overlaying the common root one. Selected with `-DBOARD=<name>`; only the chosen board folder is on the include path, so `#include "BoardConfig.h"` and `#include "Board.h"` resolve to it. There is no `IBoard` base class — the contract is duck-typed: a board missing a method the application uses fails to compile for that board.
+  - `interfaces/` — role interfaces in application vocabulary (`Led`), 1–3 pure-virtual methods each, never chip or GPIO vocabulary. Drivers implement them (`GpioLed : Led`); a board without the hardware binds a mock (`MockLed`). Add a role interface only when application code speaks in that role; expose a concrete driver accessor from `Board` instead when the application needs a driver's full API (escape hatch). Multi-instance roles get a semantic enum (`Sensor::Ambient`, never `Sensor_2`) mapped by the board — introduce it with the first multi-instance role.
+  - `drivers/` — board-independent chip/peripheral drivers shared by boards (e.g. `GpioLed.h`), taking pins/buses as constructor parameters (passed by the board from its `BoardConfig` constants).
+- `main/Application/` — changes when you add a feature. Managers and business logic. Hardware driver *instances* live in the board's `Board` class, reached via `ServiceProvider::getBoard()`.
 - `main/lib/` — stable building blocks: RTOS wrappers (`Task`, `Mutex`, `Timer`), `Stream`/`MemoryStream`/`BufferStream`, `JsonWriter`/`JsonReader`, `DateTime`/`TimeSpan`. Rarely changes.
 
 Note: `board.cmake` fragments cannot change component `REQUIRES` (ESP-IDF resolves those in an early pass without the `BOARD` cache var). IDF built-in deps go in `COMPONENT_REQUIRES` in [main/CMakeLists.txt](main/CMakeLists.txt); managed components go in [main/idf_component.yml](main/idf_component.yml).

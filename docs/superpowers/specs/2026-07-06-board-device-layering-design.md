@@ -1,7 +1,7 @@
 # Board/device layering — design
 
 **Date:** 2026-07-06
-**Status:** Approved direction, pending spec review
+**Status:** Implemented 2026-07-06
 **Replaces:** `docs/backlog/board-device-layering.md`
 **Sketch:** `ideas/board-example.h` (delete after implementation)
 
