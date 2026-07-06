@@ -26,7 +26,7 @@ pnpm build        # tsc -b && vite build && gzip into ../www (embedded in flash 
 pnpm typecheck    # tsc --noEmit
 ```
 
-There are no automated tests; verification is building and flashing a device. Design notes and deferred ideas live in `docs/backlog/`.
+There are no automated tests; verification is building and flashing a device. `docs/backlog/` holds things actually planned to be done; `docs/ideas/` holds set-aside sketches of how something *could* be solved someday — suggestions, not commitments.
 
 ## Architecture
 
