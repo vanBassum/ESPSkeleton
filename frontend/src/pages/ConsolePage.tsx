@@ -3,6 +3,7 @@ import { backend } from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
 import { TerminalIcon, TrashIcon, ArrowDownIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { toast } from "sonner"
 
 export default function ConsolePage() {
   const connection = useConnectionStatus()
@@ -14,7 +15,11 @@ export default function ConsolePage() {
   // Fetch history on connect
   useEffect(() => {
     if (connection !== "connected") return
-    backend.getLogs().then((r) => setLines(r.lines)).catch(() => {})
+    backend.getLogs().then((r) => setLines(r.lines)).catch((e) =>
+      toast.error("Failed to load log history", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      }),
+    )
   }, [connection])
 
   // Subscribe to live log broadcasts

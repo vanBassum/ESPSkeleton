@@ -6,10 +6,15 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
+import { toast } from "sonner"
 import Editor from "react-simple-code-editor"
 import Prism from "prismjs"
 import "prismjs/components/prism-json"
 import "prismjs/themes/prism-tomorrow.css"
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : "Unknown error"
+}
 
 // Group settings by prefix (e.g. "wifi.ssid" → "wifi", "mqtt.broker" → "mqtt")
 function groupSettings(settings: SettingEntry[]): { label: string; prefix: string; items: SettingEntry[] }[] {
@@ -87,7 +92,7 @@ export default function SettingsPage() {
     backend.getSettings().then((r) => {
       setSettings(r.settings)
       setDirty(false)
-    }).catch(() => {})
+    }).catch((e) => toast.error("Failed to load settings", { description: errorMessage(e) }))
   }, [connection])
 
   useEffect(() => {
@@ -111,6 +116,8 @@ export default function SettingsPage() {
   async function handleChange(key: string, value: string) {
     try {
       await backend.setSetting(key, value)
+      // Only mirror the value locally once the device accepted it — a
+      // failed write must not leave the UI claiming a change it never made.
       setSettings((prev) =>
         prev.map((s) =>
           s.key === key
@@ -119,8 +126,8 @@ export default function SettingsPage() {
         ),
       )
       setDirty(true)
-    } catch {
-      // ignore
+    } catch (e) {
+      toast.error(`Failed to update ${key}`, { description: errorMessage(e) })
     }
   }
 
@@ -129,8 +136,8 @@ export default function SettingsPage() {
     try {
       await backend.saveSettings()
       setDirty(false)
-    } catch {
-      // ignore
+    } catch (e) {
+      toast.error("Failed to save settings", { description: errorMessage(e) })
     }
     setSaving(false)
   }
@@ -140,8 +147,8 @@ export default function SettingsPage() {
       const r = await backend.getSettings()
       setSettings(r.settings)
       setDirty(false)
-    } catch {
-      // ignore
+    } catch (e) {
+      toast.error("Failed to reload settings", { description: errorMessage(e) })
     }
   }
 
@@ -193,7 +200,11 @@ export default function SettingsPage() {
               variant="outline"
               size="sm"
               className="text-destructive hover:text-destructive"
-              onClick={() => { if (confirm("Reboot the device?")) backend.send("reboot").catch(() => {}) }}
+              onClick={() => {
+                if (confirm("Reboot the device?")) {
+                  backend.reboot().catch((e) => toast.error("Reboot command failed", { description: errorMessage(e) }))
+                }
+              }}
             >
               <PowerIcon className="mr-1.5 size-3.5" />
               Reboot
@@ -394,9 +405,14 @@ function WifiSsidInput({
           }
         }
         setNetworks([...best.values()].sort((a, b) => b.rssi - a.rssi))
+      } else {
+        // A failed scan must not masquerade as "No networks found".
+        setShowScan(false)
+        toast.error("WiFi scan failed", { description: "The device reported a scan error." })
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      setShowScan(false)
+      toast.error("WiFi scan failed", { description: errorMessage(e) })
     }
     setScanning(false)
   }

@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react"
 import { backend, type Partition } from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
-import { UploadIcon, DownloadIcon } from "lucide-react"
+import { UploadIcon, DownloadIcon, RefreshCwIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { toast } from "sonner"
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : "Unknown error"
+}
 
 function fmtSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -14,14 +19,17 @@ function fmtSize(bytes: number): string {
 export default function FirmwarePage() {
   const connection = useConnectionStatus()
   const [partitions, setPartitions] = useState<Partition[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [restartPending, setRestartPending] = useState(false)
 
   function refresh() {
     backend
       .getPartitions()
-      .then((r) => { setPartitions(r.partitions); setLoadError(null) })
-      .catch((e) => setLoadError(e instanceof Error ? e.message : "Unknown error"))
+      .then((r) => { setPartitions(r.partitions); setLoadFailed(false) })
+      .catch((e) => {
+        setLoadFailed(true)
+        toast.error("Failed to load partitions", { description: errorMessage(e) })
+      })
   }
 
   useEffect(() => {
@@ -60,8 +68,14 @@ export default function FirmwarePage() {
               />
             ))}
           </ul>
-        ) : loadError ? (
-          <p className="p-6 text-sm text-red-500">Failed to load partitions: {loadError}</p>
+        ) : loadFailed ? (
+          <div className="flex items-center justify-between p-6">
+            <p className="text-sm text-muted-foreground">Couldn't load partitions.</p>
+            <Button variant="outline" size="sm" onClick={refresh}>
+              <RefreshCwIcon className="mr-1.5 size-3.5" />
+              Retry
+            </Button>
+          </div>
         ) : (
           <p className="p-6 text-sm text-muted-foreground">Loading...</p>
         )}
@@ -99,7 +113,6 @@ function PartitionRow({
   const fileRef = useRef<HTMLInputElement>(null)
   const [progress, setProgress] = useState<number | null>(null)
   const [downProgress, setDownProgress] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
 
   const canUpload = p.uploadable && !p.running
   const uploading = progress !== null
@@ -109,13 +122,12 @@ function PartitionRow({
     e.target.value = ""
     if (!file || !canUpload) return
 
-    setError(null)
     setProgress(0)
     try {
       await backend.uploadPartition(p.label, file, setProgress)
       onAfterUpload()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed")
+      toast.error(`Upload to ${p.label} failed`, { description: errorMessage(err) })
     } finally {
       setProgress(null)
     }
@@ -167,11 +179,10 @@ function PartitionRow({
             size="sm"
             disabled={downProgress !== null}
             onClick={() => {
-              setError(null)
               setDownProgress(0)
               backend
                 .downloadPartitionFile(p.label, p.size, setDownProgress)
-                .catch((e) => setError(e.message))
+                .catch((e) => toast.error(`Download of ${p.label} failed`, { description: errorMessage(e) }))
                 .finally(() => setDownProgress(null))
             }}
           >
@@ -210,8 +221,6 @@ function PartitionRow({
           </div>
         </div>
       )}
-
-      {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
     </li>
   )
 }
