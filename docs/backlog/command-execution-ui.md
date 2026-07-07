@@ -1,7 +1,12 @@
 # Command execution from the web UI
 
 Idea (Bas, 2026-07-07): let the web UI execute CommandManager commands
-interactively. Two shapes under discussion:
+interactively.
+
+**Decided 2026-07-07: shape B — a dedicated workbench page.** No log
+split-view (not needed); the console never grows an input. Design
+still being brainstormed — no plan yet. Original options for the
+record:
 
 **A — input line on the Console page.** Terminal/REPL feel. Problem:
 the console is the device's stdout stream; command replies are
