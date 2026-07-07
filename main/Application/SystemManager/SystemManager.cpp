@@ -36,7 +36,7 @@ void SystemManager::GetDeviceName(char* out, size_t maxLen)
 {
     name_.Get(out, maxLen);
     if (out[0] == '\0')
-        snprintf(out, maxLen, "Strux");
+        snprintf(out, maxLen, "%s", esp_app_get_description()->project_name);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -54,6 +54,10 @@ void SystemManager::Cmd_Info(Stream& in, Stream& out)
     JsonObject resp(out);
 
     const esp_app_desc_t* app = esp_app_get_description();
+
+    char deviceName[32] = {};
+    GetDeviceName(deviceName, sizeof(deviceName));
+    resp.field("name", deviceName);
 
     resp.field("project", app->project_name);
     resp.field("firmware", app->version);

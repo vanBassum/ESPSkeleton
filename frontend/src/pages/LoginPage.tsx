@@ -12,7 +12,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
-  const [deviceName, setDeviceName] = useState("Strux")
+  const [deviceName, setDeviceName] = useState("…")
 
   useEffect(() => {
     backend.getLoginInfo().then((res) => {

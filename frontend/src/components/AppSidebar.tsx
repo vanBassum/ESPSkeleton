@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import { HomeIcon, TerminalIcon, SettingsIcon, DownloadIcon } from "lucide-react"
 import {
   Sidebar,
@@ -48,11 +49,16 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
   const release = useLatestRelease()
   const updateAvailable = info && release && isNewerVersion(info.firmware, release.version)
 
+  // Browser tab title follows the device name (login page covers pre-auth).
+  useEffect(() => {
+    if (info?.name) document.title = info.name
+  }, [info?.name])
+
   return (
     <Sidebar>
       <SidebarHeader className="px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">Strux</span>
+          <span className="text-sm font-semibold">{info?.name ?? "…"}</span>
           <PreReleaseBadge version={info?.firmware} />
         </div>
       </SidebarHeader>

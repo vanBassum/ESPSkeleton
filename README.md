@@ -281,7 +281,7 @@ private:
 
 This is a template — copy it, rename it, and build on top of it:
 
-1. **Rename the project** in `CMakeLists.txt` (`project(YourProject)`) and `.github/workflows/release.yml`
+1. **Rename the project** in `CMakeLists.txt` (`project(YourProject)`), `.github/workflows/release.yml`, and `frontend/src/config.ts` (dev-server host + GitHub repo for the release check) — the UI itself needs no renaming: it shows the device name and project name reported by the firmware
 2. **Update `BoardConfig.h`** (or add a new board folder under `hardware/boards/`) with your board's pin assignments
 3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in the board's `Board` class
 4. **Add application logic** as new managers in `Application/`

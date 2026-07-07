@@ -1,6 +1,8 @@
 // Singleton backend service — all communication over a single WebSocket.
 
-const DEV_HOST = "strux.local"
+import { DEV_HOST } from "@/config"
+
+const TOKEN_KEY = "device.token"
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -31,7 +33,7 @@ class BackendService {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private connecting: Promise<void> | null = null
   private _status: ConnectionStatus = "disconnected"
-  private token: string | null = sessionStorage.getItem("strux.token")
+  private token: string | null = sessionStorage.getItem(TOKEN_KEY)
   private authHandlers = new Set<AuthHandler>()
   private _authenticated = false
 
@@ -63,7 +65,7 @@ class BackendService {
 
   private clearAuth() {
     this.token = null
-    sessionStorage.removeItem("strux.token")
+    sessionStorage.removeItem(TOKEN_KEY)
     this.setAuthenticated(false)
     this.ws?.close()
   }
@@ -346,7 +348,7 @@ class BackendService {
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     const { token } = (await res.json()) as { token: string }
     this.token = token
-    sessionStorage.setItem("strux.token", token)
+    sessionStorage.setItem(TOKEN_KEY, token)
     this.setAuthenticated(true)
     this.connect()
     return true
@@ -488,6 +490,7 @@ export const backend = instance
 // ── Types ────────────────────────────────────────────────────────
 
 export interface DeviceInfo {
+  name: string
   project: string
   firmware: string
   idf: string

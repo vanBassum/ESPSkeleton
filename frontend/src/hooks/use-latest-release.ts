@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { GITHUB_REPO } from "@/config"
 
 export interface ReleaseInfo {
   version: string
@@ -6,13 +7,11 @@ export interface ReleaseInfo {
   url: string
 }
 
-const REPO = "vanBassum/Strux"
-
 export function useLatestRelease() {
   const [release, setRelease] = useState<ReleaseInfo | null>(null)
 
   useEffect(() => {
-    fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+    fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (!data?.tag_name) return
