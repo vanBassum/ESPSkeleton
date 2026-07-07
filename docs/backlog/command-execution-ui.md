@@ -24,6 +24,21 @@ Enabler worth doing with either: CommandManager has no introspection —
 a `listCommands` command (walk the registration chain, return names)
 would give the UI autocomplete/discovery.
 
-Open: which shape (or B now, A as sugar later); whether the workbench
-also shows the live log alongside (split view) since command effects
-often appear in the log.
+## Direction sketch (Bas, 2026-07-07 — thoughts incomplete, parked)
+
+Start minimal and grow:
+
+1. **v1 — one big box** showing what happens: sent commands and their
+   replies. Nothing else. **All** commands executable — including the
+   binary/transfer ones (firmware download etc.), not just the JSON
+   dialect. Open question that raises: do we need protection against
+   huge replies flooding/crashing the page (truncate/preview
+   megabyte-scale payloads)? Undecided.
+2. **Then** `listCommands` introspection (walk CommandManager's chain,
+   names only).
+3. **Maybe later — Scalar/Swagger-like**: a card per command with
+   editable fields instead of raw JSON. Requires per-command schemas,
+   which don't exist (handlers parse payloads ad hoc) — "too wild for
+   now".
+
+Parked here until the thinking completes; no plan yet.
