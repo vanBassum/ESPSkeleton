@@ -47,13 +47,6 @@ private:
 
     void TouchClient(int fd);
 
-    // Fragment buffer for streamed command replies: filled and flushed as a WS
-    // fragment each time it fills, so a reply is no longer capped at this size
-    // (see WsResponseStream in the .cpp). One reply owns the socket for its
-    // duration — head-of-line blocking, accepted until multiplexing lands.
-    // (Legacy TEXT path; removed in the session-transport cutover.)
-    char wsBuf_[4096];
-
     // Session reply flush window (off the httpd-task stack; reused, single
     // session at a time). NOT payload-proportional — a small batch buffer that
     // amortizes JsonWriter's tiny writes into WS frames; a reply of any size
@@ -66,11 +59,9 @@ private:
     void RemoveWsClient(int fd);
 
     static esp_err_t HandleWs(httpd_req_t* req);
-    void DispatchMessage(httpd_req_t* req, int32_t id, const char* type, const char* json);
 
-    // New binary session transport. A request is one binary chunk; the reply
-    // streams back as chunks on the same session id. Runs alongside the TEXT
-    // path until the frontend is migrated (then the TEXT request path is removed).
+    // Binary session transport. A request is one binary chunk; the reply
+    // streams back as chunks on the same session id.
     void HandleBinary(httpd_req_t* req, const uint8_t* frame, size_t len);
     void OnSessionOpened(Session& session) override;
 };

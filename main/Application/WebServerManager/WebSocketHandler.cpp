@@ -3,11 +3,9 @@
 #include "WebServerManager.h"
 #include "JsonHelpers.h"
 #include "MemoryStream.h"
-#include "JsonWriter.h"
 #include "esp_log.h"
 
 #include <algorithm>
-#include <cinttypes>
 #include <cstring>
 
 static constexpr const char* TAG = "WebSocketHandler";
@@ -24,77 +22,6 @@ static constexpr const char* TAG = "WebSocketHandler";
 extern "C" esp_err_t httpd_ws_get_frame_type(httpd_req_t* req);
 
 namespace {
-
-// Streams a single command reply over the WS, flushing each buffer-full as a
-// WebSocket fragment instead of capping the reply at the buffer size. A reply
-// that fits in one buffer is sent as one unfragmented TEXT frame — identical to
-// the old fixed-buffer path; larger replies fragment (TEXT fin=0 → CONTINUE
-// fin=0 … → CONTINUE fin=1). The caller must hold sendMutex_ for the whole
-// message so a broadcast can't interleave between fragments.
-class WsResponseStream : public Stream
-{
-    httpd_req_t* req_;
-    char* buf_;
-    size_t cap_;
-    size_t len_ = 0;
-    bool firstSent_ = false;   // at least one fragment already on the wire
-    bool failed_ = false;
-
-    void sendFrame(bool final)
-    {
-        httpd_ws_frame_t frame = {};
-        frame.payload = reinterpret_cast<uint8_t*>(buf_);
-        frame.len = len_;
-        if (!firstSent_ && final)
-        {
-            // Whole reply fit in one buffer: unfragmented TEXT, as before.
-            frame.type = HTTPD_WS_TYPE_TEXT;
-        }
-        else
-        {
-            frame.type = firstSent_ ? HTTPD_WS_TYPE_CONTINUE : HTTPD_WS_TYPE_TEXT;
-            frame.fragmented = true;
-            frame.final = final;
-        }
-        if (!failed_ && httpd_ws_send_frame(req_, &frame) != ESP_OK)
-            failed_ = true;
-        firstSent_ = true;
-        len_ = 0;
-    }
-
-public:
-    WsResponseStream(httpd_req_t* req, char* buf, size_t cap)
-        : req_(req), buf_(buf), cap_(cap) {}
-
-    size_t write(const void* data, size_t size, TickType_t timeout = portMAX_DELAY) override
-    {
-        (void)timeout;
-        const char* p = static_cast<const char*>(data);
-        size_t remaining = size;
-        while (remaining > 0)
-        {
-            size_t n = std::min(cap_ - len_, remaining);
-            memcpy(buf_ + len_, p, n);
-            len_ += n;
-            p += n;
-            remaining -= n;
-            if (len_ == cap_)          // buffer full → flush a non-final fragment
-                sendFrame(false);
-        }
-        return size;
-    }
-
-    size_t read(void*, size_t, TickType_t = portMAX_DELAY) override { return 0; }
-
-    // Discard buffered bytes. Only valid before anything has been flushed —
-    // used on the unknown-command path, where Execute wrote nothing.
-    void reset() { len_ = 0; }
-
-    // Emit the final frame, closing the (possibly fragmented) message.
-    void finish() { sendFrame(true); }
-
-    bool failed() const { return failed_; }
-};
 
 // Feeds a command's `Stream& in` from WS frames that arrive AFTER the control
 // frame, drained synchronously on the httpd task. The body is one fragmented
@@ -407,61 +334,13 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
         return ESP_OK;
     }
 
-    if (frame.type != HTTPD_WS_TYPE_TEXT || frame.len == 0)
-        return ESP_OK;
-
-    buf[frame.len] = '\0';
-    const char* json = reinterpret_cast<const char*>(buf);
-
-    int32_t id = ExtractJsonInt(json, "id");
-    char type[32] = {};
-    ExtractJsonString(json, "type", type, sizeof(type));
-
-    if (id <= 0 || type[0] == '\0')
-        return ESP_OK;
-
-    self->DispatchMessage(req, id, type, json);
+    // Inbound TEXT frames are no longer used: requests are binary session
+    // chunks and no client sends text. Ignore any stray text frame.
     return ESP_OK;
 }
 
-void WebSocketHandler::DispatchMessage(httpd_req_t* req, int32_t id, const char* type, const char* json)
-{
-    // Hold sendMutex_ for the whole (possibly fragmented) reply: the handler
-    // streams fragments through `out` as it runs, and a log broadcast on the
-    // ConsoleBroadcast task must not interleave its own frame between ours.
-    LOCK(sendMutex_);
-
-    WsResponseStream out(req, wsBuf_, sizeof(wsBuf_));
-
-    // Envelope by concatenation: the handler writes one complete JSON
-    // object into `out`; we wrap it as {"id":N,"payload":<object>}.
-    char head[48];
-    int n = snprintf(head, sizeof(head), "{\"id\":%" PRId32 ",\"payload\":", id);
-    out.write(head, n);
-
-    MemoryStream in(json, strlen(json));
-
-    if (commandManager_ && commandManager_->Execute(type, in, out))
-    {
-        out.write("}", 1);
-    }
-    else
-    {
-        // Unknown command: Execute wrote nothing and the head is still buffered
-        // (unflushed), so we can still turn the reply into an error object.
-        out.reset();
-        JsonWriter err(out);   // reuse JsonWriter's escaping for the type echo
-        err.beginObject();
-        err.field("id", id);
-        err.field("error", type);
-        err.endObject();
-    }
-
-    out.finish();
-}
-
 // ──────────────────────────────────────────────────────────────
-// Binary session transport (new path). One inbound binary frame = one
+// Binary session transport. One inbound binary frame = one
 // session chunk; step-1 requests are a single chunk dispatched synchronously.
 // ──────────────────────────────────────────────────────────────
 
