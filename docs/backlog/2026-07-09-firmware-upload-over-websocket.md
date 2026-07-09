@@ -18,24 +18,26 @@ per-channel streaming) that reason is gone.
   writes, lazy sector erase — the flash-write path is unchanged, only its feed
   changes).
 - The `updateBegin`/`updateWrite`/`updateEnd` **session collapses into one
-  streamed command** (per `2026-07-03-multiplexed-channels.md`): ordering within one stream
-  is free, finalize runs at end-of-stream. The cross-request session state only
-  ever existed because HTTP forced the image into many requests.
+  streamed command** (enabled by `2026-07-09-ws-inbound-streaming.md`): ordering
+  within one stream is free, finalize runs at end-of-stream. The cross-request
+  session state only ever existed because HTTP forced the image into many
+  requests.
 - Progress reported over the WS (channel byte count) instead of XHR upload
   progress.
 
 ## Trade-offs / decisions
 
-- Inbound binary framing scheme (how a channel's binary chunks are tagged) —
-  shared with download; defined in `2026-07-03-multiplexed-channels.md`.
+- Inbound binary framing — defined in `2026-07-09-ws-inbound-streaming.md`
+  (simple while single-in-flight; channel ids only arrive with multiplexing).
 - Chunk size vs. throughput; backpressure so the transport can't outrun the
   flash write.
 - Keep esp_ota image validation / running-slot refusal exactly as today.
 
 ## Depends on
 
-`2026-07-03-multiplexed-channels.md` (binary + inbound streaming, worker-pool execution).
-Blocks `2026-07-09-retire-api-command-route.md`.
+`2026-07-09-ws-inbound-streaming.md` (the base — streamed request body).
+Interleaving with other commands is deferred to
+`2026-07-03-multiplexed-channels.md`. Blocks `2026-07-09-retire-api-command-route.md`.
 
 ## Done when
 
