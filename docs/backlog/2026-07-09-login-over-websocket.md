@@ -42,8 +42,8 @@ token on — login has to move onto the socket.
 
 ## Depends on
 
-`multiplexed-channels.md` (login is a normal command on the multiplexed
-transport). Redesigns `webserver-login`. See also `remote-access.md` (the relay
+`2026-07-03-multiplexed-channels.md` (login is a normal command on the multiplexed
+transport). Redesigns `webserver-login`. See also `2026-07-03-remote-access.md` (the relay
 needs the server's own auth — open fork on whether it reuses this WS model).
 
 ## Done when

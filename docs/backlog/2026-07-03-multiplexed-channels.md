@@ -25,7 +25,7 @@ during a 12 s flash write nothing else would run anyway. Budget:
 per-channel buffers + backpressure + task stacks on 320 KB RAM.
 
 **When:** as the core of the relay transport design (see
-`remote-access.md` — this subsumes its open "envelope request ids"
+`2026-07-03-remote-access.md` — this subsumes its open "envelope request ids"
 point). Not worth retrofitting today's WS first: only the update flow
 needed chunking and it lives in one frontend function; browsers get
 parallelism free via extra HTTP connections.

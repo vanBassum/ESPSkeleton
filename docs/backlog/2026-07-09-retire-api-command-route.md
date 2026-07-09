@@ -17,7 +17,7 @@ talk to the device → the one WS.** Two payoffs:
   WS (`httpd_sock_err: recv 104` / ECONNRESET). One long-lived socket per client
   makes that whole class of bug disappear.
 - **Trivial remote bridging.** A relay only has to forward one socket per device
-  (see `remote-access.md`), understanding nothing.
+  (see `2026-07-03-remote-access.md`), understanding nothing.
 
 ## How
 
@@ -41,7 +41,7 @@ talk to the device → the one WS.** Two payoffs:
 
 `2026-07-09-login-over-websocket.md`, `2026-07-09-firmware-upload-over-websocket.md`,
 `2026-07-09-partition-download-over-websocket.md` (all must migrate off first).
-Rides `multiplexed-channels.md`.
+Rides `2026-07-03-multiplexed-channels.md`.
 
 ## Done when
 

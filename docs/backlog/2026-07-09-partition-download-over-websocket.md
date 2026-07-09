@@ -21,16 +21,16 @@ the need for the second connection.
 ## Trade-offs / decisions
 
 - Outbound binary framing (channel-tagged binary frames) — shared with upload;
-  per `multiplexed-channels.md`.
+  per `2026-07-03-multiplexed-channels.md`.
 - Fairness / yielding between chunks so a big download can't starve status polls
   — this interleaving is the whole point, and it only works if handler execution
   is off the transport task (the worker-pool prerequisite in
-  `multiplexed-channels.md`).
+  `2026-07-03-multiplexed-channels.md`).
 - Progress from channel byte count vs. an expected size the UI already knows.
 
 ## Depends on
 
-`multiplexed-channels.md` (binary + outbound streaming, worker-pool execution).
+`2026-07-03-multiplexed-channels.md` (binary + outbound streaming, worker-pool execution).
 Blocks `2026-07-09-retire-api-command-route.md`.
 
 ## Done when
