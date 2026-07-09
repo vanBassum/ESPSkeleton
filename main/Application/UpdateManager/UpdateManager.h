@@ -3,9 +3,7 @@
 #include "ServiceProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
-#include "Mutex.h"
 #include <esp_ota_ops.h>
-#include <esp_vfs_fat.h>
 
 class Stream;
 
@@ -27,17 +25,11 @@ private:
     ServiceProvider& serviceProvider_;
     InitState initState_;
 
-    // ── Update session ────────────────────────────────────────
-    // One mechanism for ANY partition, addressed by label. App
-    // partitions go through the esp_ota_* API (image validation +
-    // set-boot-partition, running slot refused); data partitions are
-    // raw erase+write. Driven by updateBegin/updateWrite/updateEnd.
-
-    bool BeginUpdate(const char* label, const char** err);
-    bool WriteChunk(const void* data, size_t size);
-    const char* FinalizeUpdate();
-    void AbortUpdate();   // expects mutex_ held
-    bool HasSession() const { return target_ != nullptr; }
+    // One mechanism for ANY partition, addressed by label — see PartitionWriter.
+    // An upload is one streamed command (writePartition): the handler drains its
+    // input stream straight into a PartitionWriter, finalize runs at end-of-stream.
+    // There is no cross-request session state; the transport carries the whole
+    // image within one command.
 
     const char* GetRunningPartition() const;
     const char* GetNextPartition() const;
@@ -60,28 +52,17 @@ private:
     /// Enumerate all partitions into `out`. Returns count written.
     int GetPartitions(PartitionInfo* out, int maxCount) const;
 
-    // Session state (guarded by mutex_)
-    const esp_partition_t* target_ = nullptr;   // nullptr = no session
-    esp_ota_handle_t otaHandle_ = 0;            // valid while target_ is an app partition
-    size_t writeOffset_ = 0;                    // used for data partitions
-
-    Mutex mutex_;
-
-    // ── WebSocket commands (registered with CommandManager in Init) ──
+    // ── Commands (registered with CommandManager in Init) ──
     void Cmd_UpdateStatus(Stream& in, Stream& out);
     void Cmd_Partitions(Stream& in, Stream& out);
-    void Cmd_UpdateBegin(Stream& in, Stream& out);
-    void Cmd_UpdateWrite(Stream& in, Stream& out);
-    void Cmd_UpdateEnd(Stream& in, Stream& out);
+    void Cmd_WritePartition(Stream& in, Stream& out);   // streamed upload: header line + body
     void Cmd_UpdateFromUrl(Stream& in, Stream& out);
     void Cmd_DownloadPartition(Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "updateStatus",      &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },
         { "partitions",        &InvokeCommand<&UpdateManager::Cmd_Partitions> },
-        { "updateBegin",       &InvokeCommand<&UpdateManager::Cmd_UpdateBegin> },
-        { "updateWrite",       &InvokeCommand<&UpdateManager::Cmd_UpdateWrite> },
-        { "updateEnd",         &InvokeCommand<&UpdateManager::Cmd_UpdateEnd> },
+        { "writePartition",    &InvokeCommand<&UpdateManager::Cmd_WritePartition> },
         { "updateFromUrl",     &InvokeCommand<&UpdateManager::Cmd_UpdateFromUrl> },
         { "downloadPartition", &InvokeCommand<&UpdateManager::Cmd_DownloadPartition> },
     };

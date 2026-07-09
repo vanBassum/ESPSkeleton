@@ -22,9 +22,11 @@ type AuthHandler = (authenticated: boolean) => void
 
 // ── Service ──────────────────────────────────────────────────────
 
-// Session ids play the role of the old request ids: they correlate a reply
-// with its request and stay concurrent (no serialization while the device is
-// single-in-flight for no-body commands). Kept within 16 bits to match the wire.
+// Session ids correlate a reply with its request. The device is single-in-flight
+// (one active session at a time), so opens are SERIALIZED through a FIFO queue
+// (see `enqueue`): callers still fire concurrently, but only one session is open
+// on the wire at once, and the next starts on the previous reply's FINAL. Ids
+// stay within 16 bits to match the wire.
 let nextSession = 1
 
 const FLAG_FINAL = 0x01
@@ -39,6 +41,9 @@ class BackendService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private connecting: Promise<void> | null = null
+  // Tail of the open-serialization queue. Each enqueued task runs only after the
+  // previous one has fully settled (its reply's FINAL received, or it failed).
+  private queue: Promise<unknown> = Promise.resolve()
   private _status: ConnectionStatus = "disconnected"
   private token: string | null = sessionStorage.getItem(TOKEN_KEY)
   private authHandlers = new Set<AuthHandler>()
@@ -244,36 +249,63 @@ class BackendService {
     }
   }
 
-  async send<T>(
-    type: string,
-    params: Record<string, unknown> = {},
-  ): Promise<T> {
-    await this.ensureConnected()
+  // Run `task` after every previously-enqueued task has settled — the
+  // open-serialization queue. A task's failure never stalls the queue.
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task)
+    this.queue = run.then(
+      () => {},
+      () => {},
+    )
+    return run
+  }
+
+  private allocSession(): number {
     const session = nextSession
     nextSession = nextSession >= 0xffff ? 1 : nextSession + 1
+    return session
+  }
 
-    // Request = one binary session chunk: [session:u16 LE | FLAG_FINAL | envelope].
-    // The envelope is the command JSON + '\n' (the device splits the header line
-    // from any body; no body for these commands).
-    const body = new TextEncoder().encode(JSON.stringify({ type, ...params }) + "\n")
-    const frame = new Uint8Array(3 + body.length)
+  // Send one session chunk: [session:u16 LE | flags | payload].
+  private sendChunk(session: number, flags: number, payload: Uint8Array) {
+    const frame = new Uint8Array(3 + payload.length)
     frame[0] = session & 0xff
     frame[1] = (session >> 8) & 0xff
-    frame[2] = FLAG_FINAL
-    frame.set(body, 3)
+    frame[2] = flags
+    frame.set(payload, 3)
+    this.ws!.send(frame)
+  }
 
+  // Register a pending reply for `session`; resolves when its FINAL chunk
+  // arrives (reassembled in onBinaryChunk), rejects on REJECT/timeout/close.
+  private awaitReply<T>(session: number, timeoutMs = 10000): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(session)
         reject(new Error("Request timeout"))
-      }, 10000)
+      }, timeoutMs)
       this.pending.set(session, {
         resolve: resolve as (data: unknown) => void,
         reject,
         timer,
         chunks: [],
       })
-      this.ws!.send(frame)
+    })
+  }
+
+  async send<T>(
+    type: string,
+    params: Record<string, unknown> = {},
+  ): Promise<T> {
+    return this.enqueue(async () => {
+      await this.ensureConnected()
+      const session = this.allocSession()
+      const reply = this.awaitReply<T>(session)
+      // Request = one FINAL session chunk: the command JSON + '\n' (the device
+      // splits the header line from any body; these commands have no body).
+      const body = new TextEncoder().encode(JSON.stringify({ type, ...params }) + "\n")
+      this.sendChunk(session, FLAG_FINAL, body)
+      return reply
     })
   }
 
@@ -410,47 +442,51 @@ class BackendService {
     return true
   }
 
-  /** Upload a .bin into an update session: begin (WS) → write (HTTP, streamed) → end (WS). */
+  /** Upload a .bin as one streamed `writePartition` session: an envelope chunk
+   *  ({"type":"writePartition","partition":...}\n) followed by body chunks, the
+   *  last carrying FLAG_FINAL. The device drains it straight to flash and replies
+   *  once, at end-of-stream. Runs through the open queue, so nothing else touches
+   *  the socket mid-upload (the device would REJECT an interleaved session id). */
   async uploadPartition(
     partition: string,
     file: File,
     onProgress?: (percent: number) => void,
   ): Promise<UploadResult> {
-    const begin = await this.send<{ ok: boolean; error?: string }>("updateBegin", { partition })
-    if (!begin.ok) throw new Error(begin.error ?? "updateBegin failed")
+    return this.enqueue(async () => {
+      await this.ensureConnected()
+      const session = this.allocSession()
+      // The device replies only once, after finalize — allow generous time.
+      const reply = this.awaitReply<{ ok: boolean; size?: number; error?: string }>(session, 120000)
 
-    // The device's HTTP server is single-threaded: during one long
-    // request it can serve NOBODY else, starved clients reconnect, and
-    // the server's LRU purge then evicts the quietest socket — our own
-    // WebSocket (verified on hardware; this is not just the heartbeat).
-    // Chunking lets the server breathe between requests. The heartbeat
-    // pause is a second belt so our watchdog can't misfire either.
-    this.stopHeartbeat()
-    try {
-      const CHUNK = 256 * 1024
+      // Envelope chunk (not FINAL — the body follows on the same session id).
+      const envelope = new TextEncoder().encode(JSON.stringify({ type: "writePartition", partition }) + "\n")
+      this.sendChunk(session, 0, envelope)
+
+      // Body chunks. CHUNK matches the device's inbound window (see WebSocketHandler).
+      const CHUNK = 4096
       let sent = 0
-      let total = 0
       while (sent < file.size) {
-        const slice = file.slice(sent, sent + CHUNK)
-        const write = await this.postCommand("updateWrite", slice, (pct) => {
-          onProgress?.(Math.round(((sent + (slice.size * pct) / 100) / file.size) * 100))
-        })
-        if (!write.ok) throw new Error(write.error ?? "updateWrite failed")
-        total += write.size ?? slice.size
-        sent += slice.size
+        const end = Math.min(sent + CHUNK, file.size)
+        const slice = new Uint8Array(await file.slice(sent, end).arrayBuffer())
+        const isLast = end >= file.size
+        await this.drainBuffer()
+        this.sendChunk(session, isLast ? FLAG_FINAL : 0, slice)
+        sent = end
         onProgress?.(Math.round((sent / file.size) * 100))
       }
+      // A zero-length file still needs a FINAL to close the request direction.
+      if (file.size === 0) this.sendChunk(session, FLAG_FINAL, new Uint8Array(0))
 
-      const end = await this.send<{ ok: boolean; error?: string }>("updateEnd")
-      if (!end.ok) throw new Error(end.error ?? "updateEnd failed")
+      const res = await reply
+      if (!res.ok) throw new Error(res.error ?? "writePartition failed")
+      return { ok: true, size: res.size ?? sent }
+    })
+  }
 
-      return { ok: true, size: total }
-    } catch (e) {
-      // Best effort: close a dangling session so the next attempt isn't "busy".
-      this.send("updateEnd").catch(() => {})
-      throw e
-    } finally {
-      this.startHeartbeat()
+  // Backpressure: don't let queued browser-side WS buffer outrun the socket.
+  private async drainBuffer(limit = 512 * 1024) {
+    while (this.ws && this.ws.bufferedAmount > limit) {
+      await new Promise((r) => setTimeout(r, 20))
     }
   }
 
@@ -503,40 +539,6 @@ class BackendService {
     }
   }
 
-  private postCommand(
-    type: string,
-    body: Blob,
-    onProgress?: (percent: number) => void,
-  ): Promise<{ ok: boolean; size?: number; error?: string }> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open("POST", this.commandUrl(type))
-      if (this.token) xhr.setRequestHeader("Authorization", `Bearer ${this.token}`)
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) {
-          onProgress(Math.round((e.loaded / e.total) * 100))
-        }
-      }
-
-      xhr.onload = () => {
-        if (xhr.status === 401) {
-          this.clearAuth()
-          reject(new Error("Not authenticated"))
-        } else if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText))
-        } else {
-          reject(new Error(xhr.responseText || `${xhr.status} ${xhr.statusText}`))
-        }
-      }
-
-      xhr.onerror = () => reject(new Error("Upload failed"))
-      xhr.ontimeout = () => reject(new Error("Upload timed out"))
-      xhr.timeout = 120000
-
-      xhr.send(body)
-    })
-  }
 }
 
 const instance = new BackendService()

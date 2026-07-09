@@ -54,6 +54,12 @@ private:
     static constexpr size_t SESSION_WINDOW = 512;
     uint8_t sessionFrame_[session::HEADER_LEN + SESSION_WINDOW];
 
+    // Inbound window for streamed request bodies: read() pulls continuation
+    // session chunks into here, so each body chunk's payload may be up to
+    // INBOUND_WINDOW bytes (the frontend sizes upload chunks to match).
+    static constexpr size_t INBOUND_WINDOW = 4096;
+    uint8_t sessionInbound_[session::HEADER_LEN + INBOUND_WINDOW];
+
     /// False when the client table is full — caller refuses the upgrade.
     bool AddWsClient(int fd, const char* token);
     void RemoveWsClient(int fd);

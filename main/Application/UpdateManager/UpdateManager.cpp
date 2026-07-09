@@ -1,13 +1,14 @@
 #include "UpdateManager.h"
+#include "PartitionWriter.h"
 #include "CommandManager.h"
-#include "ContextLock.h"
 #include "JsonScope.h"
 #include "JsonReader.h"
+#include "JsonHelpers.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_system.h"
 #include "esp_app_desc.h"
 #include <cstring>
+#include <cstdio>
 
 UpdateManager::UpdateManager(ServiceProvider& serviceProvider)
     : serviceProvider_(serviceProvider)
@@ -29,127 +30,25 @@ void UpdateManager::Init()
     ESP_LOGI(TAG, "Initialized");
 }
 
-// ──────────────────────────────────────────────────────────────
-// Update session — one mechanism for any partition, by label.
-// App partitions: esp_ota_* API (validation, set-boot-partition).
-// Data partitions: raw erase + sequential write.
-// ──────────────────────────────────────────────────────────────
+namespace {
 
-bool UpdateManager::BeginUpdate(const char* label, const char** err)
+// Read the command's header line (the request envelope) from `in`, up to and
+// consuming the terminating '\n'. The body — if any — is whatever remains in
+// `in` afterwards. Reads a byte at a time; the line always lives in the first
+// inbound chunk, so this never blocks on the socket.
+void ReadHeaderLine(Stream& in, char* out, size_t cap)
 {
-    LOCK(mutex_);
-    if (target_) { *err = "busy"; return false; }
-
-    const esp_partition_t* p = esp_partition_find_first(
-        ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, label);
-    if (!p) { *err = "unknown partition"; return false; }
-
-    if (p->type == ESP_PARTITION_TYPE_APP)
+    size_t i = 0;
+    char c;
+    while (i < cap - 1 && in.read(&c, 1) == 1)
     {
-        if (p == esp_ota_get_running_partition())
-        {
-            *err = "partition is running";
-            return false;
-        }
-        esp_err_t e = esp_ota_begin(p, OTA_WITH_SEQUENTIAL_WRITES, &otaHandle_);
-        if (e != ESP_OK)
-        {
-            ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(e));
-            *err = "ota begin failed";
-            return false;
-        }
+        if (c == '\n') break;
+        out[i++] = c;
     }
-    else
-    {
-        esp_err_t e = esp_partition_erase_range(p, 0, p->size);
-        if (e != ESP_OK)
-        {
-            ESP_LOGE(TAG, "Failed to erase '%s': %s", label, esp_err_to_name(e));
-            *err = "erase failed";
-            return false;
-        }
-        writeOffset_ = 0;
-    }
-
-    target_ = p;
-    ESP_LOGI(TAG, "Update session started on '%s'", p->label);
-    return true;
+    out[i] = '\0';
 }
 
-bool UpdateManager::WriteChunk(const void* data, size_t size)
-{
-    LOCK(mutex_);
-    if (!target_) return false;
-
-    if (target_->type == ESP_PARTITION_TYPE_APP)
-    {
-        esp_err_t e = esp_ota_write(otaHandle_, data, size);
-        if (e != ESP_OK)
-        {
-            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(e));
-            AbortUpdate();
-            return false;
-        }
-    }
-    else
-    {
-        if (writeOffset_ + size > target_->size)
-        {
-            ESP_LOGE(TAG, "Data exceeds partition size");
-            AbortUpdate();
-            return false;
-        }
-        esp_err_t e = esp_partition_write(target_, writeOffset_, data, size);
-        if (e != ESP_OK)
-        {
-            ESP_LOGE(TAG, "esp_partition_write failed: %s", esp_err_to_name(e));
-            AbortUpdate();
-            return false;
-        }
-        writeOffset_ += size;
-    }
-    return true;
-}
-
-const char* UpdateManager::FinalizeUpdate()
-{
-    LOCK(mutex_);
-    if (!target_) return "no session";
-
-    const esp_partition_t* p = target_;
-    target_ = nullptr;
-
-    if (p->type == ESP_PARTITION_TYPE_APP)
-    {
-        esp_err_t e = esp_ota_end(otaHandle_);
-        if (e != ESP_OK)
-        {
-            ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(e));
-            return "Image validation failed";
-        }
-        e = esp_ota_set_boot_partition(p);
-        if (e != ESP_OK)
-        {
-            ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(e));
-            return "Failed to set boot partition";
-        }
-        ESP_LOGI(TAG, "App update finalized, next boot from '%s'", p->label);
-    }
-    else
-    {
-        ESP_LOGI(TAG, "Partition '%s' updated (%lu bytes)", p->label, (unsigned long)writeOffset_);
-    }
-    return nullptr; // success
-}
-
-void UpdateManager::AbortUpdate()
-{
-    if (!target_) return;
-    if (target_->type == ESP_PARTITION_TYPE_APP)
-        esp_ota_abort(otaHandle_);
-    target_ = nullptr;
-    ESP_LOGW(TAG, "Update session aborted");
-}
+} // namespace
 
 const char* UpdateManager::GetRunningPartition() const
 {
@@ -243,7 +142,7 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
 }
 
 // ──────────────────────────────────────────────────────────────
-// WebSocket commands
+// Status / enumeration commands
 // ──────────────────────────────────────────────────────────────
 
 void UpdateManager::Cmd_UpdateStatus(Stream& in, Stream& out)
@@ -283,71 +182,54 @@ void UpdateManager::Cmd_Partitions(Stream& in, Stream& out)
 }
 
 // ──────────────────────────────────────────────────────────────
-// Session-based update commands (updateBegin / updateWrite / updateEnd)
+// Streamed upload — one command carries the whole image.
+// Envelope: {"type":"writePartition","partition":"<label>"}\n<bytes…>
 // ──────────────────────────────────────────────────────────────
 
-void UpdateManager::Cmd_UpdateBegin(Stream& in, Stream& out)
+void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
 {
-    JsonReader<256> req(in);
-    JsonObject resp(out);
+    char line[128];
+    ReadHeaderLine(in, line, sizeof(line));   // consume the envelope; body follows
 
     char label[17] = {};
-    req.GetString("partition", label, sizeof(label));
+    ExtractJsonString(line, "partition", label, sizeof(label));
+
+    JsonObject resp(out);
 
     const char* err = nullptr;
-    if (!BeginUpdate(label, &err))
+    PartitionWriter w(label, &err);
+    if (!w.ok())
+    {
+        resp.field("ok", false);
+        resp.field("error", err);
+        return;
+    }
+
+    uint8_t buf[4096];
+    size_t n;
+    while ((n = in.read(buf, sizeof(buf))) > 0)   // 0 == end of stream == full image
+    {
+        if (!w.write(buf, n))                      // dtor aborts a half-written image
+        {
+            resp.field("ok", false);
+            resp.field("error", "write failed");
+            return;
+        }
+    }
+
+    err = w.finish();
+    if (err)
     {
         resp.field("ok", false);
         resp.field("error", err);
         return;
     }
     resp.field("ok", true);
-}
-
-void UpdateManager::Cmd_UpdateWrite(Stream& in, Stream& out)
-{
-    char buf[1024];
-
-    if (!HasSession())
-    {
-        while (in.read(buf, sizeof(buf)) > 0) {}   // drain so the transport isn't left mid-body
-        JsonObject resp(out);
-        resp.field("ok", false);
-        resp.field("error", "no session");
-        return;
-    }
-
-    uint32_t total = 0;
-    size_t n;
-    while ((n = in.read(buf, sizeof(buf))) > 0)
-    {
-        if (!WriteChunk(buf, n))   // aborts the session on failure
-        {
-            while (in.read(buf, sizeof(buf)) > 0) {}
-            JsonObject resp(out);
-            resp.field("ok", false);
-            resp.field("error", "write failed");
-            return;
-        }
-        total += n;
-    }
-
-    JsonObject resp(out);
-    resp.field("ok", true);
-    resp.field("size", total);
-}
-
-void UpdateManager::Cmd_UpdateEnd(Stream& in, Stream& out)
-{
-    JsonObject resp(out);
-
-    const char* err = FinalizeUpdate();
-    if (err) { resp.field("ok", false); resp.field("error", err); return; }
-    resp.field("ok", true);
+    resp.field("size", (uint32_t)w.written());
 }
 
 // ──────────────────────────────────────────────────────────────
-// Pull OTA — the device fetches the image itself
+// Pull OTA — the device fetches the image itself, into the same writer.
 // ──────────────────────────────────────────────────────────────
 
 void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
@@ -379,7 +261,6 @@ void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { resp.field("ok", false); resp.field("error", "client init failed"); return; }
 
-    bool began = false;
     const char* err = nullptr;
     uint32_t total = 0;
 
@@ -390,28 +271,21 @@ void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
         int status = esp_http_client_get_status_code(client);
         if (status != 200) { err = "http status"; break; }
 
-        began = BeginUpdate(label, &err);
-        if (!began) break;
+        PartitionWriter w(label, &err);   // dtor aborts if we break before finish()
+        if (!w.ok()) break;
 
         char buf[1024];
         int n;
         while ((n = esp_http_client_read(client, buf, sizeof(buf))) > 0)
         {
-            if (!WriteChunk(buf, n)) { err = "write failed"; began = false; break; }   // aborted
+            if (!w.write(buf, n)) { err = "write failed"; break; }
             total += n;
         }
         if (err) break;
         if (n < 0) { err = "read failed"; break; }
 
-        err = FinalizeUpdate();
-        began = false;   // finalize consumed the session, success or not
+        err = w.finish();
     } while (false);
-
-    if (began)   // opened a session but bailed before finalize consumed it
-    {
-        LOCK(mutex_);
-        AbortUpdate();
-    }
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
