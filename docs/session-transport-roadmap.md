@@ -19,7 +19,7 @@ byte-pump bridge are for.
 | # | Step | Status | Backlog |
 |---|------|--------|---------|
 | 1 | Foundation: mux + `Session`/`WsSessionLink`, no-body commands over binary, frontend cutover, old TEXT path removed | **DONE** (`main`, `c3c2096`) | — |
-| 2 | Firmware upload over WS (now `writePartition`) | **BUILT** — implemented + compiles; needs on-device flash to verify | [firmware-upload](backlog/2026-07-09-firmware-upload-over-websocket.md) |
+| 2 | Firmware upload over WS (now `writePartition`) | **DONE** (`main`, `9585366`) — verified on device: app + data paths, reboot into OTA'd slot, device-driven progress | [firmware-upload](backlog/2026-07-09-firmware-upload-over-websocket.md) |
 | 3 | Partition download over WS | pending | [partition-download](backlog/2026-07-09-partition-download-over-websocket.md) |
 | 4 | Retire `/api/command` + `/api/login` + CORS (HTTP static-only) | pending (needs 2, 3, 5) | [retire-api-command](backlog/2026-07-09-retire-api-command-route.md) |
 | 5 | Login over WS (per-connection auth; `login` command) | pending (must precede 4) | [login](backlog/2026-07-09-login-over-websocket.md) |
@@ -66,7 +66,15 @@ the device-pull `updateFromUrl` feed. Key decisions:
   FIFO queue** (`enqueue`) — one session on the wire at a time, required so nothing
   interleaves a session id mid-upload. XHR `/api/command` upload path removed.
 
-Remaining for step 2 to be **DONE**: flash + drive the upload end-to-end on the device
-(build env per [memory]; device ~`192.168.50.111`, `idf.py -p COM3 flash`). The explicit
-mux busy-gate/`REJECT` was not needed for single-httpd-task draining (a mismatched sid
-mid-body fails the read defensively); it returns with step 6's worker task.
+**Verified on device** (`192.168.50.111`): app upload (`Strux.bin` → `ota_1`, validated,
+set-boot, rebooted into the OTA'd slot), data upload (`www.bin` → `www`, lazy per-sector
+erase), and device-authoritative progress (`{"p":…}` reports streamed on the reply,
+mapped to the bar). Also confirmed through the real browser UI.
+
+- **Progress is device-driven.** Client "bytes sent" can't see the flash-write position
+  (the OS buffers the socket), so the handler streams `{"p":<bytesWritten>}` on the reply
+  as it writes (via `Session::flush()` → non-final chunk); the frontend maps that to the
+  bar. Residual: a short tail during `esp_ota_end` validation for app images (data
+  partitions have no finalize).
+- The explicit mux busy-gate/`REJECT` was not needed for single-httpd-task draining (a
+  mismatched sid mid-body fails the read defensively); it returns with step 6's worker task.
