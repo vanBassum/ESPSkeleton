@@ -28,7 +28,13 @@ byte-pump bridge are for.
 Dont forget to do a code quality refactor after this is working. I think we should seperate some things out of the webmanager. but thats for later to figure out
 
 Also [ws-inbound-streaming](backlog/2026-07-09-ws-inbound-streaming.md): partially
-done — `WsRequestStream` shipped dormant in step 1; its real use is step 2.
+done — `WsRequestStream` shipped dormant in step 1; its real use is step 2 (folded
+into `WsSessionLink::RecvChunk`).
+
+Deferred by choice: [broadcast-redesign](backlog/2026-07-09-broadcast-redesign.md) —
+log broadcasts (session 0) are the last non-session path; to be folded into
+device-initiated sessions and have their dead-client / warning-storm handling
+designed properly at a later stage.
 
 ## Shipped in step 1
 
