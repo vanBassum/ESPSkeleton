@@ -285,6 +285,17 @@ class BackendService {
     if (view.length < 3) return
     const session = view[0] | (view[1] << 8)
     const flags = view[2]
+
+    // Session 0 is reserved for device-initiated broadcasts (log lines).
+    if (session === 0) {
+      try {
+        this.broadcastHandlers.forEach((fn) => fn(JSON.parse(new TextDecoder().decode(view.subarray(3)))))
+      } catch {
+        /* malformed broadcast — ignore */
+      }
+      return
+    }
+
     const req = this.pending.get(session)
     if (!req) {
       // No matching request — hand to legacy binary subscribers (unused here).

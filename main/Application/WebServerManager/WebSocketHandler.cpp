@@ -275,10 +275,20 @@ void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int le
         memcpy(clients, wsClients_, sizeof(clients));
     }
 
+    // Broadcast as a binary session chunk on the reserved broadcast session 0,
+    // so the socket carries ONE uniform chunk format for replies and broadcasts
+    // alike (no TEXT frames). Clients allocate session ids from 1, so 0 never
+    // collides with a command.
+    uint8_t buf[session::HEADER_LEN + 256];
+    int cap = static_cast<int>(sizeof(buf) - session::HEADER_LEN);
+    if (len > cap) len = cap;
+    session::writeHeader(buf, session::BROADCAST_SESSION, session::FLAG_FINAL);
+    memcpy(buf + session::HEADER_LEN, json, len);
+
     httpd_ws_frame_t frame = {};
-    frame.type = HTTPD_WS_TYPE_TEXT;
-    frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(json));
-    frame.len = len;
+    frame.type = HTTPD_WS_TYPE_BINARY;
+    frame.payload = buf;
+    frame.len = session::HEADER_LEN + len;
 
     LOCK(sendMutex_);
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
