@@ -188,44 +188,54 @@ void UpdateManager::Cmd_Partitions(Stream& in, Stream& out)
 
 void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
 {
+    // Reply is a stream of newline-free JSON messages, one per chunk: zero or more
+    // progress reports {"p":<bytesWritten>} flushed as they happen, then a final
+    // result. Progress is device-authoritative (bytes actually written to flash),
+    // so the client's bar tracks the real write, not bytes queued into the socket.
+    static constexpr size_t REPORT_EVERY = 32 * 1024;
+
     char line[128];
     ReadHeaderLine(in, line, sizeof(line));   // consume the envelope; body follows
 
     char label[17] = {};
     ExtractJsonString(line, "partition", label, sizeof(label));
 
-    JsonObject resp(out);
+    char msg[96];
 
     const char* err = nullptr;
     PartitionWriter w(label, &err);
     if (!w.ok())
     {
-        resp.field("ok", false);
-        resp.field("error", err);
+        int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err);
+        out.write(msg, len);
         return;
     }
 
     uint8_t buf[4096];
     size_t n;
+    size_t reported = 0;
     while ((n = in.read(buf, sizeof(buf))) > 0)   // 0 == end of stream == full image
     {
         if (!w.write(buf, n))                      // dtor aborts a half-written image
         {
-            resp.field("ok", false);
-            resp.field("error", "write failed");
+            int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"write failed\"}");
+            out.write(msg, len);
             return;
+        }
+        if (w.written() - reported >= REPORT_EVERY)
+        {
+            int len = snprintf(msg, sizeof(msg), "{\"p\":%lu}", (unsigned long)w.written());
+            out.write(msg, len);
+            out.flush();                           // push this progress chunk now
+            reported = w.written();
         }
     }
 
     err = w.finish();
-    if (err)
-    {
-        resp.field("ok", false);
-        resp.field("error", err);
-        return;
-    }
-    resp.field("ok", true);
-    resp.field("size", (uint32_t)w.written());
+    int len = err
+        ? snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err)
+        : snprintf(msg, sizeof(msg), "{\"ok\":true,\"size\":%lu}", (unsigned long)w.written());
+    out.write(msg, len);   // OnSessionOpened's finish() emits this as the FINAL chunk
 }
 
 // ──────────────────────────────────────────────────────────────

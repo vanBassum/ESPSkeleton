@@ -14,6 +14,10 @@ interface PendingRequest {
   reject: (err: Error) => void
   timer: ReturnType<typeof setTimeout>
   chunks: Uint8Array[]
+  // When set, each non-final reply chunk is parsed as its own JSON message and
+  // passed here (e.g. upload progress); the final chunk resolves the request.
+  // Absent → default behaviour: accumulate all chunks and parse once at FINAL.
+  onMessage?: (msg: Record<string, unknown>) => void
 }
 
 export type ConnectionStatus = "connected" | "connecting" | "disconnected"
@@ -278,7 +282,12 @@ class BackendService {
 
   // Register a pending reply for `session`; resolves when its FINAL chunk
   // arrives (reassembled in onBinaryChunk), rejects on REJECT/timeout/close.
-  private awaitReply<T>(session: number, timeoutMs = 10000): Promise<T> {
+  // `onMessage`, if given, receives each intermediate chunk parsed as JSON.
+  private awaitReply<T>(
+    session: number,
+    timeoutMs = 10000,
+    onMessage?: (msg: Record<string, unknown>) => void,
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(session)
@@ -289,6 +298,7 @@ class BackendService {
         reject,
         timer,
         chunks: [],
+        onMessage,
       })
     })
   }
@@ -340,6 +350,29 @@ class BackendService {
       req.reject(new Error(new TextDecoder().decode(view.subarray(3)) || "rejected"))
       return
     }
+
+    // Streaming reply: each chunk is one complete JSON message. Intermediate
+    // chunks go to onMessage; the FINAL chunk resolves the request.
+    if (req.onMessage) {
+      const text = new TextDecoder().decode(view.subarray(3))
+      if (flags & FLAG_FINAL) {
+        this.pending.delete(session)
+        clearTimeout(req.timer)
+        try {
+          req.resolve(text.length ? JSON.parse(text) : {})
+        } catch (e) {
+          req.reject(e instanceof Error ? e : new Error("bad reply"))
+        }
+      } else if (text.length) {
+        try {
+          req.onMessage(JSON.parse(text))
+        } catch {
+          /* ignore a malformed progress message */
+        }
+      }
+      return
+    }
+
     req.chunks.push(view.subarray(3))
     if (flags & FLAG_FINAL) {
       this.pending.delete(session)
@@ -455,55 +488,50 @@ class BackendService {
     return this.enqueue(async () => {
       await this.ensureConnected()
       const session = this.allocSession()
-      // The device replies only once, after finalize — allow generous time.
-      const reply = this.awaitReply<{ ok: boolean; size?: number; error?: string }>(session, 120000)
+      const total = file.size
+
+      // Progress is DEVICE-driven: the handler streams {"p":<bytesWritten>}
+      // messages as it flashes, and we map those to a percentage. Client-side
+      // "bytes sent" can't see the device's write position (the OS buffers the
+      // socket), so it would race to 100% while the write is still in flight.
+      const reply = this.awaitReply<{ ok: boolean; size?: number; error?: string }>(
+        session,
+        120000,
+        (msg) => {
+          if (total && typeof msg.p === "number") {
+            onProgress?.(Math.min(100, Math.round((msg.p / total) * 100)))
+          }
+        },
+      )
 
       // Envelope chunk (not FINAL — the body follows on the same session id).
       const envelope = new TextEncoder().encode(JSON.stringify({ type: "writePartition", partition }) + "\n")
       this.sendChunk(session, 0, envelope)
 
       // Body chunks. CHUNK matches the device's inbound window (see WebSocketHandler).
-      // Progress reflects bytes actually DELIVERED (sent minus what's still queued
-      // in the socket), not bytes handed to send() — the device drains at flash
-      // speed, so ws.send() would otherwise race to 100% while the write is still
-      // in flight. bufferedAmount is the still-queued tail; subtracting it tracks
-      // the device. A small lead buffer keeps the pipe full without a big head start.
       const CHUNK = 4096
-      const total = file.size
       let sent = 0
-      const report = () => {
-        if (!total) return
-        const delivered = sent - (this.ws?.bufferedAmount ?? 0)
-        onProgress?.(Math.max(0, Math.min(100, Math.round((delivered / total) * 100))))
-      }
       while (sent < total) {
         const end = Math.min(sent + CHUNK, total)
         const slice = new Uint8Array(await file.slice(sent, end).arrayBuffer())
         const isLast = end >= total
-        await this.drainBuffer(report)
+        await this.drainBuffer()
         this.sendChunk(session, isLast ? FLAG_FINAL : 0, slice)
         sent = end
-        report()
       }
       // A zero-length file still needs a FINAL to close the request direction.
       if (total === 0) this.sendChunk(session, FLAG_FINAL, new Uint8Array(0))
 
-      // Flush the tail (bufferedAmount → 0) so progress reaches 100% before we
-      // block on the reply, rather than snapping there.
-      await this.drainBuffer(report, 0)
-      report()
-
       const res = await reply
       if (!res.ok) throw new Error(res.error ?? "writePartition failed")
+      onProgress?.(100)
       return { ok: true, size: res.size ?? sent }
     })
   }
 
-  // Backpressure: don't let the browser-side WS buffer outrun the socket. Ticks
-  // `onWait` while parked so delivered-byte progress keeps moving during a stall.
-  private async drainBuffer(onWait?: () => void, limit = 64 * 1024) {
+  // Backpressure: don't let the browser-side WS buffer outrun the socket.
+  private async drainBuffer(limit = 64 * 1024) {
     while (this.ws && this.ws.bufferedAmount > limit) {
-      onWait?.()
       await new Promise((r) => setTimeout(r, 20))
     }
   }

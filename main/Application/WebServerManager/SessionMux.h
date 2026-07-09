@@ -93,6 +93,15 @@ public:
         return size;
     }
 
+    // Emit whatever reply bytes are buffered as a NON-final chunk, now. Lets a
+    // handler push incremental output (e.g. upload progress) mid-stream instead
+    // of it sitting in the buffer until finish(). No-op when nothing is buffered.
+    bool flush() override
+    {
+        if (outLen_ > 0) emitChunk(0);
+        return !failed_;
+    }
+
     // Emit the final chunk, closing the reply direction.
     void finish() { emitChunk(session::FLAG_FINAL); }
 
