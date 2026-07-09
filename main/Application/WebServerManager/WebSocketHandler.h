@@ -3,11 +3,12 @@
 #include <esp_http_server.h>
 #include "Mutex.h"
 #include "SessionTable.h"
+#include "SessionMux.h"
 
 class CommandManager;
 class WebServerManager;
 
-class WebSocketHandler {
+class WebSocketHandler : public SessionMux::Sink {
     static constexpr const char* TAG = "WebSocketHandler";
     static constexpr int MAX_WS_CLIENTS = 4;
 
@@ -50,7 +51,15 @@ private:
     // fragment each time it fills, so a reply is no longer capped at this size
     // (see WsResponseStream in the .cpp). One reply owns the socket for its
     // duration — head-of-line blocking, accepted until multiplexing lands.
+    // (Legacy TEXT path; removed in the session-transport cutover.)
     char wsBuf_[4096];
+
+    // Session reply flush window (off the httpd-task stack; reused, single
+    // session at a time). NOT payload-proportional — a small batch buffer that
+    // amortizes JsonWriter's tiny writes into WS frames; a reply of any size
+    // streams out window-by-window. Layout: [ 3-byte chunk header | payload ].
+    static constexpr size_t SESSION_WINDOW = 512;
+    uint8_t sessionFrame_[session::HEADER_LEN + SESSION_WINDOW];
 
     /// False when the client table is full — caller refuses the upgrade.
     bool AddWsClient(int fd, const char* token);
@@ -58,4 +67,10 @@ private:
 
     static esp_err_t HandleWs(httpd_req_t* req);
     void DispatchMessage(httpd_req_t* req, int32_t id, const char* type, const char* json);
+
+    // New binary session transport. A request is one binary chunk; the reply
+    // streams back as chunks on the same session id. Runs alongside the TEXT
+    // path until the frontend is migrated (then the TEXT request path is removed).
+    void HandleBinary(httpd_req_t* req, const uint8_t* frame, size_t len);
+    void OnSessionOpened(Session& session) override;
 };

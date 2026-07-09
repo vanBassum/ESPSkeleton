@@ -390,6 +390,13 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
         return ESP_OK;
     }
 
+    if (frame.type == HTTPD_WS_TYPE_BINARY)
+    {
+        if (frame.len >= session::HEADER_LEN)
+            self->HandleBinary(req, buf, frame.len);
+        return ESP_OK;
+    }
+
     if (frame.type != HTTPD_WS_TYPE_TEXT || frame.len == 0)
         return ESP_OK;
 
@@ -441,4 +448,50 @@ void WebSocketHandler::DispatchMessage(httpd_req_t* req, int32_t id, const char*
     }
 
     out.finish();
+}
+
+// ──────────────────────────────────────────────────────────────
+// Binary session transport (new path). One inbound binary frame = one
+// session chunk; step-1 requests are a single chunk dispatched synchronously.
+// ──────────────────────────────────────────────────────────────
+
+void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size_t len)
+{
+    uint16_t sid   = session::readU16(frame);
+    uint8_t  flags = frame[2];
+    const uint8_t* payload = frame + session::HEADER_LEN;
+    size_t plen = len - session::HEADER_LEN;
+
+    WsSessionLink link(req, sendMutex_);
+    SessionMux mux(link, *this, sessionFrame_, SESSION_WINDOW);
+    mux.OnChunk(sid, flags, payload, plen);
+}
+
+void WebSocketHandler::OnSessionOpened(Session& session)
+{
+    // Read the request envelope (single chunk in step 1). The header line is
+    // the whole envelope JSON: {"type":"...",...args}. A trailing '\n' (added
+    // by the client for step-2 forward-compat) is stripped; anything after it
+    // would be the body (none in step 1).
+    char envelope[512];
+    size_t n = session.read(envelope, sizeof(envelope) - 1);
+    envelope[n] = '\0';
+    if (char* nl = strchr(envelope, '\n')) *nl = '\0';
+
+    char type[32] = {};
+    ExtractJsonString(envelope, "type", type, sizeof(type));
+
+    if (type[0] == '\0')
+    {
+        session.reject("missing type");
+        return;
+    }
+
+    MemoryStream in(envelope, strlen(envelope));   // envelope = args (as today)
+    if (!commandManager_ || !commandManager_->Execute(type, in, session))
+    {
+        session.reject(type);   // unknown command
+        return;
+    }
+    session.finish();   // FINAL — end of reply
 }
