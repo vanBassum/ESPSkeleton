@@ -39,3 +39,14 @@ finalize can run at end-of-stream. Writes only need cross-request
 state because the single-threaded server forces the image into
 multiple HTTP requests. Delete begin/end when one long stream can be
 served without starving the server.
+
+**Cleanup owed here (added 2026-07-09):** WS inbound streaming
+(`2026-07-09-ws-inbound-streaming.md`) ships *before* this, so it drains
+body frames synchronously on the httpd task — which the public WS API
+can't do (one frame per handler invocation). To make it work it
+forward-declares and calls the **non-public** `httpd_ws_get_frame_type`
+(declared in ESP-IDF's private `esp_httpd_priv.h`). That is a deliberate
+wart, accepted only because a future IDF removing the symbol fails as a
+clean linker error, not silent breakage. When the CommandManager worker
+task lands with these channels, the httpd task goes back to one-frame-
+per-invocation feeding a queue, and this private call must be removed.
