@@ -46,6 +46,10 @@ private:
 
     void TouchClient(int fd);
 
+    // Fragment buffer for streamed command replies: filled and flushed as a WS
+    // fragment each time it fills, so a reply is no longer capped at this size
+    // (see WsResponseStream in the .cpp). One reply owns the socket for its
+    // duration — head-of-line blocking, accepted until multiplexing lands.
     char wsBuf_[4096];
 
     /// False when the client table is full — caller refuses the upgrade.
