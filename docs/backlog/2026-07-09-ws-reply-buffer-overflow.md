@@ -31,8 +31,9 @@ last size that still worked).
 
 ## Fixes
 
-- **Proper fix:** the WS reply path must stream — see `2026-07-03-multiplexed-channels.md`.
-  That work subsumes this bug (per-channel streaming, no fixed reply buffer).
+- **Proper fix:** make the WS reply path stream a single reply — see
+  `2026-07-09-ws-reply-streaming.md`. That is a small, self-contained transport
+  change (no cap, no multiplexing) and is all this bug needs.
 - **Stopgap (frontend-only, no firmware):** point `backend.getLogs()` at the
   existing HTTP `/api/command?type=getLogs` route (which already streams)
   instead of the WS `send()`. Console keeps the WS only for its live
@@ -40,5 +41,6 @@ last size that still worked).
 
 ## Relates to
 
-`2026-07-03-multiplexed-channels.md` (the real fix). Not related to
+`2026-07-09-ws-reply-streaming.md` (the fix). `2026-07-03-multiplexed-channels.md`
+builds on that but is *not* required for this bug. Not related to
 `2026-07-06-flash-circular-logging.md` (that is record logging, not console text).
