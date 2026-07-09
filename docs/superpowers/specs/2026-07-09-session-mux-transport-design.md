@@ -282,4 +282,27 @@ real flow over the socket (as done for reply streaming: authenticate, exercise
 the command, confirm the bytes arrive intact and reassemble). Firmware upload is
 the first full round-trip proof of inbound streaming; the bridge/relay is proven
 when remote-access is built.
+
+## Implementation status
+
+**Step 1 landed 2026-07-09** (branch `session-transport-step1`,
+plan `docs/superpowers/plans/2026-07-09-session-transport-step1.md`). Two
+refinements to this spec emerged while building it:
+
+- **Client open-serialization moved to step 2.** Step-1 no-body commands
+  dispatch synchronously within one frame handler, so a session never outlives
+  its `OnChunk` — there is no persistent active session, no busy-gate, and no
+  `REJECT` for concurrency. Concurrent `send()`s keep working exactly as before
+  (session id = old request id). The single-in-flight gate and the client FIFO
+  queue described under *Concurrency → Frontend impact* belong to step 2, where
+  a streamed upload holds the socket across many inbound frames.
+- **Broadcasts were unified in step 1, not deferred.** Log broadcasts now ride
+  the reserved **session 0** as binary chunks, so the socket carries zero TEXT
+  frames already. (The earlier "broadcasts stay the no-`id` TEXT path" note is
+  superseded.)
+
+Shipped: `SessionProtocol.h`, `Session`/`SessionMux`/`WsSessionLink`, binary
+dispatch of no-body commands, `backend.ts` on binary chunks, and removal of the
+old TEXT path (`DispatchMessage`/`WsResponseStream`/`wsBuf_`). `WsRequestStream`
+(commit `d4e0b45`) remains dormant — the step-2 inbound-body primitive.
 ```
