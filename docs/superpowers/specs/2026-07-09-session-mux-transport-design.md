@@ -27,7 +27,7 @@ concepts.
 ```
   CommandManager / bridge / relay     command layer — consumes a Session (a Stream)
         │  Sink / OpenSession()
-  SessionMux                          generic: sessions, OPEN/DATA/CLOSE, busy-refuse   ← transport-agnostic
+  SessionMux                          generic: sessions, implicit-open + FINAL + REJECT ← transport-agnostic
         │  SessionLink
   WsSessionLink / UartSessionLink     framing + integrity + send/recv                  ← transport-specific
         │
@@ -54,17 +54,24 @@ session — which is what makes the bridge below fall out for free.
 
 Owns the sessions on one connection. Its whole surface:
 
-- **`OpenSession()` → `Session*`** — initiator side. Sends `Open`; returns the
-  session, or `nullptr` if the peer refused (`Reject` / busy).
-- **`Sink::OnSessionOpened(Session&)`** — responder side. A new inbound session
-  was accepted; the layer above takes it from here. On the device that's
-  CommandManager: read `type` off the front, run `handler(session, session)`.
-- **`OnChunk(session, kind, payload, len)`** — fed by the link once it has
-  deframed one inbound chunk. Routes `Open`/`Data`/`Close`/`Reject`.
+- **`OpenSession()` → `Session*`** — initiator side. Allocates a new session id
+  locally and returns its `Session`. There is **no OPEN handshake**: the first
+  chunk written carries the new id and opens the session on the peer implicitly.
+  If the peer is busy it replies with a `REJECT` chunk, which surfaces as the
+  session failing (its `read()` returns EOF).
+- **`Sink::OnSessionOpened(Session&)`** — responder side. The first chunk for an
+  unseen session id was accepted; the layer above takes it from here. On the
+  device that's CommandManager: read `type` off the front, run
+  `handler(session, session)`.
+- **`OnChunk(session, flags, payload, len)`** — fed by the link once it has
+  deframed one inbound chunk. Routes by session id and flags: a chunk for an
+  **unseen id is an implicit open** (accept via `TryOpen`, else reply `REJECT`);
+  the `FINAL` flag marks that direction's EOF; the `REJECT` flag fails the
+  session.
 - **`TryOpen()`** (internal) — the **busy gate**. Returns `nullptr` when a
-  session can't be allocated; the caller then sends `Reject`. Single active
-  session today → non-null only when idle. A slot table here later is the whole
-  of "concurrency", with **no change on the wire**.
+  session can't be allocated; the caller then sends a `REJECT` chunk. Single
+  active session today → non-null only when idle. A slot table here later is the
+  whole of "concurrency", with **no change on the wire**.
 
 The mux is **symmetric**: either end can initiate (`OpenSession`) or accept
 (`Sink`). Frontend opens → device accepts (command case). Device opens a UART
@@ -74,7 +81,7 @@ session → sub-device accepts (bridge case). Same class, both roles.
 
 ```cpp
 class SessionLink {
-    virtual bool SendChunk(uint16_t session, ChunkKind kind,
+    virtual bool SendChunk(uint16_t session, uint8_t flags,
                            const void* payload, size_t len) = 0;
 };
 ```
@@ -100,26 +107,29 @@ arrives is mechanical, not a rewrite — YAGNI until then.)
 One chunk:
 
 ```
-[ session : u16 ][ kind : u8 ][ payload : bytes ]
+[ session : u16 ][ flags : u8 ][ payload : bytes ]
 ```
 
 Binary, not JSON-wrapped — so a multi-MB firmware image stays raw (no base64
-+33% blowup). `kind`:
++33% blowup). There are no message *kinds* — a chunk is always "some bytes for a
+session", and two `flags` bits carry the only lifecycle signals:
 
-| kind     | meaning                                                        |
-| -------- | -------------------------------------------------------------- |
-| `Open`   | request/accept a session; its stream begins                    |
-| `Data`   | bytes for the session's stream                                 |
-| `Close`  | **this direction** ended → EOF for the reader                  |
-| `Reject` | responder refused an `Open` (e.g. busy) → the session never starts |
+| flag     | meaning                                                             |
+| -------- | ------------------------------------------------------------------- |
+| `FINAL`  | last chunk **for this direction** → EOF for the reader              |
+| `REJECT` | (device→client only) refusing the session — it never starts         |
 
-`Close` is **per-direction** (the HTTP/2 / yamux END_STREAM model): the
-initiator closing means "request fully sent" (EOF on the handler's `in`); the
-responder closing means "reply finished" (EOF for the initiator's read).
+There is **no OPEN chunk**: a session is opened implicitly by the first chunk
+carrying a session id the receiver hasn't seen. There is **no CLOSE chunk**:
+end-of-stream is the `FINAL` flag on the last chunk of that direction (a
+zero-length `FINAL` chunk closes a direction that has no more bytes). `FINAL` is
+**per-direction** (the HTTP/2 / yamux END_STREAM model): the initiator's `FINAL`
+means "request fully sent" (EOF on the handler's `in`); the responder's `FINAL`
+means "reply finished" (EOF for the initiator's read). A session is done when
+both directions are `FINAL`.
 
-Over WS the `session` field is redundant with nothing today (single session)
-but is always present, so multiplexing later changes only the mux, never the
-wire.
+Over WS the `session` field carries no weight today (single session) but is
+always present, so multiplexing later changes only the mux, never the wire.
 
 ## Command layer (on top of the mux)
 
@@ -135,13 +145,15 @@ The device reads the header line up to `\n`, parses it (which command, which
 args), then the handler streams the rest of `in` as the body. The `\n` is the
 delimiter that the buffered `JsonReader` (which slurps to EOF) could not
 provide — so this replaces the earlier dead-end of trying to read args and body
-off one stream. A command with no body (`getLogs`) is just a header line and an
-immediate `Close`.
+off one stream. A command with no body (`getLogs`) is just a header line in a
+single `FINAL` chunk.
 
 Errors: an unknown `type`, or a handler-level failure, is written into the reply
-stream as the handler's normal output (e.g. `{"ok":false,"error":...}`) followed
-by `Close`. There is no separate `{id,error}` envelope — the reply stream itself
-carries whatever the command wants to say.
+stream as the handler's normal output (e.g. `{"ok":false,"error":...}`) in a
+`FINAL` chunk. There is no separate `{id,error}` envelope — the reply stream
+itself carries whatever the command wants to say. (`REJECT` is *only* the
+transport-level "couldn't start a session at all"; a command that ran and failed
+replies normally.)
 
 ## The bridge corollary (why we trust the abstraction)
 
@@ -151,9 +163,9 @@ across transports, with no command layer at all:
 ```cpp
 void pump(Stream& from, Stream& to) {
     uint8_t buf[512]; size_t n;
-    while ((n = from.read(buf, sizeof buf)) > 0)   // 0 = peer CLOSEd → EOF
+    while ((n = from.read(buf, sizeof buf)) > 0)   // 0 = peer's FINAL → EOF
         to.write(buf, n);
-    to.close();                                    // propagate close
+    to.close();                                    // send a FINAL chunk, propagating the end
 }
 ```
 
@@ -163,21 +175,23 @@ understands nothing about what flows through. That is precisely the
 remote-access relay (`docs/backlog/2026-07-03-remote-access.md`: *"a relay only
 has to forward one socket per device, understanding nothing"*), derived from the
 same primitive. Backpressure composes end-to-end (a slow UART write blocks the
-pump, which stops reading WS, which TCP-backpressures the far end); `Close`
-propagates. The command layer is just *one* kind of session consumer; a bridge
-is another. Neither is special.
+pump, which stops reading WS, which TCP-backpressures the far end); the `FINAL`
+flag propagates the end. The command layer is just *one* kind of session
+consumer; a bridge is another. Neither is special.
 
 ## Concurrency: deferred, but the framing is not
 
-Today: **single active session**. A second `Open` gets `Reject`. The handler
-drains its session synchronously.
+Today: **single active session**. A second session (a chunk with a new session
+id, while one is active) gets a `REJECT` chunk back. The handler drains its
+session synchronously.
 
 ### Frontend impact — the client MUST serialize opens (day-one requirement)
 
-`Reject` is the device's *right* to refuse; it is not a licence for the client
+`REJECT` is the device's *right* to refuse; it is not a licence for the client
 to provoke it. **The client session layer must serialize opens** — a FIFO
 queue, one session open at a time, the next starting only on the previous
-session's `Close` — for as long as the device is single-in-flight.
+session's `FINAL` (both directions closed) — for as long as the device is
+single-in-flight.
 
 This is not optional politeness; without it the transport swap is a visible
 regression on day one. Today's WS is **id-multiplexed**: `backend.ts` fires
@@ -185,11 +199,11 @@ concurrent `send()`s (each a fresh `id`) and matches replies by id, and several
 callers rely on it *right now* — the 15 s heartbeat `ping` overlapping anything,
 a consumer page polling several status commands un-awaited every 2 s, `getLogs`
 running during the Console's live log stream. The moment the session-mux
-replaces id-based dispatch, every overlapping `send()` becomes a second `Open`
-and gets `Reject`ed — before multiplexing exists to allow the overlap. The
+replaces id-based dispatch, every overlapping `send()` becomes a second session
+and gets `REJECT`ed — before multiplexing exists to allow the overlap. The
 client queue is what makes "deferred concurrency" *transparent* rather than a
 breakage: callers keep firing concurrently, the queue drains them one at a time,
-nobody sees a `Reject`.
+nobody sees a `REJECT`.
 
 Cost while queued: a page's N concurrent polls become N sequential round-trips.
 For small commands over a local socket that's a few ms each — acceptable, and it
@@ -246,9 +260,9 @@ onto the mux, delete its old path", all converging here:
    `Sink`; reads the header line and dispatches. **Same step, non-negotiable:**
    `backend.ts` gains the open-serialization queue (above) — the id-multiplexed
    `send()`/`pending`-map path is replaced by "open a session, write the header
-   line + body, read the reply, `Close`", with concurrent callers queued one
-   open at a time. Cutting over the device without this breaks the frontend on
-   the first flash.
+   line + body with `FINAL`, read the reply until its `FINAL`", with concurrent
+   callers queued one open at a time. Cutting over the device without this
+   breaks the frontend on the first flash.
 2. **Firmware upload** (`…firmware-upload-over-websocket.md`) — first real
    streamed consumer; also the first end-to-end verification.
 3. **Partition download** (`…partition-download-over-websocket.md`) — outbound
