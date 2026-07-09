@@ -1,0 +1,49 @@
+# Retire the HTTP /api/command route (HTTP serves static only)
+
+**Status: idea, 2026-07-09.** The cleanup that closes the endpoint-decommission
+set — do it last.
+
+## Why
+
+Once login, firmware upload, and partition download have moved onto the WS,
+nothing uses `POST /api/command` anymore. Removing it (and its `OPTIONS`/CORS
+preflight) leaves HTTP doing one job — serving the static app that bootstraps
+the page. That is the endgame: **bytes that describe the app → HTTP; bytes that
+talk to the device → the one WS.** Two payoffs:
+
+- **Fewer sockets on the tiny server.** Today every `fetch` to `/api/command`,
+  every static asset, and the WS each burn a slot in the single-threaded httpd
+  pool (~7); under load `lru_purge` evicts the quietest socket — often our own
+  WS (`httpd_sock_err: recv 104` / ECONNRESET). One long-lived socket per client
+  makes that whole class of bug disappear.
+- **Trivial remote bridging.** A relay only has to forward one socket per device
+  (see `remote-access.md`), understanding nothing.
+
+## How
+
+- Delete the `POST /api/command` route, its `OPTIONS` preflight, and the CORS
+  header helper (CORS existed only for cross-origin `fetch`; the WS handshake
+  does not need it the same way).
+- Remove `HttpRequestStream` / `HttpResponseStream` and the Bearer guard on
+  `/api/command` (auth is per-connection on the WS now — see
+  `2026-07-09-login-over-websocket.md`).
+- Keep only the static-file wildcard route (plus whatever the login page needs
+  pre-auth).
+
+## Trade-offs / decisions
+
+- **Dev workflow.** The Vite dev server currently proxies `fetch` to
+  `/api/command`; confirm everything it needs now rides the WS before deleting.
+- **Bench/tooling.** Anything still hitting HTTP commands (scripts, ad-hoc
+  tooling) must move to the WS or a dedicated debug transport.
+
+## Depends on
+
+`2026-07-09-login-over-websocket.md`, `2026-07-09-firmware-upload-over-websocket.md`,
+`2026-07-09-partition-download-over-websocket.md` (all must migrate off first).
+Rides `multiplexed-channels.md`.
+
+## Done when
+
+The only HTTP routes left are static-file serving; every device interaction is
+over the WebSocket.
