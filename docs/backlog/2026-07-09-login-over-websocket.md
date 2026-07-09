@@ -4,6 +4,14 @@
 "everything over one WS" direction. Redesigns `webserver-login`
 (spec `docs/superpowers/specs/2026-07-03-webserver-login-design.md`).
 
+**Update 2026-07-09 — reframed by the session-mux transport**
+(`docs/superpowers/specs/2026-07-09-session-mux-transport-design.md`, step 5).
+`login` becomes a command over a session: one shared password-check mechanism,
+reusable on any transport (WS/UART/relay) with the same password — while
+*whether* a connection must authenticate stays transport-owned, never a
+per-command check. Must land before retiring `/api/command` (step 4), since it
+removes the last non-static HTTP route.
+
 ## Why
 
 Today auth is HTTP: `POST /api/login` mints a RAM token into a `SessionTable`,

@@ -3,6 +3,17 @@
 **Status: idea, 2026-07-09.** One of the endpoint-decommission issues in the
 "everything over one WS" direction.
 
+**Update 2026-07-09 — reframed by the session-mux transport**
+(`docs/superpowers/specs/2026-07-09-session-mux-transport-design.md`, step 2).
+In that model this is simply "upload is a streamed inbound session": the client
+opens a session, writes the `update` header line + the image bytes, the handler
+drains `Stream& in` straight to flash, replies, done. Being the first consumer of
+inbound streaming, it's where the private-API frame-drain, the single-in-flight
+busy-gate + `REJECT`, and the frontend open-serialization queue first get
+exercised. The `stream:true` flag idea below is gone (every request is a
+session); whether to fold `updateBegin`/`updateWrite`/`updateEnd` into one
+`update` command is a command-layer choice made when this is planned.
+
 ## Why
 
 Firmware upload currently streams chunks over `POST /api/command?type=updateWrite`

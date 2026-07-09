@@ -3,6 +3,15 @@
 **Status: idea, 2026-07-09.** The cleanup that closes the endpoint-decommission
 set — do it last.
 
+**Update 2026-07-09 — reframed by the session-mux transport**
+(`docs/superpowers/specs/2026-07-09-session-mux-transport-design.md`, step 4).
+Commands already left `/api/command` in step 1 (they run over binary sessions).
+What still uses the route: firmware upload (step 2) and partition download
+(step 3); auth still uses `/api/login` (step 5). So this depends on steps 2, 3
+and 5 — once they've migrated, delete `POST /api/command`, `/api/login`, and CORS
+so HTTP serves static only. Login must land before this (it removes the last
+non-static HTTP route); see the dependency note below.
+
 ## Why
 
 Once login, firmware upload, and partition download have moved onto the WS,

@@ -3,6 +3,13 @@
 **Status: idea, 2026-07-09.** One of the endpoint-decommission issues in the
 "everything over one WS" direction.
 
+**Update 2026-07-09 — reframed by the session-mux transport**
+(`docs/superpowers/specs/2026-07-09-session-mux-transport-design.md`, step 3).
+Download is an outbound streamed session: the handler writes partition bytes to
+`Stream& out`, chunked over the socket and ended by `FINAL`. It reuses the
+reply-streaming path already shipped in step 1 — no new framing, just a larger
+payload over the same session chunks.
+
 ## Why
 
 Partition download currently streams over `POST /api/command?type=downloadPartition`

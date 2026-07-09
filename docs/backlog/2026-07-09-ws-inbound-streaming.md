@@ -1,9 +1,16 @@
 # WS inbound streaming (request body over WS frames)
 
-**Status: idea, 2026-07-09.** The inbound sibling of
-`2026-07-09-ws-reply-streaming.md`: let a command *read* a large request body
-streamed over the WebSocket, instead of the whole request arriving in one frame.
-Needed to move firmware upload onto the WS.
+**Status: partially done, 2026-07-09.** Let a command *read* a large request
+body streamed over the WebSocket, instead of the whole request arriving in one
+frame. Needed to move firmware upload onto the WS.
+
+**Update 2026-07-09 — reframed by the session-mux transport**
+(`docs/superpowers/specs/2026-07-09-session-mux-transport-design.md`). Step 1 of
+that migration shipped the transport primitive `WsRequestStream` (drains body
+frames via the private `httpd_ws_get_frame_type`); it sits dormant. What remains
+— the actual multi-frame drain end-to-end — is exercised by its first consumer,
+`2026-07-09-firmware-upload-over-websocket.md`. (The original reference here to
+`ws-reply-streaming.md` — since done and deleted — is dropped.)
 
 ## Why
 

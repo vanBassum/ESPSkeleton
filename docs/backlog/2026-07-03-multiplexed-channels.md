@@ -1,5 +1,13 @@
 # Multiplexed command channels (transport-level sessions/chunking)
 
+**Update 2026-07-09 — the framing shipped; this is now the concurrency half.**
+Step 1 of the session-mux transport
+(`docs/superpowers/specs/2026-07-09-session-mux-transport-design.md`) already put
+the session id on every chunk and enforces single-in-flight synchronously. What
+remains here is concurrency: a slot table + a worker task so several sessions run
+at once — which is also what removes the private-API `httpd_ws_get_frame_type`
+wart (see the cleanup note below).
+
 Idea (Bas, 2026-07-03): the WS protocol (and later the relay pipe)
 should do chunking and sessions itself — frames tagged with a channel
 id, many logical streams interleaved over one connection. Then upload,
