@@ -172,6 +172,38 @@ is another. Neither is special.
 Today: **single active session**. A second `Open` gets `Reject`. The handler
 drains its session synchronously.
 
+### Frontend impact — the client MUST serialize opens (day-one requirement)
+
+`Reject` is the device's *right* to refuse; it is not a licence for the client
+to provoke it. **The client session layer must serialize opens** — a FIFO
+queue, one session open at a time, the next starting only on the previous
+session's `Close` — for as long as the device is single-in-flight.
+
+This is not optional politeness; without it the transport swap is a visible
+regression on day one. Today's WS is **id-multiplexed**: `backend.ts` fires
+concurrent `send()`s (each a fresh `id`) and matches replies by id, and several
+callers rely on it *right now* — the 15 s heartbeat `ping` overlapping anything,
+a consumer page polling several status commands un-awaited every 2 s, `getLogs`
+running during the Console's live log stream. The moment the session-mux
+replaces id-based dispatch, every overlapping `send()` becomes a second `Open`
+and gets `Reject`ed — before multiplexing exists to allow the overlap. The
+client queue is what makes "deferred concurrency" *transparent* rather than a
+breakage: callers keep firing concurrently, the queue drains them one at a time,
+nobody sees a `Reject`.
+
+Cost while queued: a page's N concurrent polls become N sequential round-trips.
+For small commands over a local socket that's a few ms each — acceptable, and it
+is exactly the head-of-line blocking the backlog already accepts until
+multiplexing. When concurrency lands, the queue depth simply rises from 1 to N
+and the round-trips overlap again — no caller changes.
+
+**The gate counts client-opened command sessions only.** Device-initiated push
+(log broadcasts) is not a session the client opens — it stays the existing
+no-`id` broadcast path — so it never consumes the gate, and a `getLogs` session
+runs fine alongside the live log stream. (Folding broadcasts into device-opened
+sessions is a later unification; when it happens they're initiator=device
+sessions, still exempt from the client command gate.)
+
 Later (`docs/backlog/2026-07-03-multiplexed-channels.md`): a slot table in the
 mux + a worker task per (or pool for) sessions, so several run at once. This
 changes only `TryOpen()` and where handlers run — **not the wire format, not
@@ -211,7 +243,12 @@ onto the mux, delete its old path", all converging here:
 
 1. **`WsSessionLink` + `SessionMux` + `Session`** — build the transport,
    folding in `WsResponseStream`/`WsRequestStream`. CommandManager becomes a
-   `Sink`; reads the header line and dispatches.
+   `Sink`; reads the header line and dispatches. **Same step, non-negotiable:**
+   `backend.ts` gains the open-serialization queue (above) — the id-multiplexed
+   `send()`/`pending`-map path is replaced by "open a session, write the header
+   line + body, read the reply, `Close`", with concurrent callers queued one
+   open at a time. Cutting over the device without this breaks the frontend on
+   the first flash.
 2. **Firmware upload** (`…firmware-upload-over-websocket.md`) — first real
    streamed consumer; also the first end-to-end verification.
 3. **Partition download** (`…partition-download-over-websocket.md`) — outbound
