@@ -12,6 +12,17 @@
 
 static constexpr const char* TAG = "WebSocketHandler";
 
+// ESP-IDF internal (declared in the private esp_httpd_priv.h, NOT the public
+// esp_http_server.h): parses the next WS frame's first byte (FIN + opcode) into
+// req->aux, which httpd_ws_recv_frame then consumes. httpd's own loop calls it
+// once per handler invocation before dispatch, so to read frames *beyond* the
+// first within a single handler call we must call it ourselves. This is a
+// deliberate, documented wart — the price of draining an inbound stream on the
+// httpd task without a worker; see docs/backlog/2026-07-03-multiplexed-channels.md
+// (removed when the CommandManager worker task lands). A future IDF dropping the
+// symbol fails as a clean link error, not silent breakage.
+extern "C" esp_err_t httpd_ws_get_frame_type(httpd_req_t* req);
+
 namespace {
 
 // Streams a single command reply over the WS, flushing each buffer-full as a
@@ -81,6 +92,81 @@ public:
 
     // Emit the final frame, closing the (possibly fragmented) message.
     void finish() { sendFrame(true); }
+
+    bool failed() const { return failed_; }
+};
+
+// Feeds a command's `Stream& in` from WS frames that arrive AFTER the control
+// frame, drained synchronously on the httpd task. The body is one fragmented
+// BINARY message: successive BINARY/CONTINUE frames until the frame whose FIN
+// bit is set, which marks end-of-body (read() then returns 0). One streamed
+// request owns the socket for its whole duration — head-of-line blocking,
+// accepted until multiplexing. Each body frame must fit CHUNK bytes; a larger
+// frame is a protocol error. Control frames (CLOSE/PING/TEXT) arriving mid-body
+// are treated as end-of-body — the controlled browser client never sends them
+// mid-stream.
+//
+// NOTE: not yet wired into dispatch — that arrives with its first consumer
+// (firmware upload, docs/backlog/2026-07-09-firmware-upload-over-websocket.md),
+// which also defines how a request is flagged as streaming. Unexercised until
+// then.
+class [[maybe_unused]] WsRequestStream : public Stream
+{
+    static constexpr size_t CHUNK = 4096;
+
+    httpd_req_t* req_;
+    uint8_t buf_[CHUNK];        // current frame's unmasked payload
+    size_t len_ = 0;            // valid bytes in buf_
+    size_t pos_ = 0;            // bytes already handed to the caller
+    bool finalSeen_ = false;    // FIN frame delivered → no more body
+    bool failed_ = false;
+
+    // Pull the next body frame into buf_. False at end-of-body or on error.
+    bool pullFrame()
+    {
+        if (finalSeen_ || failed_) return false;
+
+        // Parse the next frame's first byte into req->aux, then read its header.
+        if (httpd_ws_get_frame_type(req_) != ESP_OK) { failed_ = true; return false; }
+
+        httpd_ws_frame_t f = {};                       // len==0 → header-only read
+        if (httpd_ws_recv_frame(req_, &f, 0) != ESP_OK) { failed_ = true; return false; }
+
+        if (f.type != HTTPD_WS_TYPE_BINARY && f.type != HTTPD_WS_TYPE_CONTINUE)
+        {
+            finalSeen_ = true;                         // CLOSE/PING/TEXT ends the body
+            return false;
+        }
+        if (f.len > CHUNK) { failed_ = true; return false; }
+
+        len_ = f.len;
+        pos_ = 0;
+        if (f.len > 0)
+        {
+            f.payload = buf_;                          // f.len set → this read grabs the payload
+            if (httpd_ws_recv_frame(req_, &f, CHUNK) != ESP_OK) { failed_ = true; return false; }
+        }
+        if (f.final) finalSeen_ = true;                // last fragment consumed
+        return true;
+    }
+
+public:
+    explicit WsRequestStream(httpd_req_t* req) : req_(req) {}
+
+    size_t read(void* dst, size_t size, TickType_t timeout = portMAX_DELAY) override
+    {
+        (void)timeout;
+        while (pos_ >= len_)                           // skip past any empty frames
+        {
+            if (!pullFrame()) return 0;                // EOF or error
+        }
+        size_t n = std::min(size, len_ - pos_);
+        memcpy(dst, buf_ + pos_, n);
+        pos_ += n;
+        return n;
+    }
+
+    size_t write(const void*, size_t, TickType_t = portMAX_DELAY) override { return 0; }
 
     bool failed() const { return failed_; }
 };
