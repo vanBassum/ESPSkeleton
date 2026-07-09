@@ -13,6 +13,7 @@ interface PendingRequest {
   resolve: (data: unknown) => void
   reject: (err: Error) => void
   timer: ReturnType<typeof setTimeout>
+  chunks: Uint8Array[]
 }
 
 export type ConnectionStatus = "connected" | "connecting" | "disconnected"
@@ -21,7 +22,13 @@ type AuthHandler = (authenticated: boolean) => void
 
 // ── Service ──────────────────────────────────────────────────────
 
-let nextId = 1
+// Session ids play the role of the old request ids: they correlate a reply
+// with its request and stay concurrent (no serialization while the device is
+// single-in-flight for no-body commands). Kept within 16 bits to match the wire.
+let nextSession = 1
+
+const FLAG_FINAL = 0x01
+const FLAG_REJECT = 0x02
 
 class BackendService {
   private ws: WebSocket | null = null
@@ -168,39 +175,24 @@ class BackendService {
         }
 
         ws.onmessage = (ev) => {
-          // Binary frames are dispatched to binary subscribers.
+          // Binary frames are session chunks (command replies).
           if (ev.data instanceof ArrayBuffer) {
-            this.binaryHandlers.forEach((fn) => fn(ev.data))
+            this.onBinaryChunk(ev.data)
             return
           }
-          // Defensive: some browsers may deliver the first frame as a Blob if
-          // binaryType wasn't applied in time. Convert and dispatch.
+          // Defensive: some browsers may deliver a frame as a Blob if
+          // binaryType wasn't applied in time. Convert and route the same way.
           if (typeof Blob !== "undefined" && ev.data instanceof Blob) {
-            ev.data.arrayBuffer().then((buf) => {
-              this.binaryHandlers.forEach((fn) => fn(buf))
-            })
+            ev.data.arrayBuffer().then((buf) => this.onBinaryChunk(buf))
             return
           }
+          // Text frames are broadcasts only (replies are binary now).
           try {
-            const msg = JSON.parse(ev.data)
-            if (typeof msg.id === "number") {
-              const req = this.pending.get(msg.id)
-              if (req) {
-                this.pending.delete(msg.id)
-                clearTimeout(req.timer)
-                if (msg.error) {
-                  req.reject(new Error(msg.error))
-                } else {
-                  req.resolve(msg.payload)
-                }
-              }
-            } else {
-              this.broadcastHandlers.forEach((fn) => fn(msg))
-            }
+            this.broadcastHandlers.forEach((fn) => fn(JSON.parse(ev.data)))
           } catch (e) {
             const sample = typeof ev.data === "string" ? ev.data.slice(-80) : "(non-string)"
             console.warn(
-              `[BackendService] failed to parse WS frame (${typeof ev.data === "string" ? ev.data.length : "?"} bytes); tail: ${sample}`,
+              `[BackendService] failed to parse WS text frame (${typeof ev.data === "string" ? ev.data.length : "?"} bytes); tail: ${sample}`,
               e,
             )
           }
@@ -257,19 +249,72 @@ class BackendService {
     params: Record<string, unknown> = {},
   ): Promise<T> {
     await this.ensureConnected()
-    const id = nextId++
+    const session = nextSession
+    nextSession = nextSession >= 0xffff ? 1 : nextSession + 1
+
+    // Request = one binary session chunk: [session:u16 LE | FLAG_FINAL | envelope].
+    // The envelope is the command JSON + '\n' (the device splits the header line
+    // from any body; no body for these commands).
+    const body = new TextEncoder().encode(JSON.stringify({ type, ...params }) + "\n")
+    const frame = new Uint8Array(3 + body.length)
+    frame[0] = session & 0xff
+    frame[1] = (session >> 8) & 0xff
+    frame[2] = FLAG_FINAL
+    frame.set(body, 3)
+
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id)
+        this.pending.delete(session)
         reject(new Error("Request timeout"))
       }, 10000)
-      this.pending.set(id, {
+      this.pending.set(session, {
         resolve: resolve as (data: unknown) => void,
         reject,
         timer,
+        chunks: [],
       })
-      this.ws!.send(JSON.stringify({ id, type, ...params }))
+      this.ws!.send(frame)
     })
+  }
+
+  // Reassemble a reply from its session chunks. Each chunk is
+  // [session:u16 LE | flags | payload]; FLAG_FINAL ends the reply, FLAG_REJECT
+  // is a transport/framework refusal whose payload is the reason.
+  private onBinaryChunk(data: ArrayBuffer) {
+    const view = new Uint8Array(data)
+    if (view.length < 3) return
+    const session = view[0] | (view[1] << 8)
+    const flags = view[2]
+    const req = this.pending.get(session)
+    if (!req) {
+      // No matching request — hand to legacy binary subscribers (unused here).
+      this.binaryHandlers.forEach((fn) => fn(data))
+      return
+    }
+    if (flags & FLAG_REJECT) {
+      this.pending.delete(session)
+      clearTimeout(req.timer)
+      req.reject(new Error(new TextDecoder().decode(view.subarray(3)) || "rejected"))
+      return
+    }
+    req.chunks.push(view.subarray(3))
+    if (flags & FLAG_FINAL) {
+      this.pending.delete(session)
+      clearTimeout(req.timer)
+      const total = req.chunks.reduce((a, c) => a + c.length, 0)
+      const buf = new Uint8Array(total)
+      let off = 0
+      for (const c of req.chunks) {
+        buf.set(c, off)
+        off += c.length
+      }
+      const text = new TextDecoder().decode(buf)
+      try {
+        req.resolve(text.length ? JSON.parse(text) : {})
+      } catch (e) {
+        req.reject(e instanceof Error ? e : new Error("bad reply"))
+      }
+    }
   }
 
   subscribe(fn: BroadcastHandler): () => void {
