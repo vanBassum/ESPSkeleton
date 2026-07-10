@@ -96,7 +96,7 @@ sequenceDiagram
     participant Mux as SessionMux
     participant Cmd as CommandManager
 
-    rect rgb(235, 244, 255)
+    rect rgba(56, 132, 255, 0.28)
     Note over FE,Cmd: 1 - Connect (virgin, no stored key)
     FE->>WS: open /ws, no token
     WS->>Gate: connection opened
@@ -104,7 +104,7 @@ sequenceDiagram
     WS-->>FE: socket open
     end
 
-    rect rgb(255, 244, 235)
+    rect rgba(245, 158, 11, 0.28)
     Note over FE,Cmd: 2 - Login handshake (gate only, mux and commands never see it)
     FE->>WS: sid 1, FINAL, login password
     WS->>SL: binary frame
@@ -116,7 +116,7 @@ sequenceDiagram
     Note over FE: store key, authenticated = true
     end
 
-    rect rgb(235, 255, 240)
+    rect rgba(34, 197, 94, 0.26)
     Note over FE,Cmd: 3 - First command getLogs (authed, flows to the mux)
     FE->>WS: sid 2, FINAL, getLogs
     WS->>SL: binary frame
@@ -131,7 +131,7 @@ sequenceDiagram
     WS-->>FE: reply, resolve
     end
 
-    rect rgb(235, 255, 240)
+    rect rgba(34, 197, 94, 0.26)
     Note over FE,Cmd: 4 - Second command reboot (already logged in, NO re-auth)
     FE->>WS: sid 3, FINAL, reboot
     WS->>SL: binary frame
