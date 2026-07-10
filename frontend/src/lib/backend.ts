@@ -59,6 +59,7 @@ class BackendService {
   private token: string | null = sessionStorage.getItem(TOKEN_KEY)
   private authHandlers = new Set<AuthHandler>()
   private _authenticated = false
+  private _authResolved = false
 
   get status(): ConnectionStatus {
     return this._status
@@ -66,6 +67,13 @@ class BackendService {
 
   get authenticated(): boolean {
     return this._authenticated
+  }
+
+  // True once the first handshake has settled either way (authed or
+  // needs-login). Lets a late-subscribing hook skip its "checking" state
+  // instead of waiting on the timeout fallback.
+  get authResolved(): boolean {
+    return this._authResolved
   }
 
   get hasToken(): boolean {
@@ -81,6 +89,7 @@ class BackendService {
 
   private setAuthenticated(auth: boolean) {
     this._authenticated = auth
+    this._authResolved = true
     this.authHandlers.forEach((fn) => fn(auth))
   }
 

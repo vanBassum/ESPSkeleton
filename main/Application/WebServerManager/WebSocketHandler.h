@@ -84,5 +84,6 @@ private:
     void HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, const char* line);
     void SetAuthed(int fd, const char* key);
     void SendReply(httpd_req_t* req, uint16_t sid, const char* json);
+    void SendReplyN(httpd_req_t* req, uint16_t sid, const void* data, size_t len);
     void SendReject(httpd_req_t* req, uint16_t sid, const char* reason);
 };

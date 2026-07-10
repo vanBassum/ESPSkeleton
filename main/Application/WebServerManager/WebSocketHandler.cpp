@@ -2,6 +2,8 @@
 #include "CommandManager.h"
 #include "WebServerManager.h"
 #include "JsonHelpers.h"
+#include "JsonWriter.h"
+#include "BufferStream.h"
 #include "MemoryStream.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -66,7 +68,7 @@ bool WebSocketHandler::AddWsClient(int fd)
     if (slot < 0) { ESP_LOGW(TAG, "WS client rejected (table full): fd=%d", fd); return false; }
 
     wsClients_[slot]        = fd;
-    clientAuthed_[slot]     = !auth_->AuthRequired();   // empty password ⇒ authed at connect
+    clientAuthed_[slot]     = !(auth_ && auth_->AuthRequired());   // empty password ⇒ authed at connect
     clientConnectedAt_[slot] = now;
     clientTokens_[slot][0]  = 0;
     consecBinFails_[slot]   = 0;
@@ -322,11 +324,16 @@ void WebSocketHandler::SetAuthed(int fd, const char* key)
 
 void WebSocketHandler::SendReply(httpd_req_t* req, uint16_t sid, const char* json)
 {
+    SendReplyN(req, sid, json, strlen(json));
+}
+
+void WebSocketHandler::SendReplyN(httpd_req_t* req, uint16_t sid, const void* data, size_t len)
+{
     uint8_t buf[session::HEADER_LEN + 160];
-    size_t n = strlen(json);
+    size_t n = len;
     if (n > sizeof(buf) - session::HEADER_LEN) n = sizeof(buf) - session::HEADER_LEN;
     session::writeHeader(buf, sid, session::FLAG_FINAL);
-    memcpy(buf + session::HEADER_LEN, json, n);
+    memcpy(buf + session::HEADER_LEN, data, n);
     WsSessionLink link(req, sendMutex_);
     link.SendRaw(buf, session::HEADER_LEN + n);
 }
@@ -354,10 +361,14 @@ void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, con
     {
         char name[33] = {};
         auth_->GetDeviceName(name, sizeof(name));
-        char reply[96];
-        snprintf(reply, sizeof(reply), "{\"name\":\"%s\",\"authRequired\":%s}",
-                 name, auth_->AuthRequired() ? "true" : "false");
-        SendReply(req, sid, reply);
+        char body[96];
+        BufferStream bs(body, sizeof(body));
+        JsonWriter json(bs);
+        json.beginObject();
+        json.field("name", name);
+        json.field("authRequired", auth_->AuthRequired());
+        json.endObject();
+        SendReplyN(req, sid, bs.data(), bs.length());
         return;
     }
     if (strcmp(type, "login") == 0)
