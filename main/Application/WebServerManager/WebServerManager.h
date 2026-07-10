@@ -32,19 +32,11 @@ private:
     StaticFileHandler staticFileHandler_;
     WebSocketHandler wsHandler_;
 
-    // ── Auth state ────────────────────────────────────────────
+    // Credential authority (owned here; used by the WS auth gate). No HTTP auth
+    // surface remains — the WebSocket carries all device interaction.
     Authenticator auth_;
-
-    bool CheckBearer(httpd_req_t* req);
-
-    static void SendUnauthorized(httpd_req_t* req);
 
     void MountFatPartition();
     void StartServer();
     void RegisterRoutes();
-
-    static esp_err_t HandleApiCommand(httpd_req_t* req);
-    static esp_err_t HandleCorsPreflight(httpd_req_t* req);
-
-    static void SetCorsHeaders(httpd_req_t* req);
 };

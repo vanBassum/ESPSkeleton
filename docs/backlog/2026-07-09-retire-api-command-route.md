@@ -1,5 +1,13 @@
 # Retire the HTTP /api/command route (HTTP serves static only)
 
+**Status: DONE 2026-07-10** (`main`, roadmap step 4). Deleted `POST /api/command`,
+its `OPTIONS`/CORS preflight, the CORS header helper, the `Bearer` guard
+(`CheckBearer`/`SendUnauthorized`), and the `HttpRequestStream`/`HttpResponseStream`
+adapters from `WebServerManager`. HTTP now registers only the `/ws` upgrade and the
+static-file wildcard. Verified on device: `GET /` → 200, `POST /api/command` → 405
+(route gone), WS auth-matrix intact. `/api/login` was already removed in step 5.
+Notes below are the original sketch.
+
 **Status: idea, 2026-07-09.** The cleanup that closes the endpoint-decommission
 set — do it last.
 
