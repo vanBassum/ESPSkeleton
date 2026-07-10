@@ -21,8 +21,8 @@ byte-pump bridge are for.
 | 1 | Foundation: mux + `Session`/`WsSessionLink`, no-body commands over binary, frontend cutover, old TEXT path removed | **DONE** (`main`, `c3c2096`) | — |
 | 2 | Firmware upload over WS (now `writePartition`) | **DONE** (`main`, `9585366`) — verified on device: app + data paths, reboot into OTA'd slot, device-driven progress | [firmware-upload](backlog/2026-07-09-firmware-upload-over-websocket.md) |
 | 3 | Partition download over WS | **DONE** (`main`) — verified on live device: nvs/www exact-size, unknown-partition error, over the same reply-streaming path | [partition-download](backlog/2026-07-09-partition-download-over-websocket.md) |
-| 4 | Retire `/api/command` + `/api/login` + CORS (HTTP static-only) | pending (needs 5; `/api/command` now used only by the pre-WS `ping` token-check) | [retire-api-command](backlog/2026-07-09-retire-api-command-route.md) |
-| 5 | Login over WS (per-connection auth; session key) | pending (must precede 4) — [design](superpowers/specs/2026-07-10-login-over-websocket-design.md) | [login](backlog/2026-07-09-login-over-websocket.md) |
+| 4 | Retire `/api/command` + `/api/login` + CORS (HTTP static-only) | pending — login no longer blocks it (step 5 DONE); only `/api/command` + CORS removal remains | [retire-api-command](backlog/2026-07-09-retire-api-command-route.md) |
+| 5 | Login over WS (per-connection auth; session key) | **DONE** (`main`, `a97b9f7`..`e89942e`) — verified on device: empty-password and password-set matrix over a fresh WS (`hello`/`login`/`auth` resume all pass), empty password restored, `getLogs` works with no login — [design](superpowers/specs/2026-07-10-login-over-websocket-design.md) | [login](backlog/2026-07-09-login-over-websocket.md) |
 | 6 | Concurrency: worker task + slot table (removes the private-API wart) | NOT PART OF THIS ROADMAP | [multiplexed-channels](backlog/2026-07-03-multiplexed-channels.md) |
 
 Dont forget to do a code quality refactor after this is working. I think we should seperate some things out of the webmanager. but thats for later to figure out
@@ -112,3 +112,32 @@ larger reply over the same session chunks — no new framing.
   so a large download emits many small WS frames (~307 KB/s for www). Correct, just
   not optimal; a larger window costs permanent RAM and belongs with the step-6 tuning,
   per the backlog's accepted HOL-blocking / efficiency deferral.
+
+## Step 5 — as built
+
+Auth moved fully in-band: a **connection-level `authed` bit** (per-fd, in the WS
+transport's client table) replaces `?token=`/`Bearer`. The WS upgrade is accepted
+**unauthenticated**; a gate in front of `SessionMux` handles the pre-auth vocabulary
+`hello`/`login`/`auth` itself and never lets an un-authed chunk reach the mux or
+`CommandManager` — so the command layer stays 100% auth-blind. `SessionTable` is
+**kept**, repurposed as the RAM key table for `auth{key}` resume across reconnects
+within one boot (reboot clears it — re-login required). Empty `web.password` is the
+new default: auth is disabled out of the box (`authed = !AuthRequired()` at connect),
+matching the "open by default" template goal. `POST`/`GET /api/login`, the WS
+`?token=` query param, and the pre-WS HTTP `ping` token-check are all removed —
+nothing HTTP-side does auth anymore. `/api/command` and CORS are untouched, deferred
+to step 4 as planned.
+
+- **Fixed during build-out:** the gate originally only intercepted chunks on
+  *un-authed* connections; an already-authed connection sending `hello`/`login`/`auth`
+  (e.g. a stray re-login) fell through to the mux and got treated as an unknown
+  command. The gate now recognizes the handshake verbs on any connection, authed or
+  not, and only forwards everything else past itself once authed.
+- **Verified on a freshly flashed device** (`192.168.50.111`, this task): WS smoke
+  matrix — empty-password `hello` (`authRequired:false`), password-set `hello`
+  (`authRequired:true`), pre-auth `getLogs` rejected, wrong password rejected, correct
+  password mints a key and unlocks `getLogs`, `auth{key}` resume on a new connection
+  succeeds, a bogus key is rejected, then the empty password was restored and confirmed
+  with a fresh connection (`hello` → `authRequired:false`, `getLogs` succeeds with no
+  login). Browser-matrix verification (login page, cross-tab, reboot-drops-session,
+  `pnpm dev` cross-origin) is left to manual check per the design's done-when criteria.

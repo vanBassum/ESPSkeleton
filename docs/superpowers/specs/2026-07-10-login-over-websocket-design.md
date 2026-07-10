@@ -1,7 +1,7 @@
 # Login over the WebSocket — Design
 
 **Date:** 2026-07-10
-**Status:** Approved in discussion (this doc records it)
+**Status:** Implemented and verified on device, 2026-07-10 (`main`, `a97b9f7`..`e89942e`)
 **Roadmap:** session-transport step 5 (`docs/session-transport-roadmap.md`).
 Supersedes the transport half of `2026-07-03-webserver-login-design.md` (the
 command *contract* and the "auth lives at the transport edge" principle carry

@@ -1,11 +1,13 @@
 # Login over the WebSocket (retire /api/login, per-connection auth)
 
-**Status: DESIGNED 2026-07-10** — see
-`docs/superpowers/specs/2026-07-10-login-over-websocket-design.md` (roadmap step
-5). Landed decisions: connection-level `authed` bit, auth gate in front of the
-mux, session key presented once per connection (SessionTable **kept**), empty
-`web.password` = auth disabled and is the new default. The notes below are the
-original sketch.
+**Status: DONE 2026-07-10** — implemented and verified on device, commits
+`a97b9f7`..`e89942e` on `main` (this session; see
+`docs/session-transport-roadmap.md` step 5 "as built" for the verified matrix).
+Design: `docs/superpowers/specs/2026-07-10-login-over-websocket-design.md`
+(roadmap step 5). Landed decisions: connection-level `authed` bit, auth gate in
+front of the mux, session key presented once per connection (SessionTable
+**kept**), empty `web.password` = auth disabled and is the new default. The
+notes below are the original sketch.
 
 **Status: idea, 2026-07-09.** One of the endpoint-decommission issues in the
 "everything over one WS" direction. Redesigns `webserver-login`
