@@ -3,7 +3,6 @@
 #include "Authenticator.h"
 #include "AuthGate.h"
 #include "JsonHelpers.h"
-#include "MemoryStream.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -209,6 +208,13 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     size_t plen = len - session::HEADER_LEN;
     int fd = httpd_req_to_sockfd(req);
 
+    // All inbound frames are processed single-threaded on the httpd task, so the
+    // AuthGate below is the only writer of this connection's state (authed/key).
+    // Broadcast runs on another task and may reset (remove) a slot concurrently,
+    // but it only ever *clears* a slot — it never sets `authed` — so the auth gate
+    // can't be defeated by that race, and a cleared slot reads as empty (self-
+    // healing). If a worker task ever consumes these pointers (step 6), this needs
+    // real locking (copy-under-lock, as the pre-refactor code did).
     WsConnection* conn = registry_.find(fd);
     if (!conn) return;   // unknown fd (closed mid-frame)
 

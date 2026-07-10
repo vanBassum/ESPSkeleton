@@ -17,7 +17,7 @@ WsConnection* ConnectionRegistry::add(int fd, bool authed, int64_t now)
     for (auto& c : conns_) if (!c.active()) { slot = &c; break; }
     if (!slot)   // full: reap a stale un-authenticated squatter
         for (auto& c : conns_)
-            if (!c.authed && now - c.connectedAt > PRE_AUTH_TIMEOUT_US) { slot = &c; break; }
+            if (!c.authed && c.age(now) > PRE_AUTH_TIMEOUT_US) { slot = &c; break; }
     if (!slot) { ESP_LOGW(TAG, "table full: fd=%d refused", fd); return nullptr; }
 
     slot->reset();
