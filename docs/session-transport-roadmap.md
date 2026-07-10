@@ -20,8 +20,8 @@ byte-pump bridge are for.
 |---|------|--------|---------|
 | 1 | Foundation: mux + `Session`/`WsSessionLink`, no-body commands over binary, frontend cutover, old TEXT path removed | **DONE** (`main`, `c3c2096`) | — |
 | 2 | Firmware upload over WS (now `writePartition`) | **DONE** (`main`, `9585366`) — verified on device: app + data paths, reboot into OTA'd slot, device-driven progress | [firmware-upload](backlog/2026-07-09-firmware-upload-over-websocket.md) |
-| 3 | Partition download over WS | pending | [partition-download](backlog/2026-07-09-partition-download-over-websocket.md) |
-| 4 | Retire `/api/command` + `/api/login` + CORS (HTTP static-only) | pending (needs 2, 3, 5) | [retire-api-command](backlog/2026-07-09-retire-api-command-route.md) |
+| 3 | Partition download over WS | **DONE** (`main`) — verified on live device: nvs/www exact-size, unknown-partition error, over the same reply-streaming path | [partition-download](backlog/2026-07-09-partition-download-over-websocket.md) |
+| 4 | Retire `/api/command` + `/api/login` + CORS (HTTP static-only) | pending (needs 5; `/api/command` now used only by the pre-WS `ping` token-check) | [retire-api-command](backlog/2026-07-09-retire-api-command-route.md) |
 | 5 | Login over WS (per-connection auth; `login` command) | pending (must precede 4) | [login](backlog/2026-07-09-login-over-websocket.md) |
 | 6 | Concurrency: worker task + slot table (removes the private-API wart) | NOT PART OF THIS ROADMAP | [multiplexed-channels](backlog/2026-07-03-multiplexed-channels.md) |
 
@@ -84,3 +84,31 @@ mapped to the bar). Also confirmed through the real browser UI.
   partitions have no finalize).
 - The explicit mux busy-gate/`REJECT` was not needed for single-httpd-task draining (a
   mismatched sid mid-body fails the read defensively); it returns with step 6's worker task.
+
+## Step 3 — as built
+
+**Frontend-only change.** The device side needed nothing: `Cmd_DownloadPartition`
+already writes raw partition bytes to `out`, and `Session::write` → the reply
+window → `OnSessionOpened`'s `finish()` already stream any outbound reply over WS
+(shipped in step 1, exercised by upload progress in step 2). Download is just a
+larger reply over the same session chunks — no new framing.
+
+- **`backend.ts`:** `downloadPartitionFile` moved off `POST /api/command` onto a WS
+  session opened through the same `enqueue` FIFO as upload (owns the socket until
+  done — the device would `REJECT` an interleaved id). Added a **binary reply mode**
+  to the reassembler: accumulate raw chunks, resolve with a `Uint8Array`, report
+  cumulative bytes for progress. The reply timeout is now **idle-based** (`bumpTimer`
+  on each chunk) so a large-but-steady transfer isn't killed by a total-duration cap;
+  this also covers the upload progress path. A **truncation guard** throws when the
+  received byte count ≠ the expected partition size (the old HTTP path saved truncated
+  files silently). The dead `authHeaders()` helper was removed. `FirmwarePage` needed
+  no change — the method signature is unchanged.
+- **Still on `/api/command`:** only the pre-WS `ping` token-check (retired in step 4/5).
+- **Verified against the live device** (`192.168.50.111`, firmware unchanged) by
+  reproducing the exact wire path: `nvs` (24576 B) and `www` (917504 B, many outbound
+  chunks) round-trip byte-exact; an unknown label returns `{"ok":false,"error":...}`
+  in a FINAL chunk and trips the frontend guard.
+- **Known non-issue (efficiency, deferred):** the outbound `SESSION_WINDOW` is 512 B,
+  so a large download emits many small WS frames (~307 KB/s for www). Correct, just
+  not optimal; a larger window costs permanent RAM and belongs with the step-6 tuning,
+  per the backlog's accepted HOL-blocking / efficiency deferral.

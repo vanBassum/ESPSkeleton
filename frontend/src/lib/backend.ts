@@ -13,11 +13,18 @@ interface PendingRequest {
   resolve: (data: unknown) => void
   reject: (err: Error) => void
   timer: ReturnType<typeof setTimeout>
+  timeoutMs: number
   chunks: Uint8Array[]
+  received: number
   // When set, each non-final reply chunk is parsed as its own JSON message and
   // passed here (e.g. upload progress); the final chunk resolves the request.
   // Absent → default behaviour: accumulate all chunks and parse once at FINAL.
   onMessage?: (msg: Record<string, unknown>) => void
+  // Binary reply mode (e.g. partition download): accumulate raw chunks and
+  // resolve with the reassembled Uint8Array instead of parsing JSON. onData
+  // reports cumulative bytes received, for progress.
+  binary?: boolean
+  onData?: (received: number) => void
 }
 
 export type ConnectionStatus = "connected" | "connecting" | "disconnected"
@@ -84,10 +91,6 @@ class BackendService {
     sessionStorage.removeItem(TOKEN_KEY)
     this.setAuthenticated(false)
     this.ws?.close()
-  }
-
-  private authHeaders(): Record<string, string> {
-    return this.token ? { Authorization: `Bearer ${this.token}` } : {}
   }
 
   private apiUrl(path: string): string {
@@ -282,12 +285,18 @@ class BackendService {
 
   // Register a pending reply for `session`; resolves when its FINAL chunk
   // arrives (reassembled in onBinaryChunk), rejects on REJECT/timeout/close.
-  // `onMessage`, if given, receives each intermediate chunk parsed as JSON.
+  // For a streamed reply the timeout is idle-based: onBinaryChunk bumps it on
+  // each chunk (see bumpTimer), so it bounds silence, not total transfer time.
   private awaitReply<T>(
     session: number,
-    timeoutMs = 10000,
-    onMessage?: (msg: Record<string, unknown>) => void,
+    opts: {
+      timeoutMs?: number
+      onMessage?: (msg: Record<string, unknown>) => void
+      binary?: boolean
+      onData?: (received: number) => void
+    } = {},
   ): Promise<T> {
+    const timeoutMs = opts.timeoutMs ?? 10000
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(session)
@@ -297,10 +306,26 @@ class BackendService {
         resolve: resolve as (data: unknown) => void,
         reject,
         timer,
+        timeoutMs,
         chunks: [],
-        onMessage,
+        received: 0,
+        onMessage: opts.onMessage,
+        binary: opts.binary,
+        onData: opts.onData,
       })
     })
+  }
+
+  // Restart a pending reply's idle timeout — called on each streamed chunk so a
+  // large-but-steady transfer isn't killed by the total-duration cap.
+  private bumpTimer(session: number) {
+    const req = this.pending.get(session)
+    if (!req) return
+    clearTimeout(req.timer)
+    req.timer = setTimeout(() => {
+      this.pending.delete(session)
+      req.reject(new Error("Request timeout"))
+    }, req.timeoutMs)
   }
 
   async send<T>(
@@ -351,6 +376,30 @@ class BackendService {
       return
     }
 
+    // Binary reply (e.g. partition download): accumulate raw chunks, report
+    // cumulative bytes for progress, and resolve with the reassembled bytes at
+    // FINAL. The caller interprets the payload (image bytes, or a short JSON
+    // error object the device may send instead).
+    if (req.binary) {
+      const chunk = view.subarray(3)
+      req.chunks.push(chunk)
+      req.received += chunk.length
+      this.bumpTimer(session)
+      req.onData?.(req.received)
+      if (flags & FLAG_FINAL) {
+        this.pending.delete(session)
+        clearTimeout(req.timer)
+        const buf = new Uint8Array(req.received)
+        let off = 0
+        for (const c of req.chunks) {
+          buf.set(c, off)
+          off += c.length
+        }
+        req.resolve(buf)
+      }
+      return
+    }
+
     // Streaming reply: each chunk is one complete JSON message. Intermediate
     // chunks go to onMessage; the FINAL chunk resolves the request.
     if (req.onMessage) {
@@ -364,6 +413,7 @@ class BackendService {
           req.reject(e instanceof Error ? e : new Error("bad reply"))
         }
       } else if (text.length) {
+        this.bumpTimer(session)
         try {
           req.onMessage(JSON.parse(text))
         } catch {
@@ -494,15 +544,14 @@ class BackendService {
       // messages as it flashes, and we map those to a percentage. Client-side
       // "bytes sent" can't see the device's write position (the OS buffers the
       // socket), so it would race to 100% while the write is still in flight.
-      const reply = this.awaitReply<{ ok: boolean; size?: number; error?: string }>(
-        session,
-        120000,
-        (msg) => {
+      const reply = this.awaitReply<{ ok: boolean; size?: number; error?: string }>(session, {
+        timeoutMs: 120000,
+        onMessage: (msg) => {
           if (total && typeof msg.p === "number") {
             onProgress?.(Math.min(100, Math.round((msg.p / total) * 100)))
           }
         },
-      )
+      })
 
       // Envelope chunk (not FINAL — the body follows on the same session id).
       const envelope = new TextEncoder().encode(JSON.stringify({ type: "writePartition", partition }) + "\n")
@@ -536,53 +585,54 @@ class BackendService {
     }
   }
 
-  /** Fetch a partition image through the command pipe and save it as <label>.bin.
-   *  The response is chunked (no Content-Length), so progress is computed
-   *  against expectedSize — the UI knows it from the partition table. */
+  /** Download a partition image as one outbound streamed session and save it as
+   *  <label>.bin. The device writes the raw partition bytes to the reply stream,
+   *  chunked and ended by FINAL (or, on failure, a short JSON error object). The
+   *  reply is chunked with no length header, so progress is computed against
+   *  expectedSize — the UI knows it from the partition table. Runs through the
+   *  open queue, so it owns the socket until it finishes (the device would REJECT
+   *  an interleaved session id). */
   async downloadPartitionFile(
     label: string,
     expectedSize?: number,
     onProgress?: (percent: number) => void,
   ): Promise<void> {
-    // Same single-threaded-server precaution as uploads: don't let our
-    // heartbeat race a server that is busy streaming to us.
-    this.stopHeartbeat()
-    try {
-      const res = await fetch(this.commandUrl("downloadPartition"), {
-        method: "POST",
-        headers: this.authHeaders(),
-        body: JSON.stringify({ partition: label }),
+    const buf = await this.enqueue(async () => {
+      await this.ensureConnected()
+      const session = this.allocSession()
+      const reply = this.awaitReply<Uint8Array<ArrayBuffer>>(session, {
+        timeoutMs: 120000,
+        binary: true,
+        onData: (received) => {
+          if (expectedSize) onProgress?.(Math.min(100, Math.round((received / expectedSize) * 100)))
+        },
       })
-      if (res.status === 401) {
-        this.clearAuth()
-        throw new Error("Not authenticated")
-      }
-      if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+      // Request = one FINAL chunk: the command envelope, no body.
+      const body = new TextEncoder().encode(JSON.stringify({ type: "downloadPartition", partition: label }) + "\n")
+      this.sendChunk(session, FLAG_FINAL, body)
+      return reply
+    })
 
-      const reader = res.body.getReader()
-      const chunks: BlobPart[] = []
-      let received = 0
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        chunks.push(value)
-        received += value.length
-        if (expectedSize) onProgress?.(Math.min(100, Math.round((received / expectedSize) * 100)))
-      }
-
-      const blob = new Blob(chunks)
-      const text = blob.size < 256 ? await blob.slice(0, 256).text() : ""
+    // A short reply that is a JSON error object means the device refused the
+    // request (e.g. unknown partition) instead of streaming image bytes.
+    if (buf.length < 256) {
+      const text = new TextDecoder().decode(buf)
       if (text.startsWith('{"ok":false')) throw new Error(JSON.parse(text).error ?? "download failed")
-
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `${label}.bin`
-      a.click()
-      URL.revokeObjectURL(url)
-    } finally {
-      this.startHeartbeat()
     }
+    // The device always streams the whole partition; a short read (a mid-stream
+    // flash/socket failure) would leave a truncated image + FINAL, so verify the
+    // length rather than silently saving a corrupt file.
+    if (expectedSize && buf.length !== expectedSize) {
+      throw new Error(`incomplete download: got ${buf.length} of ${expectedSize} bytes`)
+    }
+
+    const url = URL.createObjectURL(new Blob([buf]))
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${label}.bin`
+    a.click()
+    URL.revokeObjectURL(url)
+    onProgress?.(100)
   }
 
 }

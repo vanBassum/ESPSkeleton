@@ -1,5 +1,12 @@
 # Partition download over the WebSocket (retire the HTTP download path)
 
+**Status: DONE 2026-07-10** (roadmap step 3, `main`). Frontend-only change — the
+device already streamed `downloadPartition` to the reply `Stream`. `backend.ts`
+now runs it as an outbound WS session (binary reassembly + idle timeout +
+truncation guard); nothing uses `/api/command` for `downloadPartition`. Verified
+byte-exact on the live device for `nvs`/`www` plus the unknown-partition error.
+See the "Step 3 — as built" note in `docs/session-transport-roadmap.md`.
+
 **Status: idea, 2026-07-09.** One of the endpoint-decommission issues in the
 "everything over one WS" direction.
 
