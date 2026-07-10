@@ -77,4 +77,12 @@ private:
     // streams back as chunks on the same session id.
     void HandleBinary(httpd_req_t* req, const uint8_t* frame, size_t len);
     void OnSessionOpened(Session& session) override;
+
+    // Transport handshake verbs (hello / login / auth), handled by the gate for
+    // ANY connection — the mux and CommandManager never see them. `line` is the
+    // request's header line (NUL-terminated, newline stripped).
+    void HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, const char* line);
+    void SetAuthed(int fd, const char* key);
+    void SendReply(httpd_req_t* req, uint16_t sid, const char* json);
+    void SendReject(httpd_req_t* req, uint16_t sid, const char* reason);
 };

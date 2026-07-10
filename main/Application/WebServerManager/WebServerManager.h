@@ -66,8 +66,6 @@ private:
     void CheckPasswordEpoch();
     bool CheckBearer(httpd_req_t* req);
 
-    static esp_err_t HandleLoginGet(httpd_req_t* req);
-    static esp_err_t HandleLoginPost(httpd_req_t* req);
     static void SendUnauthorized(httpd_req_t* req);
 
     void MountFatPartition();

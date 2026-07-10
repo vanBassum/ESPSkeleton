@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 static constexpr const char* TAG = "WebSocketHandler";
@@ -268,8 +269,29 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     uint8_t  flags = frame[2];
     const uint8_t* payload = frame + session::HEADER_LEN;
     size_t plen = len - session::HEADER_LEN;
-
     int fd = httpd_req_to_sockfd(req);
+
+    // Peek the command type off the first chunk's header line. hello/login/auth
+    // are transport handshake verbs the gate handles for ANY connection (an
+    // empty-password connection is authed at connect but still needs hello, and
+    // those verbs are not mux commands). Everything else needs an authenticated
+    // connection and goes to the mux. Safe to peek here: HandleBinary only ever
+    // sees a session's first chunk — a streamed body's continuation chunks are
+    // pulled inside the handler via RecvChunk, never re-entering HandleBinary.
+    char line[160];
+    size_t n = std::min(plen, sizeof(line) - 1);
+    memcpy(line, payload, n);
+    line[n] = '\0';
+    if (char* nl = strchr(line, '\n')) *nl = '\0';
+
+    char type[16] = {};
+    ExtractJsonString(line, "type", type, sizeof(type));
+
+    if (strcmp(type, "hello") == 0 || strcmp(type, "login") == 0 || strcmp(type, "auth") == 0)
+    {
+        HandlePreAuth(req, fd, sid, line);
+        return;
+    }
     if (IsAuthed(fd))
     {
         WsSessionLink link(req, sendMutex_);
@@ -278,8 +300,91 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
         mux.OnChunk(sid, flags, payload, plen);
         return;
     }
-    // Unauthenticated: handled by the pre-auth gate (Task 3). Until then, drop.
-    (void)sid; (void)flags;
+    // Unauthenticated + not a handshake verb → transport refusal.
+    SendReject(req, sid, "unauthorized");
+}
+
+void WebSocketHandler::SetAuthed(int fd, const char* key)
+{
+    LOCK(wsMutex_);
+    for (int i = 0; i < MAX_WS_CLIENTS; i++)
+        if (wsClients_[i] == fd)
+        {
+            clientAuthed_[i] = true;
+            strlcpy(clientTokens_[i], key ? key : "", sizeof(clientTokens_[i]));
+            return;
+        }
+}
+
+void WebSocketHandler::SendReply(httpd_req_t* req, uint16_t sid, const char* json)
+{
+    uint8_t buf[session::HEADER_LEN + 160];
+    size_t n = strlen(json);
+    if (n > sizeof(buf) - session::HEADER_LEN) n = sizeof(buf) - session::HEADER_LEN;
+    session::writeHeader(buf, sid, session::FLAG_FINAL);
+    memcpy(buf + session::HEADER_LEN, json, n);
+    WsSessionLink link(req, sendMutex_);
+    link.SendRaw(buf, session::HEADER_LEN + n);
+}
+
+void WebSocketHandler::SendReject(httpd_req_t* req, uint16_t sid, const char* reason)
+{
+    uint8_t buf[session::HEADER_LEN + 32];
+    size_t n = strlen(reason);
+    if (n > sizeof(buf) - session::HEADER_LEN) n = sizeof(buf) - session::HEADER_LEN;
+    session::writeHeader(buf, sid, session::FLAG_REJECT);
+    memcpy(buf + session::HEADER_LEN, reason, n);
+    WsSessionLink link(req, sendMutex_);
+    link.SendRaw(buf, session::HEADER_LEN + n);
+}
+
+void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, const char* line)
+{
+    // `line` is the request's header line, already NUL-terminated with the
+    // trailing newline stripped by HandleBinary. HandleBinary only routes the
+    // three handshake verbs here, for authed and unauthed connections alike.
+    char type[16] = {};
+    ExtractJsonString(line, "type", type, sizeof(type));
+
+    if (strcmp(type, "hello") == 0)
+    {
+        char name[33] = {};
+        auth_->GetDeviceName(name, sizeof(name));
+        char reply[96];
+        snprintf(reply, sizeof(reply), "{\"name\":\"%s\",\"authRequired\":%s}",
+                 name, auth_->AuthRequired() ? "true" : "false");
+        SendReply(req, sid, reply);
+        return;
+    }
+    if (strcmp(type, "login") == 0)
+    {
+        char pw[64] = {};
+        ExtractJsonString(line, "password", pw, sizeof(pw));
+        if (auth_->CheckPassword(pw))
+        {
+            char key[SessionTable::TOKEN_LEN] = {};
+            auth_->MintKey(key);
+            SetAuthed(fd, key);
+            char reply[64];
+            snprintf(reply, sizeof(reply), "{\"ok\":true,\"key\":\"%s\"}", key);
+            SendReply(req, sid, reply);
+        }
+        else SendReply(req, sid, "{\"ok\":false}");
+        return;
+    }
+    if (strcmp(type, "auth") == 0)
+    {
+        char key[SessionTable::TOKEN_LEN] = {};
+        ExtractJsonString(line, "key", key, sizeof(key));
+        if (auth_->ValidateToken(key))
+        {
+            SetAuthed(fd, key);
+            SendReply(req, sid, "{\"ok\":true}");
+        }
+        else SendReply(req, sid, "{\"ok\":false}");
+        return;
+    }
+    // HandleBinary only routes the three verbs here; nothing else reaches this.
 }
 
 void WebSocketHandler::OnSessionOpened(Session& session)

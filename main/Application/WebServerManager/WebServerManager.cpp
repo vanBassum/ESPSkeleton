@@ -128,41 +128,6 @@ void WebServerManager::RegisterRoutes()
     };
     httpd_register_uri_handler(server_, &api_command_opts);
 
-    // Login — the only open API surface (see spec: everything else that
-    // knows anything sits behind auth).
-    const httpd_uri_t login_get = {
-        .uri = "/api/login",
-        .method = HTTP_GET,
-        .handler = HandleLoginGet,
-        .user_ctx = this,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr,
-    };
-    httpd_register_uri_handler(server_, &login_get);
-
-    const httpd_uri_t login_post = {
-        .uri = "/api/login",
-        .method = HTTP_POST,
-        .handler = HandleLoginPost,
-        .user_ctx = this,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr,
-    };
-    httpd_register_uri_handler(server_, &login_post);
-
-    const httpd_uri_t login_opts = {
-        .uri = "/api/login",
-        .method = HTTP_OPTIONS,
-        .handler = HandleCorsPreflight,
-        .user_ctx = this,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr,
-    };
-    httpd_register_uri_handler(server_, &login_opts);
-
     wsHandler_.RegisterRoute(server_);
     staticFileHandler_.RegisterRoute(server_, BASE_PATH);
 }
@@ -365,57 +330,3 @@ void WebServerManager::SendUnauthorized(httpd_req_t* req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"error\":\"unauthorized\"}");
 }
-
-esp_err_t WebServerManager::HandleLoginGet(httpd_req_t* req)
-{
-    auto* self = static_cast<WebServerManager*>(req->user_ctx);
-
-    char name[33] = {};
-    self->serviceProvider_.getSystemManager().GetDeviceName(name, sizeof(name));
-
-    char body[128];   // 32-char name, worst-case JSON escaping
-    BufferStream out(body, sizeof(body));
-    JsonWriter json(out);
-    json.beginObject();
-    json.field("name", name);
-    json.endObject();
-
-    SetCorsHeaders(req);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, out.data(), out.length());
-    return ESP_OK;
-}
-
-esp_err_t WebServerManager::HandleLoginPost(httpd_req_t* req)
-{
-    auto* self = static_cast<WebServerManager*>(req->user_ctx);
-    self->CheckPasswordEpoch();
-
-    HttpRequestStream in(req);
-    JsonReader<256> json(in);
-    char password[64] = {};
-    json.GetString("password", password, sizeof(password));
-
-    char expected[64] = {};
-    webPassword_.Get(expected, sizeof(expected));
-
-    if (strcmp(password, expected) != 0)
-    {
-        // No delay, no lockout — deliberately (spec): this layer keeps
-        // out the pleps, it is not a security boundary.
-        SendUnauthorized(req);
-        return ESP_OK;
-    }
-
-    char token[SessionTable::TOKEN_LEN] = {};
-    self->sessions_.Create(token);
-
-    char body[64];
-    int n = snprintf(body, sizeof(body), "{\"token\":\"%s\"}", token);
-
-    SetCorsHeaders(req);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, body, n);
-    return ESP_OK;
-}
-
