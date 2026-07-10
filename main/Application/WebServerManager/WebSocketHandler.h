@@ -6,7 +6,7 @@
 #include "SessionMux.h"
 
 class CommandManager;
-class WebServerManager;
+class Authenticator;
 
 class WebSocketHandler : public SessionMux::Sink {
     static constexpr const char* TAG = "WebSocketHandler";
@@ -14,7 +14,7 @@ class WebSocketHandler : public SessionMux::Sink {
 
 public:
     void SetCommandManager(CommandManager& commandManager);
-    void SetAuth(WebServerManager& auth);
+    void SetAuth(Authenticator& auth);
 
     void RegisterRoute(httpd_handle_t server);
 
@@ -25,7 +25,7 @@ public:
 
 private:
     CommandManager* commandManager_ = nullptr;
-    WebServerManager* auth_ = nullptr;
+    Authenticator* auth_ = nullptr;
 
     Mutex wsMutex_;
 

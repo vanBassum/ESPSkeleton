@@ -5,6 +5,7 @@ set(SOURCE_FILES_LIST
     "Application/NetworkManager/WiFiInterface.cpp"
     "Application/NetworkManager/DnsConfiguration.cpp"
     "Application/WebServerManager/WebServerManager.cpp"
+    "Application/WebServerManager/Authenticator.cpp"
     "Application/WebServerManager/StaticFileHandler.cpp"
     "Application/WebServerManager/WebSocketHandler.cpp"
     "Application/WebServerManager/SessionMux.cpp"

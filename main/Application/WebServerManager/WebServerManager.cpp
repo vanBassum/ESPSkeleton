@@ -31,9 +31,8 @@ void WebServerManager::Init()
 
     wsHandler_.SetCommandManager(serviceProvider_.getCommandManager());
 
-    serviceProvider_.getSettingsManager().Register({ &webPassword_ });
-    webPassword_.Get(passwordSnapshot_, sizeof(passwordSnapshot_));
-    wsHandler_.SetAuth(*this);
+    auth_.Register(serviceProvider_.getSettingsManager());
+    wsHandler_.SetAuth(auth_);
 
     MountFatPartition();
     StartServer();
@@ -258,50 +257,6 @@ esp_err_t WebServerManager::HandleCorsPreflight(httpd_req_t* req)
 // (commands, streams) ever sees a token or password.
 // ──────────────────────────────────────────────────────────────
 
-void WebServerManager::CheckPasswordEpoch()
-{
-    LOCK(authMutex_);
-    char current[64] = {};
-    webPassword_.Get(current, sizeof(current));
-    if (strcmp(current, passwordSnapshot_) != 0)
-    {
-        ESP_LOGI(TAG, "web.password changed — clearing all sessions");
-        sessions_.Clear();
-        strlcpy(passwordSnapshot_, current, sizeof(passwordSnapshot_));
-    }
-}
-
-bool WebServerManager::ValidateToken(const char* token)
-{
-    CheckPasswordEpoch();
-    return sessions_.Touch(token);
-}
-
-void WebServerManager::TouchSession(const char* token)
-{
-    sessions_.Touch(token);
-}
-
-bool WebServerManager::AuthRequired()
-{
-    char pw[64] = {};
-    webPassword_.Get(pw, sizeof(pw));
-    return pw[0] != '\0';
-}
-
-bool WebServerManager::CheckPassword(const char* pw)
-{
-    CheckPasswordEpoch();
-    char expected[64] = {};
-    webPassword_.Get(expected, sizeof(expected));
-    return strcmp(pw ? pw : "", expected) == 0;
-}
-
-void WebServerManager::MintKey(char* out)
-{
-    sessions_.Create(out);
-}
-
 bool WebServerManager::CheckBearer(httpd_req_t* req)
 {
     char hdr[48] = {};
@@ -309,7 +264,7 @@ bool WebServerManager::CheckBearer(httpd_req_t* req)
         return false;
     if (strncmp(hdr, "Bearer ", 7) != 0)
         return false;
-    return ValidateToken(hdr + 7);
+    return auth_.ValidateKey(hdr + 7);
 }
 
 void WebServerManager::SendUnauthorized(httpd_req_t* req)

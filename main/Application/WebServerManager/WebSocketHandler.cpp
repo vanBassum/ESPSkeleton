@@ -1,6 +1,6 @@
 #include "WebSocketHandler.h"
 #include "CommandManager.h"
-#include "WebServerManager.h"
+#include "Authenticator.h"
 #include "JsonHelpers.h"
 #include "MemoryStream.h"
 #include "esp_log.h"
@@ -21,7 +21,7 @@ void WebSocketHandler::SetCommandManager(CommandManager& commandManager)
     commandManager_ = &commandManager;
 }
 
-void WebSocketHandler::SetAuth(WebServerManager& auth)
+void WebSocketHandler::SetAuth(Authenticator& auth)
 {
     auth_ = &auth;
 }
@@ -107,7 +107,7 @@ void WebSocketHandler::TouchClient(int fd)
         }
     }
     if (token[0] != 0 && auth_)
-        auth_->TouchSession(token);   // outside wsMutex_ — TouchSession locks its own table
+        auth_->TouchKey(token);   // outside wsMutex_ — TouchKey locks its own table
 }
 
 bool WebSocketHandler::IsAuthed(int fd)
@@ -382,7 +382,7 @@ void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, con
     {
         char key[SessionTable::TOKEN_LEN] = {};
         ExtractJsonString(line, "key", key, sizeof(key));
-        if (auth_->ValidateToken(key))
+        if (auth_->ValidateKey(key))
         {
             SetAuthed(fd, key);
             SendReply(req, sid, "{\"ok\":true}");
