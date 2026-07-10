@@ -8,6 +8,7 @@ set(SOURCE_FILES_LIST
     "Application/WebServerManager/Authenticator.cpp"
     "Application/WebServerManager/StaticFileHandler.cpp"
     "Application/WebServerManager/WebSocketHandler.cpp"
+    "Application/WebServerManager/ConnectionRegistry.cpp"
     "Application/WebServerManager/SessionMux.cpp"
     "Application/WebServerManager/SessionTable.cpp"
     "Application/CommandManager/CommandManager.cpp"

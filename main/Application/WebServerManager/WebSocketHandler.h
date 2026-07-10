@@ -4,13 +4,13 @@
 #include "Mutex.h"
 #include "SessionTable.h"
 #include "SessionMux.h"
+#include "ConnectionRegistry.h"
 
 class CommandManager;
 class Authenticator;
 
 class WebSocketHandler : public SessionMux::Sink {
     static constexpr const char* TAG = "WebSocketHandler";
-    static constexpr int MAX_WS_CLIENTS = 4;
 
 public:
     void SetCommandManager(CommandManager& commandManager);
@@ -27,26 +27,20 @@ private:
     CommandManager* commandManager_ = nullptr;
     Authenticator* auth_ = nullptr;
 
-    Mutex wsMutex_;
-
     // Serializes ALL outgoing frame writes. Broadcasts run on the
     // ConsoleManager task while command responses are written by the
     // httpd task — unserialized, their bytes interleave on the socket
     // and corrupt the WS framing (client sees "Invalid frame header").
     Mutex sendMutex_;
 
-    int wsClients_[MAX_WS_CLIENTS] = {};
-    int consecBinFails_[MAX_WS_CLIENTS] = {};
-    static constexpr int MAX_BIN_FAILS = 10;
-
     // Per-connection auth state (replaces the ?token= upgrade check). authed is
     // set by the in-band login/auth handshake (see HandlePreAuth), or at connect
-    // when web.password is empty. clientTokens_ holds the session key once authed,
-    // so TouchClient can keep it alive in the SessionTable for reconnect-resume.
-    char    clientTokens_[MAX_WS_CLIENTS][SessionTable::TOKEN_LEN] = {};
-    bool    clientAuthed_[MAX_WS_CLIENTS] = {};
-    int64_t clientConnectedAt_[MAX_WS_CLIENTS] = {};
-    static constexpr int64_t PRE_AUTH_TIMEOUT_US = 10LL * 1000 * 1000;   // reap idle un-authed sockets
+    // when web.password is empty. WsConnection::key holds the session key once
+    // authed, so TouchClient can keep it alive in the SessionTable for
+    // reconnect-resume. registry_ owns the fixed slot table and the pre-auth
+    // reaper (see ConnectionRegistry).
+    ConnectionRegistry registry_;
+    static constexpr int MAX_BIN_FAILS = 10;
 
     void TouchClient(int fd);
 

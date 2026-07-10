@@ -46,76 +46,25 @@ void WebSocketHandler::RegisterRoute(httpd_handle_t server)
 
 bool WebSocketHandler::AddWsClient(int fd)
 {
-    LOCK(wsMutex_);
-
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
-        if (wsClients_[i] == fd) return true;
-
-    int64_t now = esp_timer_get_time();
-
-    int slot = -1;
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
-        if (wsClients_[i] == 0) { slot = i; break; }
-
-    if (slot < 0)   // full: reap a stale UN-authenticated squatter to make room
-    {
-        for (int i = 0; i < MAX_WS_CLIENTS; i++)
-            if (!clientAuthed_[i] && now - clientConnectedAt_[i] > PRE_AUTH_TIMEOUT_US)
-            { slot = i; break; }
-    }
-    if (slot < 0) { ESP_LOGW(TAG, "WS client rejected (table full): fd=%d", fd); return false; }
-
-    wsClients_[slot]        = fd;
-    clientAuthed_[slot]     = !(auth_ && auth_->AuthRequired());   // empty password ⇒ authed at connect
-    clientConnectedAt_[slot] = now;
-    clientTokens_[slot][0]  = 0;
-    consecBinFails_[slot]   = 0;
-    ESP_LOGI(TAG, "WS client added: fd=%d slot=%d authed=%d", fd, slot, (int)clientAuthed_[slot]);
-    return true;
+    bool authed = !(auth_ && auth_->AuthRequired());   // empty password ⇒ authed at connect
+    return registry_.add(fd, authed, esp_timer_get_time()) != nullptr;
 }
 
 void WebSocketHandler::RemoveWsClient(int fd)
 {
-    LOCK(wsMutex_);
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
-    {
-        if (wsClients_[i] == fd)
-        {
-            wsClients_[i] = 0;
-            consecBinFails_[i] = 0;
-            clientTokens_[i][0] = 0;
-            clientAuthed_[i] = false;
-            clientConnectedAt_[i] = 0;
-            ESP_LOGI(TAG, "WS client removed: fd=%d slot=%d", fd, i);
-            return;
-        }
-    }
+    registry_.remove(fd);
 }
 
 void WebSocketHandler::TouchClient(int fd)
 {
-    char token[SessionTable::TOKEN_LEN] = {};
-    {
-        LOCK(wsMutex_);
-        for (int i = 0; i < MAX_WS_CLIENTS; i++)
-        {
-            if (wsClients_[i] == fd)
-            {
-                strlcpy(token, clientTokens_[i], sizeof(token));
-                break;
-            }
-        }
-    }
-    if (token[0] != 0 && auth_)
-        auth_->TouchKey(token);   // outside wsMutex_ — TouchKey locks its own table
+    if (auto* c = registry_.find(fd); c && c->authed)
+        auth_->TouchKey(c->key);   // TouchKey locks its own table
 }
 
 bool WebSocketHandler::IsAuthed(int fd)
 {
-    LOCK(wsMutex_);
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
-        if (wsClients_[i] == fd) return clientAuthed_[i];
-    return false;
+    auto* c = registry_.find(fd);
+    return c && c->authed;
 }
 
 void WebSocketHandler::OnClientDisconnected(int fd)
@@ -125,17 +74,15 @@ void WebSocketHandler::OnClientDisconnected(int fd)
 
 void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int len)
 {
-    // Snapshot clients under lock, then send outside the lock. Holding wsMutex_
-    // across send would deadlock when a broadcaster source (e.g. ConsoleManager)
-    // already holds its own mutex and httpd internals call back into us.
-    int clients[MAX_WS_CLIENTS];
-    bool authed[MAX_WS_CLIENTS];
-
-    {
-        LOCK(wsMutex_);
-        memcpy(clients, wsClients_, sizeof(clients));
-        memcpy(authed, clientAuthed_, sizeof(authed));
-    }
+    // Snapshot authed client fds under the registry lock, then send outside it.
+    // Holding the lock across send would deadlock when a broadcaster source
+    // (e.g. ConsoleManager) already holds its own mutex and httpd internals
+    // call back into us.
+    int clients[ConnectionRegistry::MAX];
+    int count = 0;
+    registry_.forEach([&](const WsConnection& c) {
+        if (c.authed && count < ConnectionRegistry::MAX) clients[count++] = c.fd;
+    });
 
     // Broadcast as a binary session chunk on the reserved broadcast session 0,
     // so the socket carries ONE uniform chunk format for replies and broadcasts
@@ -153,30 +100,23 @@ void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int le
     frame.len = session::HEADER_LEN + len;
 
     LOCK(sendMutex_);
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
+    for (int i = 0; i < count; i++)
     {
-        if (clients[i] != 0 && authed[i])
+        if (httpd_ws_send_frame_async(server, clients[i], &frame) != ESP_OK)
         {
-            if (httpd_ws_send_frame_async(server, clients[i], &frame) != ESP_OK)
-            {
-                ESP_LOGW(TAG, "Broadcast failed to fd=%d, removing", clients[i]);
-                LOCK(wsMutex_);
-                wsClients_[i] = 0;
-            }
+            ESP_LOGW(TAG, "Broadcast failed to fd=%d, removing", clients[i]);
+            registry_.remove(clients[i]);
         }
     }
 }
 
 void WebSocketHandler::BroadcastBinary(httpd_handle_t server, const uint8_t* data, size_t len)
 {
-    int clients[MAX_WS_CLIENTS];
-    bool authed[MAX_WS_CLIENTS];
-
-    {
-        LOCK(wsMutex_);
-        memcpy(clients, wsClients_, sizeof(clients));
-        memcpy(authed, clientAuthed_, sizeof(authed));
-    }
+    int clients[ConnectionRegistry::MAX];
+    int count = 0;
+    registry_.forEach([&](const WsConnection& c) {
+        if (c.authed && count < ConnectionRegistry::MAX) clients[count++] = c.fd;
+    });
 
     httpd_ws_frame_t frame = {};
     frame.type = HTTPD_WS_TYPE_BINARY;
@@ -184,14 +124,13 @@ void WebSocketHandler::BroadcastBinary(httpd_handle_t server, const uint8_t* dat
     frame.len = len;
 
     LOCK(sendMutex_);
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
+    for (int i = 0; i < count; i++)
     {
-        if (clients[i] == 0 || !authed[i]) continue;
+        int fd = clients[i];
 
-        if (httpd_ws_send_frame_async(server, clients[i], &frame) == ESP_OK)
+        if (httpd_ws_send_frame_async(server, fd, &frame) == ESP_OK)
         {
-            LOCK(wsMutex_);
-            consecBinFails_[i] = 0;
+            if (auto* c = registry_.find(fd)) c->consecBinFails = 0;
             continue;
         }
 
@@ -199,13 +138,14 @@ void WebSocketHandler::BroadcastBinary(httpd_handle_t server, const uint8_t* dat
         // load. Don't remove the client on a single failure; the socket-close
         // callback cleans up real disconnects. Only after many consecutive
         // failures do we give up on this client.
-        LOCK(wsMutex_);
-        if (++consecBinFails_[i] >= MAX_BIN_FAILS)
+        if (auto* c = registry_.find(fd))
         {
-            ESP_LOGW(TAG, "BroadcastBinary giving up on fd=%d after %d consecutive failures",
-                     clients[i], consecBinFails_[i]);
-            wsClients_[i] = 0;
-            consecBinFails_[i] = 0;
+            if (++c->consecBinFails >= MAX_BIN_FAILS)
+            {
+                ESP_LOGW(TAG, "BroadcastBinary giving up on fd=%d after %d consecutive failures",
+                         fd, c->consecBinFails);
+                registry_.remove(fd);
+            }
         }
     }
 }
@@ -310,14 +250,7 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
 
 void WebSocketHandler::SetAuthed(int fd, const char* key)
 {
-    LOCK(wsMutex_);
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
-        if (wsClients_[i] == fd)
-        {
-            clientAuthed_[i] = true;
-            strlcpy(clientTokens_[i], key ? key : "", sizeof(clientTokens_[i]));
-            return;
-        }
+    if (auto* c = registry_.find(fd)) c->authenticate(key);
 }
 
 void WebSocketHandler::SendReply(httpd_req_t* req, uint16_t sid, const char* json)
