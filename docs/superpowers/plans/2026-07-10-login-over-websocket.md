@@ -337,20 +337,22 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `WebServerManager::{CheckPassword,MintKey,ValidateToken,GetDeviceName,AuthRequired}`; `IsAuthed`, `clientAuthed_`, `clientTokens_` (Tasks 1–2); `session::{writeHeader,HEADER_LEN,FLAG_FINAL,FLAG_REJECT}`; `ExtractJsonString`.
-- Produces: `void HandlePreAuth(httpd_req_t*, int fd, uint16_t sid, const uint8_t* payload, size_t len)`; `void SendReply(httpd_req_t*, uint16_t sid, const char* json)`; `void SetAuthed(int fd, const char* key)`.
+- Produces: `void HandlePreAuth(httpd_req_t*, int fd, uint16_t sid, const char* line)`; `void SendReply(httpd_req_t*, uint16_t sid, const char* json)`; `void SendReject(httpd_req_t*, uint16_t sid, const char* reason)`; `void SetAuthed(int fd, const char* key)`.
+
+**Design note (why HandleBinary changes vs. Task 2):** `hello`/`login`/`auth` are transport handshake **verbs**, handled by the gate for **any** connection — not only unauthenticated ones. An empty-password connection is `authed` at connect, yet the frontend still sends `hello` (for the device name + `authRequired`), and if that fell through to the mux it would REJECT (no such command). So `HandleBinary` peeks the type on the first chunk and routes the three verbs to the gate regardless of the authed bit; every other type requires an authenticated connection and goes to the mux; an unauthenticated non-verb is refused. (Peeking the type here is safe: `HandleBinary` only ever sees a session's first chunk — a streamed body's continuation chunks are pulled inside the handler via `RecvChunk`, never re-entering `HandleBinary`.)
 
 - [ ] **Step 1: Declare the handshake helpers**
 
 In `WebSocketHandler.h`, below `OnSessionOpened`, add:
 
 ```cpp
-    // Pre-auth handshake for an unauthenticated connection: hello / login / auth,
-    // else a REJECT. Runs entirely in the transport — the mux and CommandManager
-    // never see it.
-    void HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid,
-                       const uint8_t* payload, size_t len);
+    // Transport handshake verbs (hello / login / auth), handled by the gate for
+    // ANY connection — the mux and CommandManager never see them. `line` is the
+    // request's header line (NUL-terminated, newline stripped).
+    void HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, const char* line);
     void SetAuthed(int fd, const char* key);
     void SendReply(httpd_req_t* req, uint16_t sid, const char* json);
+    void SendReject(httpd_req_t* req, uint16_t sid, const char* reason);
 ```
 
 - [ ] **Step 2: Add cstdio for snprintf**
@@ -361,14 +363,51 @@ In `WebSocketHandler.cpp`, add to the includes if not present:
 #include <cstdio>
 ```
 
-- [ ] **Step 3: Route unauthenticated chunks to the gate**
+- [ ] **Step 3: Rewrite HandleBinary to route handshake verbs to the gate**
 
-In `WebSocketHandler.cpp`, replace the `// Unauthenticated: … drop.` tail of `HandleBinary` with:
+In `WebSocketHandler.cpp`, replace the **entire** `HandleBinary` body (the authed→mux / else→drop version from Task 2) with:
 
 ```cpp
-    // Unauthenticated: the pre-auth handshake owns this connection until it
-    // authenticates. The chunk never reaches the mux or CommandManager.
-    HandlePreAuth(req, fd, sid, payload, plen);
+void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size_t len)
+{
+    uint16_t sid   = session::readU16(frame);
+    uint8_t  flags = frame[2];
+    const uint8_t* payload = frame + session::HEADER_LEN;
+    size_t plen = len - session::HEADER_LEN;
+    int fd = httpd_req_to_sockfd(req);
+
+    // Peek the command type off the first chunk's header line. hello/login/auth
+    // are transport handshake verbs the gate handles for ANY connection (an
+    // empty-password connection is authed at connect but still needs hello, and
+    // those verbs are not mux commands). Everything else needs an authenticated
+    // connection and goes to the mux. Safe to peek here: HandleBinary only ever
+    // sees a session's first chunk — a streamed body's continuation chunks are
+    // pulled inside the handler via RecvChunk, never re-entering HandleBinary.
+    char line[160];
+    size_t n = std::min(plen, sizeof(line) - 1);
+    memcpy(line, payload, n);
+    line[n] = '\0';
+    if (char* nl = strchr(line, '\n')) *nl = '\0';
+
+    char type[16] = {};
+    ExtractJsonString(line, "type", type, sizeof(type));
+
+    if (strcmp(type, "hello") == 0 || strcmp(type, "login") == 0 || strcmp(type, "auth") == 0)
+    {
+        HandlePreAuth(req, fd, sid, line);
+        return;
+    }
+    if (IsAuthed(fd))
+    {
+        WsSessionLink link(req, sendMutex_);
+        SessionMux mux(link, *this, sessionFrame_, SESSION_WINDOW,
+                       sessionInbound_, sizeof(sessionInbound_));
+        mux.OnChunk(sid, flags, payload, plen);
+        return;
+    }
+    // Unauthenticated + not a handshake verb → transport refusal.
+    SendReject(req, sid, "unauthorized");
+}
 ```
 
 - [ ] **Step 4: Implement SetAuthed, SendReply, HandlePreAuth**
@@ -399,16 +438,22 @@ void WebSocketHandler::SendReply(httpd_req_t* req, uint16_t sid, const char* jso
     link.SendRaw(buf, session::HEADER_LEN + n);
 }
 
-void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid,
-                                     const uint8_t* payload, size_t len)
+void WebSocketHandler::SendReject(httpd_req_t* req, uint16_t sid, const char* reason)
 {
-    // The request is a single small chunk: a header line {"type":...}\n, no body.
-    char line[160];
-    size_t n = std::min(len, sizeof(line) - 1);
-    memcpy(line, payload, n);
-    line[n] = '\0';
-    if (char* nl = strchr(line, '\n')) *nl = '\0';
+    uint8_t buf[session::HEADER_LEN + 32];
+    size_t n = strlen(reason);
+    if (n > sizeof(buf) - session::HEADER_LEN) n = sizeof(buf) - session::HEADER_LEN;
+    session::writeHeader(buf, sid, session::FLAG_REJECT);
+    memcpy(buf + session::HEADER_LEN, reason, n);
+    WsSessionLink link(req, sendMutex_);
+    link.SendRaw(buf, session::HEADER_LEN + n);
+}
 
+void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, const char* line)
+{
+    // `line` is the request's header line, already NUL-terminated with the
+    // trailing newline stripped by HandleBinary. HandleBinary only routes the
+    // three handshake verbs here, for authed and unauthed connections alike.
     char type[16] = {};
     ExtractJsonString(line, "type", type, sizeof(type));
 
@@ -450,15 +495,7 @@ void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid,
         else SendReply(req, sid, "{\"ok\":false}");
         return;
     }
-
-    // Not a handshake message on an unauthenticated connection → transport refusal.
-    uint8_t buf[session::HEADER_LEN + 16];
-    const char* reason = "unauthorized";
-    size_t rn = strlen(reason);
-    session::writeHeader(buf, sid, session::FLAG_REJECT);
-    memcpy(buf + session::HEADER_LEN, reason, rn);
-    WsSessionLink link(req, sendMutex_);
-    link.SendRaw(buf, session::HEADER_LEN + rn);
+    // HandleBinary only routes the three verbs here; nothing else reaches this.
 }
 ```
 
