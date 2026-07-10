@@ -91,7 +91,7 @@ sequenceDiagram
     autonumber
     participant FE as Frontend (backend.ts)
     participant WS as WebSocket
-    participant Link as SessionLink
+    participant SL as SessionLink
     participant Gate as Auth gate
     participant Mux as SessionMux
     participant Cmd as CommandManager
@@ -107,11 +107,11 @@ sequenceDiagram
     rect rgb(255, 244, 235)
     Note over FE,Cmd: 2 - Login handshake (gate only, mux and commands never see it)
     FE->>WS: sid 1, FINAL, login password
-    WS->>Link: binary frame
-    Link->>Gate: chunk sid 1, FINAL
+    WS->>SL: binary frame
+    SL->>Gate: chunk sid 1, FINAL
     Note over Gate: not authed, intercept<br/>check web.password OK<br/>mint key (SessionTable)<br/>authed = true
-    Gate-->>Link: chunk sid 1, FINAL, ok + key
-    Link-->>WS: binary frame
+    Gate-->>SL: chunk sid 1, FINAL, ok + key
+    SL-->>WS: binary frame
     WS-->>FE: reply
     Note over FE: store key, authenticated = true
     end
@@ -119,23 +119,23 @@ sequenceDiagram
     rect rgb(235, 255, 240)
     Note over FE,Cmd: 3 - First command getLogs (authed, flows to the mux)
     FE->>WS: sid 2, FINAL, getLogs
-    WS->>Link: binary frame
-    Link->>Gate: chunk sid 2, FINAL
+    WS->>SL: binary frame
+    SL->>Gate: chunk sid 2, FINAL
     Note over Gate: authed = true, pass through
     Gate->>Mux: chunk sid 2
     Mux->>Cmd: OnSessionOpened, Execute getLogs
     Cmd-->>Mux: write reply, FINAL
     Mux-->>Gate: chunk sid 2, FINAL, logs
-    Gate-->>Link: verbatim
-    Link-->>WS: binary frames
+    Gate-->>SL: verbatim
+    SL-->>WS: binary frames
     WS-->>FE: reply, resolve
     end
 
     rect rgb(235, 255, 240)
     Note over FE,Cmd: 4 - Second command reboot (already logged in, NO re-auth)
     FE->>WS: sid 3, FINAL, reboot
-    WS->>Link: binary frame
-    Link->>Gate: chunk sid 3, FINAL
+    WS->>SL: binary frame
+    SL->>Gate: chunk sid 3, FINAL
     Note over Gate: authed = true, pass through (one bool check)
     Gate->>Mux: chunk sid 3
     Mux->>Cmd: OnSessionOpened, Execute reboot
