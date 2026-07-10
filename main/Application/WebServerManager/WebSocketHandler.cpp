@@ -4,6 +4,7 @@
 #include "JsonHelpers.h"
 #include "MemoryStream.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include <algorithm>
 #include <cstring>
@@ -42,27 +43,34 @@ void WebSocketHandler::RegisterRoute(httpd_handle_t server)
 // Client tracking
 // ──────────────────────────────────────────────────────────────
 
-bool WebSocketHandler::AddWsClient(int fd, const char* token)
+bool WebSocketHandler::AddWsClient(int fd)
 {
     LOCK(wsMutex_);
 
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
-    {
         if (wsClients_[i] == fd) return true;
-    }
 
+    int64_t now = esp_timer_get_time();
+
+    int slot = -1;
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
+        if (wsClients_[i] == 0) { slot = i; break; }
+
+    if (slot < 0)   // full: reap a stale UN-authenticated squatter to make room
     {
-        if (wsClients_[i] == 0)
-        {
-            wsClients_[i] = fd;
-            strlcpy(clientTokens_[i], token, sizeof(clientTokens_[i]));
-            ESP_LOGI(TAG, "WS client added: fd=%d slot=%d", fd, i);
-            return true;
-        }
+        for (int i = 0; i < MAX_WS_CLIENTS; i++)
+            if (!clientAuthed_[i] && now - clientConnectedAt_[i] > PRE_AUTH_TIMEOUT_US)
+            { slot = i; break; }
     }
-    ESP_LOGW(TAG, "WS client rejected (max reached): fd=%d", fd);
-    return false;
+    if (slot < 0) { ESP_LOGW(TAG, "WS client rejected (table full): fd=%d", fd); return false; }
+
+    wsClients_[slot]        = fd;
+    clientAuthed_[slot]     = !auth_->AuthRequired();   // empty password ⇒ authed at connect
+    clientConnectedAt_[slot] = now;
+    clientTokens_[slot][0]  = 0;
+    consecBinFails_[slot]   = 0;
+    ESP_LOGI(TAG, "WS client added: fd=%d slot=%d authed=%d", fd, slot, (int)clientAuthed_[slot]);
+    return true;
 }
 
 void WebSocketHandler::RemoveWsClient(int fd)
@@ -75,6 +83,8 @@ void WebSocketHandler::RemoveWsClient(int fd)
             wsClients_[i] = 0;
             consecBinFails_[i] = 0;
             clientTokens_[i][0] = 0;
+            clientAuthed_[i] = false;
+            clientConnectedAt_[i] = 0;
             ESP_LOGI(TAG, "WS client removed: fd=%d slot=%d", fd, i);
             return;
         }
@@ -97,6 +107,14 @@ void WebSocketHandler::TouchClient(int fd)
     }
     if (token[0] != 0 && auth_)
         auth_->TouchSession(token);   // outside wsMutex_ — TouchSession locks its own table
+}
+
+bool WebSocketHandler::IsAuthed(int fd)
+{
+    LOCK(wsMutex_);
+    for (int i = 0; i < MAX_WS_CLIENTS; i++)
+        if (wsClients_[i] == fd) return clientAuthed_[i];
+    return false;
 }
 
 void WebSocketHandler::OnClientDisconnected(int fd)
@@ -197,25 +215,11 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
 
     if (req->method == HTTP_GET)
     {
-        // Auth happens HERE, once. esp_http_server has already sent the
-        // 101 handshake before invoking us; returning ESP_FAIL makes
-        // httpd close the socket immediately, which is how an upgrade
-        // is "refused". The frontend can't read a close reason — it
-        // discriminates bad-token from network failure via an HTTP
-        // ping before connecting (see backend.ts).
-        char query[96] = {};
-        char token[SessionTable::TOKEN_LEN] = {};
-        if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
-            httpd_query_key_value(query, "token", token, sizeof(token)) != ESP_OK ||
-            !self->auth_ || !self->auth_->ValidateToken(token))
-        {
-            ESP_LOGW(TAG, "WS upgrade refused: missing/invalid token");
-            return ESP_FAIL;
-        }
-        // A client beyond the table would stay open but untracked: no
-        // broadcasts, no session refresh — a half-alive tab that GCs
-        // after 30 min. Refuse instead so it hits the reconnect loop.
-        if (!self->AddWsClient(httpd_req_to_sockfd(req), token))
+        // The WS now opens UNAUTHENTICATED — auth is an in-band handshake
+        // (see HandlePreAuth). esp_http_server has already sent the 101; we
+        // only need a client slot. A full table (after reaping stale un-authed
+        // sockets) refuses the upgrade so the client hits its reconnect loop.
+        if (!self->AddWsClient(httpd_req_to_sockfd(req)))
             return ESP_FAIL;
         return ESP_OK;
     }
@@ -265,10 +269,17 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     const uint8_t* payload = frame + session::HEADER_LEN;
     size_t plen = len - session::HEADER_LEN;
 
-    WsSessionLink link(req, sendMutex_);
-    SessionMux mux(link, *this, sessionFrame_, SESSION_WINDOW,
-                   sessionInbound_, sizeof(sessionInbound_));
-    mux.OnChunk(sid, flags, payload, plen);
+    int fd = httpd_req_to_sockfd(req);
+    if (IsAuthed(fd))
+    {
+        WsSessionLink link(req, sendMutex_);
+        SessionMux mux(link, *this, sessionFrame_, SESSION_WINDOW,
+                       sessionInbound_, sizeof(sessionInbound_));
+        mux.OnChunk(sid, flags, payload, plen);
+        return;
+    }
+    // Unauthenticated: handled by the pre-auth gate (Task 3). Until then, drop.
+    (void)sid; (void)flags;
 }
 
 void WebSocketHandler::OnSessionOpened(Session& session)

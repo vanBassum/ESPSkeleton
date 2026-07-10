@@ -39,13 +39,22 @@ private:
     int consecBinFails_[MAX_WS_CLIENTS] = {};
     static constexpr int MAX_BIN_FAILS = 10;
 
-    // Session token bound to each connection at upgrade time. Frames
-    // refresh the session by token; if the session was meanwhile
-    // evicted/cleared, the refresh is a no-op — the live connection
-    // stays trusted for its lifetime (spec), it just can't reconnect.
-    char clientTokens_[MAX_WS_CLIENTS][SessionTable::TOKEN_LEN] = {};
+    // Per-connection auth state (replaces the ?token= upgrade check). authed is
+    // set by the in-band login/auth handshake (see HandlePreAuth), or at connect
+    // when web.password is empty. clientTokens_ holds the session key once authed,
+    // so TouchClient can keep it alive in the SessionTable for reconnect-resume.
+    char    clientTokens_[MAX_WS_CLIENTS][SessionTable::TOKEN_LEN] = {};
+    bool    clientAuthed_[MAX_WS_CLIENTS] = {};
+    int64_t clientConnectedAt_[MAX_WS_CLIENTS] = {};
+    static constexpr int64_t PRE_AUTH_TIMEOUT_US = 10LL * 1000 * 1000;   // reap idle un-authed sockets
 
     void TouchClient(int fd);
+
+    /// True if the connection on `fd` is authenticated.
+    bool IsAuthed(int fd);
+
+    /// False when the client table is full (after reaping stale un-authed slots).
+    bool AddWsClient(int fd);
 
     // Session reply flush window (off the httpd-task stack; reused, single
     // session at a time). NOT payload-proportional — a small batch buffer that
@@ -60,8 +69,6 @@ private:
     static constexpr size_t INBOUND_WINDOW = 4096;
     uint8_t sessionInbound_[session::HEADER_LEN + INBOUND_WINDOW];
 
-    /// False when the client table is full — caller refuses the upgrade.
-    bool AddWsClient(int fd, const char* token);
     void RemoveWsClient(int fd);
 
     static esp_err_t HandleWs(httpd_req_t* req);
