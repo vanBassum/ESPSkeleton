@@ -183,7 +183,7 @@ class BackendService {
   // login page. Runs on every (re)connect.
   private async doHandshake() {
     try {
-      const info = await this.send<{ name: string; authRequired: boolean }>("hello")
+      const info = await this.send<{ authRequired: boolean }>("hello")
       if (!info.authRequired) {
         this.setAuthenticated(true)
         this.startHeartbeat()
@@ -462,12 +462,6 @@ class BackendService {
 
   async reboot(): Promise<{ ok: boolean }> {
     return this.send("reboot")
-  }
-
-  /** Open endpoint: device name for the login page's brand slot (pre-auth `hello`). */
-  async getLoginInfo(): Promise<{ name: string }> {
-    const info = await this.send<{ name: string; authRequired: boolean }>("hello")
-    return { name: info.name }
   }
 
   /** Returns false on wrong password; throws on connection failure. On success

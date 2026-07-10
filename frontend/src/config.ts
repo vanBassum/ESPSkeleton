@@ -8,3 +8,7 @@ export const DEV_HOST = "strux.local"
 
 /** GitHub repo checked for new releases (update dot in the sidebar). */
 export const GITHUB_REPO = "vanBassum/Strux"
+
+/** Static brand shown on the login page (pre-auth). Post-auth the real device
+ *  name comes from `getInfo`. Forks customize this. */
+export const PRODUCT_NAME = "Strux"

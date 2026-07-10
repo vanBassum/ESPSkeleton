@@ -2,8 +2,6 @@
 #include "CommandManager.h"
 #include "WebServerManager.h"
 #include "JsonHelpers.h"
-#include "JsonWriter.h"
-#include "BufferStream.h"
 #include "MemoryStream.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -359,16 +357,9 @@ void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, con
 
     if (strcmp(type, "hello") == 0)
     {
-        char name[33] = {};
-        auth_->GetDeviceName(name, sizeof(name));
-        char body[96];
-        BufferStream bs(body, sizeof(body));
-        JsonWriter json(bs);
-        json.beginObject();
-        json.field("name", name);
-        json.field("authRequired", auth_->AuthRequired());
-        json.endObject();
-        SendReplyN(req, sid, bs.data(), bs.length());
+        SendReply(req, sid, auth_->AuthRequired()
+                             ? "{\"authRequired\":true}"
+                             : "{\"authRequired\":false}");
         return;
     }
     if (strcmp(type, "login") == 0)

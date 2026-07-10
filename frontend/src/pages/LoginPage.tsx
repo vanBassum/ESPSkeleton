@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { backend } from "@/lib/backend"
+import { PRODUCT_NAME } from "@/config"
 
 // shadcn login-03, stripped: brand slot + password + submit. No email,
 // no social logins, no signup/forgot links, no terms footer (spec).
@@ -12,13 +13,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
-  const [deviceName, setDeviceName] = useState("…")
 
   useEffect(() => {
-    backend.getLoginInfo().then((res) => {
-      setDeviceName(res.name)
-      document.title = res.name
-    }).catch(() => { /* open endpoint unreachable — keep fallback */ })
+    document.title = PRODUCT_NAME
   }, [])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -42,7 +39,7 @@ export default function LoginPage() {
           <div className="bg-primary text-primary-foreground flex size-6 items-center justify-center rounded-md">
             <CpuIcon className="size-4" />
           </div>
-          {deviceName}
+          {PRODUCT_NAME}
         </div>
         <Card>
           <CardHeader className="text-center">

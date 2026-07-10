@@ -2,7 +2,6 @@
 #include "CommandManager.h"
 #include "ConsoleManager.h"
 #include "Stream.h"
-#include "SystemManager.h"
 #include "SettingsManager.h"
 #include "ContextLock.h"
 
@@ -301,11 +300,6 @@ bool WebServerManager::CheckPassword(const char* pw)
 void WebServerManager::MintKey(char* out)
 {
     sessions_.Create(out);
-}
-
-void WebServerManager::GetDeviceName(char* out, size_t maxLen)
-{
-    serviceProvider_.getSystemManager().GetDeviceName(out, maxLen);
 }
 
 bool WebServerManager::CheckBearer(httpd_req_t* req)

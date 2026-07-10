@@ -41,8 +41,6 @@ public:
     bool CheckPassword(const char* pw);
     /// Mint a session key into `out` (must hold SessionTable::TOKEN_LEN bytes).
     void MintKey(char* out);
-    /// Device name for the pre-auth `hello`.
-    void GetDeviceName(char* out, size_t maxLen);
 
 private:
     ServiceProvider& serviceProvider_;
