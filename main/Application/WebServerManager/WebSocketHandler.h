@@ -34,7 +34,7 @@ private:
     Mutex sendMutex_;
 
     // Per-connection auth state (replaces the ?token= upgrade check). authed is
-    // set by the in-band login/auth handshake (see HandlePreAuth), or at connect
+    // set by the in-band login/auth handshake (see AuthGate), or at connect
     // when web.password is empty. WsConnection::key holds the session key once
     // authed, so TouchClient can keep it alive in the SessionTable for
     // reconnect-resume. registry_ owns the fixed slot table and the pre-auth
@@ -43,9 +43,6 @@ private:
     static constexpr int MAX_BIN_FAILS = 10;
 
     void TouchClient(int fd);
-
-    /// True if the connection on `fd` is authenticated.
-    bool IsAuthed(int fd);
 
     /// False when the client table is full (after reaping stale un-authed slots).
     bool AddWsClient(int fd);
@@ -68,16 +65,10 @@ private:
     static esp_err_t HandleWs(httpd_req_t* req);
 
     // Binary session transport. A request is one binary chunk; the reply
-    // streams back as chunks on the same session id.
+    // streams back as chunks on the same session id. The pre-auth handshake
+    // verbs (hello/login/auth) and the authed/not routing decision are
+    // delegated to AuthGate, constructed locally per frame (it only holds an
+    // Authenticator&, so this is cheap) — see AuthGate.h.
     void HandleBinary(httpd_req_t* req, const uint8_t* frame, size_t len);
     void OnSessionOpened(Session& session) override;
-
-    // Transport handshake verbs (hello / login / auth), handled by the gate for
-    // ANY connection — the mux and CommandManager never see them. `line` is the
-    // request's header line (NUL-terminated, newline stripped).
-    void HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, const char* line);
-    void SetAuthed(int fd, const char* key);
-    void SendReply(httpd_req_t* req, uint16_t sid, const char* json);
-    void SendReplyN(httpd_req_t* req, uint16_t sid, const void* data, size_t len);
-    void SendReject(httpd_req_t* req, uint16_t sid, const char* reason);
 };

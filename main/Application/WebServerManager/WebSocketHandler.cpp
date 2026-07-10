@@ -1,13 +1,13 @@
 #include "WebSocketHandler.h"
 #include "CommandManager.h"
 #include "Authenticator.h"
+#include "AuthGate.h"
 #include "JsonHelpers.h"
 #include "MemoryStream.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 
 static constexpr const char* TAG = "WebSocketHandler";
@@ -59,12 +59,6 @@ void WebSocketHandler::TouchClient(int fd)
 {
     if (auto* c = registry_.find(fd); c && c->authed)
         auth_->TouchKey(c->key);   // TouchKey locks its own table
-}
-
-bool WebSocketHandler::IsAuthed(int fd)
-{
-    auto* c = registry_.find(fd);
-    return c && c->authed;
 }
 
 void WebSocketHandler::OnClientDisconnected(int fd)
@@ -161,7 +155,7 @@ esp_err_t WebSocketHandler::HandleWs(httpd_req_t* req)
     if (req->method == HTTP_GET)
     {
         // The WS now opens UNAUTHENTICATED — auth is an in-band handshake
-        // (see HandlePreAuth). esp_http_server has already sent the 101; we
+        // (see AuthGate). esp_http_server has already sent the 101; we
         // only need a client slot. A full table (after reaping stale un-authed
         // sockets) refuses the upgrade so the client hits its reconnect loop.
         if (!self->AddWsClient(httpd_req_to_sockfd(req)))
@@ -215,115 +209,24 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     size_t plen = len - session::HEADER_LEN;
     int fd = httpd_req_to_sockfd(req);
 
-    // Peek the command type off the first chunk's header line. hello/login/auth
-    // are transport handshake verbs the gate handles for ANY connection (an
-    // empty-password connection is authed at connect but still needs hello, and
-    // those verbs are not mux commands). Everything else needs an authenticated
-    // connection and goes to the mux. Safe to peek here: HandleBinary only ever
-    // sees a session's first chunk — a streamed body's continuation chunks are
-    // pulled inside the handler via RecvChunk, never re-entering HandleBinary.
-    char line[160];
-    size_t n = std::min(plen, sizeof(line) - 1);
-    memcpy(line, payload, n);
-    line[n] = '\0';
-    if (char* nl = strchr(line, '\n')) *nl = '\0';
+    WsConnection* conn = registry_.find(fd);
+    if (!conn) return;   // unknown fd (closed mid-frame)
 
-    char type[16] = {};
-    ExtractJsonString(line, "type", type, sizeof(type));
-
-    if (strcmp(type, "hello") == 0 || strcmp(type, "login") == 0 || strcmp(type, "auth") == 0)
-    {
-        HandlePreAuth(req, fd, sid, line);
-        return;
-    }
-    if (IsAuthed(fd))
-    {
-        WsSessionLink link(req, sendMutex_);
-        SessionMux mux(link, *this, sessionFrame_, SESSION_WINDOW,
-                       sessionInbound_, sizeof(sessionInbound_));
-        mux.OnChunk(sid, flags, payload, plen);
-        return;
-    }
-    // Unauthenticated + not a handshake verb → transport refusal.
-    SendReject(req, sid, "unauthorized");
-}
-
-void WebSocketHandler::SetAuthed(int fd, const char* key)
-{
-    if (auto* c = registry_.find(fd)) c->authenticate(key);
-}
-
-void WebSocketHandler::SendReply(httpd_req_t* req, uint16_t sid, const char* json)
-{
-    SendReplyN(req, sid, json, strlen(json));
-}
-
-void WebSocketHandler::SendReplyN(httpd_req_t* req, uint16_t sid, const void* data, size_t len)
-{
-    uint8_t buf[session::HEADER_LEN + 160];
-    size_t n = len;
-    if (n > sizeof(buf) - session::HEADER_LEN) n = sizeof(buf) - session::HEADER_LEN;
-    session::writeHeader(buf, sid, session::FLAG_FINAL);
-    memcpy(buf + session::HEADER_LEN, data, n);
     WsSessionLink link(req, sendMutex_);
-    link.SendRaw(buf, session::HEADER_LEN + n);
-}
-
-void WebSocketHandler::SendReject(httpd_req_t* req, uint16_t sid, const char* reason)
-{
-    uint8_t buf[session::HEADER_LEN + 32];
-    size_t n = strlen(reason);
-    if (n > sizeof(buf) - session::HEADER_LEN) n = sizeof(buf) - session::HEADER_LEN;
-    session::writeHeader(buf, sid, session::FLAG_REJECT);
-    memcpy(buf + session::HEADER_LEN, reason, n);
-    WsSessionLink link(req, sendMutex_);
-    link.SendRaw(buf, session::HEADER_LEN + n);
-}
-
-void WebSocketHandler::HandlePreAuth(httpd_req_t* req, int fd, uint16_t sid, const char* line)
-{
-    // `line` is the request's header line, already NUL-terminated with the
-    // trailing newline stripped by HandleBinary. HandleBinary only routes the
-    // three handshake verbs here, for authed and unauthed connections alike.
-    char type[16] = {};
-    ExtractJsonString(line, "type", type, sizeof(type));
-
-    if (strcmp(type, "hello") == 0)
+    AuthGate gate(*auth_);
+    switch (gate.Handle(*conn, link, sid, payload, plen))
     {
-        SendReply(req, sid, auth_->AuthRequired()
-                             ? "{\"authRequired\":true}"
-                             : "{\"authRequired\":false}");
-        return;
-    }
-    if (strcmp(type, "login") == 0)
-    {
-        char pw[64] = {};
-        ExtractJsonString(line, "password", pw, sizeof(pw));
-        if (auth_->CheckPassword(pw))
+        case AuthGate::Disposition::PassToMux:
         {
-            char key[SessionTable::TOKEN_LEN] = {};
-            auth_->MintKey(key);
-            SetAuthed(fd, key);
-            char reply[64];
-            snprintf(reply, sizeof(reply), "{\"ok\":true,\"key\":\"%s\"}", key);
-            SendReply(req, sid, reply);
+            SessionMux mux(link, *this, sessionFrame_, SESSION_WINDOW,
+                           sessionInbound_, sizeof(sessionInbound_));
+            mux.OnChunk(sid, flags, payload, plen);
+            break;
         }
-        else SendReply(req, sid, "{\"ok\":false}");
-        return;
+        case AuthGate::Disposition::Handled:
+        case AuthGate::Disposition::Rejected:
+            break;
     }
-    if (strcmp(type, "auth") == 0)
-    {
-        char key[SessionTable::TOKEN_LEN] = {};
-        ExtractJsonString(line, "key", key, sizeof(key));
-        if (auth_->ValidateKey(key))
-        {
-            SetAuthed(fd, key);
-            SendReply(req, sid, "{\"ok\":true}");
-        }
-        else SendReply(req, sid, "{\"ok\":false}");
-        return;
-    }
-    // HandleBinary only routes the three verbs here; nothing else reaches this.
 }
 
 void WebSocketHandler::OnSessionOpened(Session& session)

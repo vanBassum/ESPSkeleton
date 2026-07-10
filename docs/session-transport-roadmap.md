@@ -25,7 +25,13 @@ byte-pump bridge are for.
 | 5 | Login over WS (per-connection auth; session key) | **DONE** (`main`, `a97b9f7`..`e89942e`) — verified on device: empty-password and password-set matrix over a fresh WS (`hello`/`login`/`auth` resume all pass), empty password restored, `getLogs` works with no login — [design](superpowers/specs/2026-07-10-login-over-websocket-design.md) | [login](backlog/2026-07-09-login-over-websocket.md) |
 | 6 | Concurrency: worker task + slot table (removes the private-API wart) | NOT PART OF THIS ROADMAP | [multiplexed-channels](backlog/2026-07-03-multiplexed-channels.md) |
 
-Dont forget to do a code quality refactor after this is working. I think we should seperate some things out of the webmanager. but thats for later to figure out
+Code quality refactor: **DONE** — `WebServerManager`/`WebSocketHandler` decomposed
+into `Authenticator` (credential authority), `WsConnection`/`ConnectionRegistry`
+(per-connection state + slot table), and `AuthGate` (pre-auth handshake +
+authed/not routing decision), leaving `WebSocketHandler::HandleBinary` as
+find-connection → gate → dispatch. See
+[design](superpowers/specs/2026-07-10-webserver-decomposition-design.md) and
+[plan](superpowers/plans/2026-07-10-webserver-decomposition.md).
 
 Also [ws-inbound-streaming](backlog/2026-07-09-ws-inbound-streaming.md): partially
 done — `WsRequestStream` shipped dormant in step 1; its real use is step 2 (folded
