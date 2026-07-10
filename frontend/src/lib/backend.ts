@@ -80,22 +80,8 @@ class BackendService {
   }
 
   private setAuthenticated(auth: boolean) {
-    if (auth !== this._authenticated) {
-      this._authenticated = auth
-      this.authHandlers.forEach((fn) => fn(auth))
-    }
-  }
-
-  private clearAuth() {
-    this.token = null
-    sessionStorage.removeItem(TOKEN_KEY)
-    this.setAuthenticated(false)
-    this.ws?.close()
-  }
-
-  private apiUrl(path: string): string {
-    const host = import.meta.env.DEV ? `http://${DEV_HOST}` : ""
-    return `${host}${path}`
+    this._authenticated = auth
+    this.authHandlers.forEach((fn) => fn(auth))
   }
 
   private setStatus(s: ConnectionStatus) {
@@ -127,115 +113,87 @@ class BackendService {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
-
-    if (!this.token) {
-      this.setStatus("disconnected")
-      return Promise.reject(new Error("Not authenticated"))
-    }
-
-    // Pin the token this attempt is validating. A newer login can replace
-    // `this.token` while this attempt is still in flight; this attempt must
-    // keep judging its own (possibly stale) token and never act on the
-    // current one, so it can't clobber a fresher, already-successful login.
-    const attemptToken = this.token
+    if (this.connecting) return this.connecting
 
     this.setStatus("connecting")
 
-    const p = (async () => {
-      // Validate the token over HTTP first: the browser WS API cannot
-      // distinguish a refused upgrade (bad token) from a network
-      // failure, and we must not clear a good token on a flaky link.
-      try {
-        const res = await fetch(this.commandUrl("ping"), {
-          method: "POST",
-          headers: { Authorization: `Bearer ${attemptToken}` },
-          body: "{}",
-        })
-        if (res.status === 401) {
-          if (this.token === attemptToken) {
-            this.clearAuth()
-          } else if (this.token) {
-            // Token replaced mid-attempt (fresh login) — hand off to it.
-            this.reconnectTimer = setTimeout(() => {
-              this.doConnect().catch(() => {})
-            }, 2000)
-          }
-          this.setStatus("disconnected")
-          throw new Error("Not authenticated")
-        }
-      } catch (e) {
-        if (e instanceof Error && e.message === "Not authenticated") throw e
-        // Network error: fall through — the WS attempt below owns retries.
+    const p = new Promise<void>((resolve, reject) => {
+      const host = import.meta.env.DEV ? DEV_HOST : location.host
+      const proto = location.protocol === "https:" ? "wss:" : "ws:"
+      const ws = new WebSocket(`${proto}//${host}/ws`)
+      ws.binaryType = "arraybuffer"
+      let opened = false
+
+      ws.onopen = () => {
+        opened = true
+        this.ws = ws
+        this.setStatus("connected")
+        void this.doHandshake()   // establishes auth in-band; sets authenticated
+        resolve()
       }
 
-      await new Promise<void>((resolve, reject) => {
-        const host = import.meta.env.DEV ? DEV_HOST : location.host
-        const proto = location.protocol === "https:" ? "wss:" : "ws:"
-        const url = `${proto}//${host}/ws?token=${attemptToken}`
-        console.log(`[BackendService] connecting to ${proto}//${host}/ws (DEV=${import.meta.env.DEV})`)
-        const ws = new WebSocket(url)
-        ws.binaryType = "arraybuffer"
-        let opened = false
-
-        ws.onopen = () => {
-          opened = true
-          this.ws = ws
-          this.setStatus("connected")
-          this.setAuthenticated(true)
-          this.startHeartbeat()
-          resolve()
+      ws.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer) {
+          this.onBinaryChunk(ev.data)
+          return
         }
-
-        ws.onmessage = (ev) => {
-          // Binary frames are session chunks (command replies).
-          if (ev.data instanceof ArrayBuffer) {
-            this.onBinaryChunk(ev.data)
-            return
-          }
-          // Defensive: some browsers may deliver a frame as a Blob if
-          // binaryType wasn't applied in time. Convert and route the same way.
-          if (typeof Blob !== "undefined" && ev.data instanceof Blob) {
-            ev.data.arrayBuffer().then((buf) => this.onBinaryChunk(buf))
-            return
-          }
-          // Text frames are broadcasts only (replies are binary now).
-          try {
-            this.broadcastHandlers.forEach((fn) => fn(JSON.parse(ev.data)))
-          } catch (e) {
-            const sample = typeof ev.data === "string" ? ev.data.slice(-80) : "(non-string)"
-            console.warn(
-              `[BackendService] failed to parse WS text frame (${typeof ev.data === "string" ? ev.data.length : "?"} bytes); tail: ${sample}`,
-              e,
-            )
-          }
+        if (typeof Blob !== "undefined" && ev.data instanceof Blob) {
+          ev.data.arrayBuffer().then((buf) => this.onBinaryChunk(buf))
         }
+      }
 
-        ws.onclose = () => {
-          this.ws = null
-          this.stopHeartbeat()
-          this.setStatus("disconnected")
-          for (const [, req] of this.pending) {
-            clearTimeout(req.timer)
-            req.reject(new Error("WebSocket closed"))
-          }
-          this.pending.clear()
-          if (!opened) reject(new Error("Connection failed"))
-          if (this.token) {
-            this.reconnectTimer = setTimeout(() => {
-              this.doConnect().catch(() => {})
-            }, 2000)
-          }
+      ws.onclose = () => {
+        this.ws = null
+        this.stopHeartbeat()
+        this.setStatus("disconnected")
+        // Keep `authenticated` as-is across a brief drop — the reconnect's
+        // auth{key} either resumes silently or fails (then doHandshake shows login).
+        for (const [, req] of this.pending) {
+          clearTimeout(req.timer)
+          req.reject(new Error("WebSocket closed"))
         }
+        this.pending.clear()
+        if (!opened) reject(new Error("Connection failed"))
+        this.reconnectTimer = setTimeout(() => {
+          this.doConnect().catch(() => {})
+        }, 2000)
+      }
 
-        ws.onerror = () => ws.close()
-      })
-    })()
+      ws.onerror = () => ws.close()
+    })
 
     this.connecting = p
     p.catch(() => {}).then(() => {
       if (this.connecting === p) this.connecting = null
     })
     return p
+  }
+
+  // Establish auth in-band right after the socket opens: hello tells us whether
+  // auth is required; if so, resume with the stored key or fall back to the
+  // login page. Runs on every (re)connect.
+  private async doHandshake() {
+    try {
+      const info = await this.send<{ name: string; authRequired: boolean }>("hello")
+      if (!info.authRequired) {
+        this.setAuthenticated(true)
+        this.startHeartbeat()
+        return
+      }
+      if (this.token) {
+        const res = await this.send<{ ok: boolean }>("auth", { key: this.token })
+        if (res.ok) {
+          this.setAuthenticated(true)
+          this.startHeartbeat()
+          return
+        }
+        this.token = null
+        sessionStorage.removeItem(TOKEN_KEY)
+      }
+      this.setAuthenticated(false)   // needs login
+    } catch {
+      /* socket died mid-handshake — onclose handles the reconnect */
+    }
   }
 
   private startHeartbeat() {
@@ -497,31 +455,22 @@ class BackendService {
     return this.send("reboot")
   }
 
-  private commandUrl(type: string): string {
-    return this.apiUrl(`/api/command?type=${encodeURIComponent(type)}`)
-  }
-
-  /** Open endpoint: device name for the login page's brand slot. */
+  /** Open endpoint: device name for the login page's brand slot (pre-auth `hello`). */
   async getLoginInfo(): Promise<{ name: string }> {
-    const res = await fetch(this.apiUrl("/api/login"))
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-    return res.json()
+    const info = await this.send<{ name: string; authRequired: boolean }>("hello")
+    return { name: info.name }
   }
 
-  /** Returns false on wrong password; throws on network failure. */
+  /** Returns false on wrong password; throws on connection failure. On success
+   *  stores the session key and marks the connection authenticated. */
   async login(password: string): Promise<boolean> {
-    const res = await fetch(this.apiUrl("/api/login"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    })
-    if (res.status === 401) return false
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-    const { token } = (await res.json()) as { token: string }
-    this.token = token
-    sessionStorage.setItem(TOKEN_KEY, token)
+    await this.ensureConnected()
+    const res = await this.send<{ ok: boolean; key?: string }>("login", { password })
+    if (!res.ok) return false
+    this.token = res.key ?? null
+    if (this.token) sessionStorage.setItem(TOKEN_KEY, this.token)
     this.setAuthenticated(true)
-    this.connect()
+    this.startHeartbeat()
     return true
   }
 
