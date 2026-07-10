@@ -129,10 +129,12 @@ void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int le
     // across send would deadlock when a broadcaster source (e.g. ConsoleManager)
     // already holds its own mutex and httpd internals call back into us.
     int clients[MAX_WS_CLIENTS];
+    bool authed[MAX_WS_CLIENTS];
 
     {
         LOCK(wsMutex_);
         memcpy(clients, wsClients_, sizeof(clients));
+        memcpy(authed, clientAuthed_, sizeof(authed));
     }
 
     // Broadcast as a binary session chunk on the reserved broadcast session 0,
@@ -153,7 +155,7 @@ void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int le
     LOCK(sendMutex_);
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
     {
-        if (clients[i] != 0)
+        if (clients[i] != 0 && authed[i])
         {
             if (httpd_ws_send_frame_async(server, clients[i], &frame) != ESP_OK)
             {
@@ -168,10 +170,12 @@ void WebSocketHandler::Broadcast(httpd_handle_t server, const char* json, int le
 void WebSocketHandler::BroadcastBinary(httpd_handle_t server, const uint8_t* data, size_t len)
 {
     int clients[MAX_WS_CLIENTS];
+    bool authed[MAX_WS_CLIENTS];
 
     {
         LOCK(wsMutex_);
         memcpy(clients, wsClients_, sizeof(clients));
+        memcpy(authed, clientAuthed_, sizeof(authed));
     }
 
     httpd_ws_frame_t frame = {};
@@ -182,7 +186,7 @@ void WebSocketHandler::BroadcastBinary(httpd_handle_t server, const uint8_t* dat
     LOCK(sendMutex_);
     for (int i = 0; i < MAX_WS_CLIENTS; i++)
     {
-        if (clients[i] == 0) continue;
+        if (clients[i] == 0 || !authed[i]) continue;
 
         if (httpd_ws_send_frame_async(server, clients[i], &frame) == ESP_OK)
         {
