@@ -321,6 +321,31 @@ void WebServerManager::TouchSession(const char* token)
     sessions_.Touch(token);
 }
 
+bool WebServerManager::AuthRequired()
+{
+    char pw[64] = {};
+    webPassword_.Get(pw, sizeof(pw));
+    return pw[0] != '\0';
+}
+
+bool WebServerManager::CheckPassword(const char* pw)
+{
+    CheckPasswordEpoch();
+    char expected[64] = {};
+    webPassword_.Get(expected, sizeof(expected));
+    return strcmp(pw ? pw : "", expected) == 0;
+}
+
+void WebServerManager::MintKey(char* out)
+{
+    sessions_.Create(out);
+}
+
+void WebServerManager::GetDeviceName(char* out, size_t maxLen)
+{
+    serviceProvider_.getSystemManager().GetDeviceName(out, maxLen);
+}
+
 bool WebServerManager::CheckBearer(httpd_req_t* req)
 {
     char hdr[48] = {};

@@ -35,6 +35,15 @@ public:
     /// for their lifetime; see spec).
     void TouchSession(const char* token);
 
+    /// True when a password is set (auth on). Empty web.password ⇒ open.
+    bool AuthRequired();
+    /// Password-epoch check, then compare `pw` to web.password.
+    bool CheckPassword(const char* pw);
+    /// Mint a session key into `out` (must hold SessionTable::TOKEN_LEN bytes).
+    void MintKey(char* out);
+    /// Device name for the pre-auth `hello`.
+    void GetDeviceName(char* out, size_t maxLen);
+
 private:
     ServiceProvider& serviceProvider_;
 
@@ -45,7 +54,7 @@ private:
     WebSocketHandler wsHandler_;
 
     // ── Auth state ────────────────────────────────────────────
-    inline static StringSetting webPassword_{ "web.password", "Web Password", "admin" };
+    inline static StringSetting webPassword_{ "web.password", "Web Password", "" };
     SessionTable sessions_;
     char passwordSnapshot_[64] = {};   // last-seen password; mismatch → sessions cleared
     Mutex authMutex_;                  // guards passwordSnapshot_
