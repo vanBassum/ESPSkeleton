@@ -22,7 +22,7 @@ byte-pump bridge are for.
 | 2 | Firmware upload over WS (now `writePartition`) | **DONE** (`main`, `9585366`) — verified on device: app + data paths, reboot into OTA'd slot, device-driven progress | [firmware-upload](backlog/2026-07-09-firmware-upload-over-websocket.md) |
 | 3 | Partition download over WS | **DONE** (`main`) — verified on live device: nvs/www exact-size, unknown-partition error, over the same reply-streaming path | [partition-download](backlog/2026-07-09-partition-download-over-websocket.md) |
 | 4 | Retire `/api/command` + `/api/login` + CORS (HTTP static-only) | pending (needs 5; `/api/command` now used only by the pre-WS `ping` token-check) | [retire-api-command](backlog/2026-07-09-retire-api-command-route.md) |
-| 5 | Login over WS (per-connection auth; `login` command) | pending (must precede 4) | [login](backlog/2026-07-09-login-over-websocket.md) |
+| 5 | Login over WS (per-connection auth; session key) | pending (must precede 4) — [design](superpowers/specs/2026-07-10-login-over-websocket-design.md) | [login](backlog/2026-07-09-login-over-websocket.md) |
 | 6 | Concurrency: worker task + slot table (removes the private-API wart) | NOT PART OF THIS ROADMAP | [multiplexed-channels](backlog/2026-07-03-multiplexed-channels.md) |
 
 Dont forget to do a code quality refactor after this is working. I think we should seperate some things out of the webmanager. but thats for later to figure out
