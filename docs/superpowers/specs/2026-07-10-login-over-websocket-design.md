@@ -97,51 +97,51 @@ sequenceDiagram
     participant Cmd as CommandManager
 
     rect rgb(235, 244, 255)
-    Note over FE,Cmd: 1 — Connect (virgin, no stored key)
-    FE->>WS: open /ws  (no ?token=)
+    Note over FE,Cmd: 1 - Connect (virgin, no stored key)
+    FE->>WS: open /ws, no token
     WS->>Gate: connection opened
-    Note over Gate: web.password set → authed = false
+    Note over Gate: web.password set, authed = false
     WS-->>FE: socket open
     end
 
     rect rgb(255, 244, 235)
-    Note over FE,Cmd: 2 — Login handshake (gate only; mux & commands never see it)
-    FE->>WS: [sid=1 | FINAL | {"type":"login","password":"…"}]
+    Note over FE,Cmd: 2 - Login handshake (gate only, mux and commands never see it)
+    FE->>WS: sid 1, FINAL, login password
     WS->>Link: binary frame
-    Link->>Gate: chunk(sid=1, FINAL)
-    Note over Gate: not authed → intercept<br/>check web.password ✓<br/>mint key (SessionTable)<br/>authed = true
-    Gate-->>Link: chunk(sid=1, FINAL, {"ok":true,"key":"…"})
+    Link->>Gate: chunk sid 1, FINAL
+    Note over Gate: not authed, intercept<br/>check web.password OK<br/>mint key (SessionTable)<br/>authed = true
+    Gate-->>Link: chunk sid 1, FINAL, ok + key
     Link-->>WS: binary frame
     WS-->>FE: reply
     Note over FE: store key, authenticated = true
     end
 
     rect rgb(235, 255, 240)
-    Note over FE,Cmd: 3 — First command: getLogs (authed → flows to the mux)
-    FE->>WS: [sid=2 | FINAL | {"type":"getLogs"}]
+    Note over FE,Cmd: 3 - First command getLogs (authed, flows to the mux)
+    FE->>WS: sid 2, FINAL, getLogs
     WS->>Link: binary frame
-    Link->>Gate: chunk(sid=2, FINAL)
-    Note over Gate: authed = true → pass through
-    Gate->>Mux: chunk(sid=2)
-    Mux->>Cmd: OnSessionOpened → Execute("getLogs")
+    Link->>Gate: chunk sid 2, FINAL
+    Note over Gate: authed = true, pass through
+    Gate->>Mux: chunk sid 2
+    Mux->>Cmd: OnSessionOpened, Execute getLogs
     Cmd-->>Mux: write reply, FINAL
-    Mux-->>Gate: chunk(sid=2, FINAL, {…logs…})
-    Gate-->>Link: (verbatim)
-    Link-->>WS: binary frame(s)
-    WS-->>FE: reply → resolve
+    Mux-->>Gate: chunk sid 2, FINAL, logs
+    Gate-->>Link: verbatim
+    Link-->>WS: binary frames
+    WS-->>FE: reply, resolve
     end
 
     rect rgb(235, 255, 240)
-    Note over FE,Cmd: 4 — Second command: reboot (already logged in — NO re-auth)
-    FE->>WS: [sid=3 | FINAL | {"type":"reboot"}]
+    Note over FE,Cmd: 4 - Second command reboot (already logged in, NO re-auth)
+    FE->>WS: sid 3, FINAL, reboot
     WS->>Link: binary frame
-    Link->>Gate: chunk(sid=3, FINAL)
-    Note over Gate: authed = true → pass through (one bool check)
-    Gate->>Mux: chunk(sid=3)
-    Mux->>Cmd: OnSessionOpened → Execute("reboot")
+    Link->>Gate: chunk sid 3, FINAL
+    Note over Gate: authed = true, pass through (one bool check)
+    Gate->>Mux: chunk sid 3
+    Mux->>Cmd: OnSessionOpened, Execute reboot
     Cmd-->>Mux: write reply, FINAL
-    Mux-->>Gate: chunk(sid=3, FINAL, {"ok":true})
-    Gate-->>FE: reply → resolve
+    Mux-->>Gate: chunk sid 3, FINAL, ok
+    Gate-->>FE: reply, resolve
     end
 ```
 
