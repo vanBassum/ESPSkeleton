@@ -14,18 +14,42 @@ frontend copies (version skew: device-served UI can never mismatch its
 firmware). The server caches device files keyed on firmware version, so
 the slow fetch-through-the-pipe happens once per version, not per view.
 
-Open fork: `readFile` command (raw FAT bytes; server owns content-type /
-gzip / SPA-fallback) vs `httpGet` command (device answers status +
-headers + body; server is a pure proxy). `httpGet` keeps HTTP behavior
-in one place — effectively HTTP-over-commands, an app-level VPN.
+**Designed 2026-08-02 — see `docs/superpowers/specs/2026-08-02-remote-access-relay-design.md`.**
+The relay is a second `SessionLink` under the existing `SessionMux`;
+`RelayManager` only dials out, queues frames, and implements
+SendRaw/RecvChunk. Nothing above the transport changes.
 
-Possible dogfooding: the device's own StaticFileHandler fetches bytes
-via the same command, keeping one file-access path. Guardrail: HTTP
-decisions stay in the route layer; the command stays "give me bytes".
+Open fork **resolved: `httpGet`-flavoured** — the device answers status +
+content-type + content-encoding + body. Decider: frontend files are stored
+gzipped (`*.gz`), so a raw-bytes `readFile` forces the server to re-derive
+`Content-Encoding` and MIME in C#, where they drift from the device.
+`getWebFile` is an ordinary command on `WebServerManager`, reusing an
+extracted `StaticFileHandler::Resolve()` — the dogfooding below, achieved
+without routing file reads through the command layer.
 
-Prerequisites: stream-commands rework (DONE 2026-07-03, on main —
-spec: `docs/superpowers/specs/2026-07-03-stream-commands-design.md`);
-envelope request ids (WS protocol already has them); auth = device
-credential to server + user login at server (see `webserver-login.md`)
-— handlers stay oblivious. See also `2026-07-03-multiplexed-channels.md` (low
-prio per Bas) for the transport this would ideally ride on.
+Guardrail held, with one refinement: `Resolve()` deliberately does *not* do
+SPA fallback. That stays in each route layer (device HTTP handler, and the
+proxy), so a mistyped asset path 404s instead of returning index.html/200
+and tripping a browser MIME error. The device still owns where files live
+and how paths map to them.
+
+Correction to the "a relay forwards one socket, understanding nothing" line
+in the session-mux spec: the server is payload-opaque, not frame-opaque. It
+must read and rewrite the 3-byte session header, because it **owns the id
+space** on the device pipe — otherwise its own `getWebFile` sessions collide
+with browser-allocated ids (both start at 1). It must also forward session 0
+(log broadcasts), so the relay is not request/response.
+
+Prerequisites, all now on main: stream-commands rework (DONE 2026-07-03,
+spec `2026-07-03-stream-commands-design.md`); the session transport this
+rides on (DONE 2026-07-09, spec `2026-07-09-session-mux-transport-design.md`
+— it supersedes the old "envelope request ids" point: every chunk carries a
+session id); device login over the socket (DONE, `AuthGate` — so a relayed
+frontend gets device login for free, handlers oblivious). Remaining auth
+work is the *device credential to the server*; until it exists, milestone 1
+stays off public IPs.
+
+Not a prerequisite but the thing that makes it pleasant:
+`2026-07-03-multiplexed-channels.md` (the concurrency half — worker task +
+slot table). Without it the server must keep one request in flight per
+device, so an uncached page load is N sequential WAN round trips.
