@@ -353,3 +353,10 @@ Caching (the next thing to do if page loads annoy), TLS/WSS, the device→server
 credential, per-browser auth on a shared pipe, and the concurrency half from
 `2026-07-03-multiplexed-channels.md` that would remove the one-request-in-flight
 serialization.
+
+**Known bug, found by inspection 2026-08-02:** the in-flight gate's watchdog is
+per-session but sized for one small round trip, so it fires mid-upload and lets a
+file fetch interleave into a streamed request body. Firmware update over the relay
+is also the one command path never exercised end to end. Both in
+`docs/backlog/2026-08-02-relay-gate-watchdog-upload.md` — do not rely on remote
+firmware update until it is closed.
