@@ -7,7 +7,7 @@
 #include <cstring>
 #include <cstdio>
 
-void AuthGate::SendReply(WsSessionLink& link, uint16_t sid, const char* json)
+void AuthGate::SendReply(SessionLink& link, uint16_t sid, const char* json)
 {
     uint8_t buf[session::HEADER_LEN + 160];
     size_t n = strlen(json);
@@ -17,7 +17,7 @@ void AuthGate::SendReply(WsSessionLink& link, uint16_t sid, const char* json)
     link.SendRaw(buf, session::HEADER_LEN + n);
 }
 
-void AuthGate::SendReject(WsSessionLink& link, uint16_t sid, const char* reason)
+void AuthGate::SendReject(SessionLink& link, uint16_t sid, const char* reason)
 {
     uint8_t buf[session::HEADER_LEN + 32];
     size_t n = strlen(reason);
@@ -27,7 +27,7 @@ void AuthGate::SendReject(WsSessionLink& link, uint16_t sid, const char* reason)
     link.SendRaw(buf, session::HEADER_LEN + n);
 }
 
-AuthGate::Disposition AuthGate::Handle(WsConnection& conn, WsSessionLink& link,
+AuthGate::Disposition AuthGate::Handle(WsConnection& conn, SessionLink& link,
                                        uint16_t sid, const uint8_t* payload, size_t len)
 {
     char line[160];

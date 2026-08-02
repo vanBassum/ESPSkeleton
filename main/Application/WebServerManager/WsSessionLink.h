@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mutex.h"
+#include "SessionLink.h"
 #include "SessionProtocol.h"
 #include <esp_http_server.h>
 #include <cstdint>
@@ -17,13 +18,14 @@
 // symbol fails as a clean link error, not silent breakage.
 extern "C" esp_err_t httpd_ws_get_frame_type(httpd_req_t* req);
 
-// Transport link for the WebSocket. Outbound: sends one already-framed session
-// chunk ([session|flags|payload], assembled by Session) as one WS binary frame.
-// Inbound: pulls the NEXT WS binary frame off the socket (RecvChunk), so a
+// Transport link for the local browser WebSocket (one of two SessionLink
+// implementations — see SessionLink.h). Outbound: sends one already-framed
+// session chunk ([session|flags|payload], assembled by Session) as one WS binary
+// frame. Inbound: pulls the NEXT WS binary frame off the socket (RecvChunk), so a
 // streamed request body — arriving as several session chunks that share one id —
 // can be drained within a single httpd handler call. The shared send mutex
 // serializes whole outbound frames so a log broadcast can't split a chunk.
-class WsSessionLink
+class WsSessionLink : public SessionLink
 {
     static constexpr const char* TAG = "WsSessionLink";   // referenced by the LOCK macro
 
@@ -34,7 +36,7 @@ public:
     WsSessionLink(httpd_req_t* req, Mutex& sendMutex) : req_(req), sendMutex_(sendMutex) {}
 
     // `frame` is [session|flags|payload]; `len` is the total (header + payload).
-    bool SendRaw(const uint8_t* frame, size_t len)
+    bool SendRaw(const uint8_t* frame, size_t len) override
     {
         httpd_ws_frame_t f = {};
         f.type = HTTPD_WS_TYPE_BINARY;
@@ -50,7 +52,7 @@ public:
     // from the 3-byte header, and leaves the payload at buf + HEADER_LEN.
     // Returns -1 on error, an over-long frame, or a non-data frame (CLOSE/PING) —
     // the caller treats -1 as end-of-stream.
-    int RecvChunk(uint8_t* buf, size_t cap, uint16_t* sid, uint8_t* flags)
+    int RecvChunk(uint8_t* buf, size_t cap, uint16_t* sid, uint8_t* flags) override
     {
         if (httpd_ws_get_frame_type(req_) != ESP_OK) return -1;
 

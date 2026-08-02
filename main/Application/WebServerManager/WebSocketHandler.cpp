@@ -2,6 +2,7 @@
 #include "CommandManager.h"
 #include "Authenticator.h"
 #include "AuthGate.h"
+#include "WsSessionLink.h"   // the concrete SessionLink for this transport
 #include "JsonHelpers.h"
 #include "esp_log.h"
 #include "esp_timer.h"

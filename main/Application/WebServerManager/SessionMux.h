@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Stream.h"
-#include "WsSessionLink.h"
+#include "SessionLink.h"
 #include "SessionProtocol.h"
 #include <cstdint>
 #include <cstddef>
@@ -22,7 +22,7 @@
 class Session : public Stream
 {
     uint16_t id_;
-    WsSessionLink& link_;
+    SessionLink& link_;
 
     const uint8_t* req_ = nullptr;   // current chunk's payload
     size_t reqLen_ = 0;
@@ -46,7 +46,7 @@ class Session : public Stream
     }
 
 public:
-    Session(uint16_t id, WsSessionLink& link, uint8_t* buf, size_t payloadCap,
+    Session(uint16_t id, SessionLink& link, uint8_t* buf, size_t payloadCap,
             uint8_t* inBuf, size_t inCap)
         : id_(id), link_(link), inBuf_(inBuf), inCap_(inCap), buf_(buf), cap_(payloadCap) {}
 
@@ -133,7 +133,7 @@ public:
         virtual void OnSessionOpened(Session& session) = 0;
     };
 
-    SessionMux(WsSessionLink& link, Sink& sink, uint8_t* buf, size_t payloadCap,
+    SessionMux(SessionLink& link, Sink& sink, uint8_t* buf, size_t payloadCap,
                uint8_t* inBuf, size_t inCap)
         : link_(link), sink_(sink), buf_(buf), payloadCap_(payloadCap),
           inBuf_(inBuf), inCap_(inCap) {}
@@ -141,7 +141,7 @@ public:
     void OnChunk(uint16_t id, uint8_t flags, const uint8_t* payload, size_t len);
 
 private:
-    WsSessionLink& link_;
+    SessionLink& link_;
     Sink& sink_;
     uint8_t* buf_;
     size_t payloadCap_;
