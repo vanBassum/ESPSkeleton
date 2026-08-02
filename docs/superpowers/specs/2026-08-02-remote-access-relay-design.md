@@ -1,9 +1,9 @@
 # Remote Access Relay — Design
 
 **Date:** 2026-08-02
-**Status:** Architecture agreed in discussion (this doc records it). Nothing
-implemented yet. First milestone is deliberately functional-only — see
-*Out of scope for milestone 1*.
+**Status:** **Milestone 1 shipped and verified on hardware 2026-08-02** — see
+*Implementation status* at the end. First milestone is deliberately
+functional-only; see *Out of scope for milestone 1*.
 
 ## Goal
 
@@ -296,3 +296,60 @@ knowledge of the device's filesystem layout.
 Caching is explicitly deferred **as an optimization**: session-id ownership and
 request serialization are correctness requirements and ship in milestone 1;
 caching ships immediately after if the page load is unpleasant.
+
+## Implementation status
+
+**Milestone 1 shipped 2026-08-02**, branch `remote-access-step1`, verified against
+real hardware (ESP32 DevKit, fw 0.0.5, relay on a LAN host). All eight steps of
+the order above landed. Six refinements emerged while building it:
+
+- **The relay server is Python, not ASP.NET Core** (Bas's call: prove the path
+  first). `relay-server/relay.py` — aiohttp, ~450 lines, in-memory registry, an
+  inline HTML dashboard instead of a second React app. The component split from
+  the plan survived as classes/handlers in the one file. Nothing about the device
+  side assumes the server's language.
+- **Registration is the connect URL's query string**, not a protocol message:
+  `/device?id=<id>&fw=<version>`. The server knows who connected before the first
+  chunk arrives and the session protocol gains no relay-specific verb. Device id
+  defaults to `esp32-<mac>`, so a fresh device registers without being told who it
+  is; `relay.deviceId` overrides.
+- **`CommandSink` was extracted** (`Application/CommandManager/CommandSink.{h,cpp}`).
+  Both transports need "read the type off the header line, run the handler, close
+  the reply", and a second copy in `RelayManager` would have been the exact
+  duplication this design exists to avoid. `WebSocketHandler` is no longer a
+  `SessionMux::Sink`; it owns one.
+- **`AuthGate` moved to `SessionLink&`**, so `hello`/`login`/`auth` works over the
+  relay unchanged — the predicted freebie, now real. Consequence worth knowing:
+  the pipe is *one* connection, so its `WsConnection` auth state is shared by
+  every browser the server relays. A login by one remote user authenticates the
+  pipe for all of them. Fine for a single trusted operator; per-browser auth needs
+  the server to carry a client identity alongside the session id.
+- **The in-flight gate is held per session, not per chunk**, with a watchdog. A
+  device that dies mid-session (`reboot` never sends FINAL — the handler restarts
+  before `CommandSink` closes the reply) would otherwise wedge the pipe forever.
+- **`ReadHeaderLine` moved to `CommandManager/HeaderLine.h`** from
+  `UpdateManager.cpp`'s anonymous namespace — `getWebFile` was its second caller.
+
+### Verified on hardware
+
+20/20 end-to-end checks: dashboard registry; `/devices/<id>` → trailing-slash
+redirect; `index.html` and both assets through `getWebFile` (413 KB bundle in
+~0.85 s, byte-identical to the device-served copy, `Content-Encoding: gzip` passed
+through); a missing asset is a real 404 while an unknown route falls back to
+`index.html`; `info`/`ping`/`getSettings`/`partitions`/`getLogs` over the relay
+(including a multi-chunk reply); session-0 log broadcasts reaching a relayed
+browser; three concurrent asset fetches serialized correctly; offline device 503s
+promptly on both the HTTP and WS routes.
+
+Disconnect behaviour: a request against a pipe the device has just abandoned
+returns 502 immediately (the ESP sends a clean FIN on restart) rather than hanging;
+the device reconnects by itself in ~3 s via `esp_websocket_client`'s auto-reconnect,
+after which the relay serves and dispatches again. The local path is unaffected
+throughout — the same commands work directly against the device.
+
+### Still owed
+
+Caching (the next thing to do if page loads annoy), TLS/WSS, the device→server
+credential, per-browser auth on a shared pipe, and the concurrency half from
+`2026-07-03-multiplexed-channels.md` that would remove the one-request-in-flight
+serialization.

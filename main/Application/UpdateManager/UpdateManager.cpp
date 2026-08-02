@@ -1,6 +1,7 @@
 #include "UpdateManager.h"
 #include "PartitionWriter.h"
 #include "CommandManager.h"
+#include "HeaderLine.h"
 #include "JsonScope.h"
 #include "JsonReader.h"
 #include "JsonHelpers.h"
@@ -29,26 +30,6 @@ void UpdateManager::Init()
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
 }
-
-namespace {
-
-// Read the command's header line (the request envelope) from `in`, up to and
-// consuming the terminating '\n'. The body — if any — is whatever remains in
-// `in` afterwards. Reads a byte at a time; the line always lives in the first
-// inbound chunk, so this never blocks on the socket.
-void ReadHeaderLine(Stream& in, char* out, size_t cap)
-{
-    size_t i = 0;
-    char c;
-    while (i < cap - 1 && in.read(&c, 1) == 1)
-    {
-        if (c == '\n') break;
-        out[i++] = c;
-    }
-    out[i] = '\0';
-}
-
-} // namespace
 
 const char* UpdateManager::GetRunningPartition() const
 {

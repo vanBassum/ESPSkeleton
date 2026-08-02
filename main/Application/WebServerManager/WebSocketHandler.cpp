@@ -3,11 +3,9 @@
 #include "Authenticator.h"
 #include "AuthGate.h"
 #include "WsSessionLink.h"   // the concrete SessionLink for this transport
-#include "JsonHelpers.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include <algorithm>
 #include <cstring>
 
 static constexpr const char* TAG = "WebSocketHandler";
@@ -18,7 +16,7 @@ static constexpr const char* TAG = "WebSocketHandler";
 
 void WebSocketHandler::SetCommandManager(CommandManager& commandManager)
 {
-    commandManager_ = &commandManager;
+    sink_.SetCommandManager(commandManager);
 }
 
 void WebSocketHandler::SetAuth(Authenticator& auth)
@@ -225,7 +223,7 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     {
         case AuthGate::Disposition::PassToMux:
         {
-            SessionMux mux(link, *this, sessionFrame_, SESSION_WINDOW,
+            SessionMux mux(link, sink_, sessionFrame_, SESSION_WINDOW,
                            sessionInbound_, sizeof(sessionInbound_));
             mux.OnChunk(sid, flags, payload, plen);
             break;
@@ -234,37 +232,4 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
         case AuthGate::Disposition::Rejected:
             break;
     }
-}
-
-void WebSocketHandler::OnSessionOpened(Session& session)
-{
-    // The request's first chunk carries the header line — {"type":"...",...args}
-    // terminated by '\n' — followed (for a streamed command) by the body. Peek
-    // it (without consuming) to route on "type"; the handler then reads the same
-    // line for its own args and the body from the same session (in == out).
-    const uint8_t* head = nullptr;
-    size_t headLen = 0;
-    session.peekRequest(head, headLen);
-
-    char line[128];
-    size_t n = std::min(headLen, sizeof(line) - 1);
-    memcpy(line, head, n);
-    line[n] = '\0';
-    if (char* nl = strchr(line, '\n')) *nl = '\0';
-
-    char type[32] = {};
-    ExtractJsonString(line, "type", type, sizeof(type));
-
-    if (type[0] == '\0')
-    {
-        session.reject("missing type");
-        return;
-    }
-
-    if (!commandManager_ || !commandManager_->Execute(type, session, session))
-    {
-        session.reject(type);   // unknown command
-        return;
-    }
-    session.finish();   // FINAL — end of reply
 }

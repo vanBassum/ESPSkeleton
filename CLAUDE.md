@@ -38,7 +38,7 @@ Everything in firmware is a "manager" owned by `ApplicationContext` ([main/Appli
 - has copy/move deleted,
 - initializes in `Init()` guarded by an `InitState` (`lib/rtos/InitState.h`), not in the constructor.
 
-`main.cpp` is only ordered `Init()` calls — order matters (Console → Settings → System → Network → Time → Command → Board → Update → WebServer). Adding a manager means: create the class, add it to `ServiceProvider`, `ApplicationContext`, `main.cpp`, and `main/CMakeLists.txt` (both `SOURCE_FILES_LIST` and `INCLUDE_DIRS_LIST` — sources are listed explicitly, no globbing).
+`main.cpp` is only ordered `Init()` calls — order matters (Console → Settings → System → Network → Time → Command → Board → Update → WebServer → Relay; Relay is last because it shares WebServer's `Authenticator`). Adding a manager means: create the class, add it to `ServiceProvider`, `ApplicationContext`, `main.cpp`, and `main/CMakeLists.txt` (both `SOURCE_FILES_LIST` and `INCLUDE_DIRS_LIST` — sources are listed explicitly, no globbing).
 
 ### Layer separation
 
@@ -57,7 +57,8 @@ Note: `board.cmake` fragments cannot change component `REQUIRES` (ESP-IDF resolv
 
 - Handlers have the signature `void Handler(Stream& in, Stream& out)`: `in` carries the request payload, the handler writes its complete reply to `out`. Streams are the contract; JSON is a dialect the handler opts into by constructing `JsonReader`/`JsonObject` on line one. Binary payloads (e.g. firmware chunks) use the same contract.
 - Owners declare an `inline static CommandEntry commands_[]` table ([CommandEntry.h](main/Application/CommandManager/CommandEntry.h)) with `InvokeCommand<&Owner::Method>` trampolines, and hand it to `CommandManager::Register()` from their `Init()`. Tables must have static storage duration — a registered entry that dies aborts with `FATAL`.
-- Two transports reach `Execute()`: the WebSocket (`WebSocketHandler`, JSON envelope with `id`/`type`) and a generic `POST /api/command` HTTP route used for large transfers (firmware uploads are chunked; partition downloads stream).
+- Two transports reach `Execute()`, and they differ *only* below `SessionLink` ([SessionLink.h](main/Application/WebServerManager/SessionLink.h)): the local browser WebSocket (`WsSessionLink`, frames read on the httpd task) and the outbound relay pipe (`RelaySessionLink`, `RecvChunk` blocking on a queue the WS client's event callback fills). Above that seam everything is shared — `SessionMux`/`Session`, `AuthGate`, and `CommandSink` (which does the dispatch), so no handler knows or cares which transport it is serving. There is no HTTP command route; HTTP serves static files only. Wire format is binary session chunks `[session:u16 LE][flags:u8][payload]`, not a JSON envelope.
+- Remote access works: `RelayManager` dials out to a server so the device is reachable off-LAN, and the server pulls the device's own frontend with the ordinary `getWebFile` command. Demo server in [relay-server/](relay-server/); design and hardware-verified status in [docs/superpowers/specs/2026-08-02-remote-access-relay-design.md](docs/superpowers/specs/2026-08-02-remote-access-relay-design.md). Off by default (`relay.enabled`).
 
 Log lines broadcast to all WebSocket clients via `ConsoleManager`. The frontend side is a singleton `BackendService` ([frontend/src/lib/backend.ts](frontend/src/lib/backend.ts)) that matches replies to requests by id and auto-reconnects.
 

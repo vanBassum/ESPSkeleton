@@ -20,6 +20,8 @@ extern "C" void app_main(void)
     g_appContext.getBoard().Init();
     g_appContext.getUpdateManager().Init();
     g_appContext.getWebServerManager().Init();
+    // After WebServer: shares its Authenticator, and its log fan-out target.
+    g_appContext.getRelayManager().Init();
 
     // Mark firmware as valid so the bootloader doesn't roll back on next reboot
     esp_ota_mark_app_valid_cancel_rollback();

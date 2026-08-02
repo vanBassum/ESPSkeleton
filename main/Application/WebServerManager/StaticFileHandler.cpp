@@ -1,5 +1,6 @@
 #include "StaticFileHandler.h"
 
+#include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
 #include <esp_log.h>
@@ -33,88 +34,91 @@ const char* StaticFileHandler::GetContentType(const char* ext)
     return "application/octet-stream";
 }
 
+bool StaticFileHandler::IsSafePath(const char* uri)
+{
+    return strstr(uri, "..") == nullptr;
+}
+
+bool StaticFileHandler::Resolve(const char* basePath, const char* uri, Resolved& out)
+{
+    if (!IsSafePath(uri))
+    {
+        ESP_LOGW(TAG, "Rejected path traversal attempt: %s", uri);
+        return false;
+    }
+
+    // Strip query string
+    char clean[256];
+    if (const char* query = strchr(uri, '?'))
+    {
+        size_t len = static_cast<size_t>(query - uri);
+        if (len >= sizeof(clean)) len = sizeof(clean) - 1;
+        memcpy(clean, uri, len);
+        clean[len] = '\0';
+        uri = clean;
+    }
+
+    if (uri[0] == '\0' || strcmp(uri, "/") == 0) uri = "/index.html";
+
+    // Callers over the wire may omit the leading slash.
+    const char* sep = (uri[0] == '/') ? "" : "/";
+
+    out.contentType = "application/octet-stream";
+    if (const char* ext = strrchr(uri, '.')) out.contentType = GetContentType(ext);
+
+    // The build gzips everything into www/, so .gz is the common case, not the
+    // exception. `gzipped` must reach the client as Content-Encoding, or it
+    // receives gzip bytes labelled as JavaScript.
+    struct stat st;
+    snprintf(out.path, sizeof(out.path), "%s%s%s.gz", basePath, sep, uri);
+    if (stat(out.path, &st) == 0)
+    {
+        out.gzipped = true;
+        return true;
+    }
+
+    snprintf(out.path, sizeof(out.path), "%s%s%s", basePath, sep, uri);
+    if (stat(out.path, &st) == 0)
+    {
+        out.gzipped = false;
+        return true;
+    }
+
+    return false;
+}
+
 esp_err_t StaticFileHandler::Handle(httpd_req_t* req)
 {
     const char* basePath = static_cast<const char*>(req->user_ctx);
-    char filepath[600];
-    const char* uri = req->uri;
 
-    // Strip query string
-    const char* query = strchr(uri, '?');
-    char uri_clean[256];
-    if (query)
+    if (!IsSafePath(req->uri))
     {
-        size_t len = query - uri;
-        if (len >= sizeof(uri_clean)) len = sizeof(uri_clean) - 1;
-        memcpy(uri_clean, uri, len);
-        uri_clean[len] = '\0';
-        uri = uri_clean;
-    }
-
-    // Reject path traversal attempts
-    if (strstr(uri, "..") != nullptr)
-    {
-        ESP_LOGW(TAG, "Rejected path traversal attempt: %s", uri);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
         return ESP_OK;
     }
 
-    if (strcmp(uri, "/") == 0)
+    Resolved file;
+    if (!Resolve(basePath, req->uri, file))
     {
-        uri = "/index.html";
-    }
-
-    // Determine content type from extension
-    const char* type = "application/octet-stream";
-    const char* ext = strrchr(uri, '.');
-    if (ext)
-    {
-        type = GetContentType(ext);
-    }
-
-    // Try .gz version first
-    bool is_gzipped = false;
-    snprintf(filepath, sizeof(filepath), "%s%s.gz", basePath, uri);
-
-    struct stat st;
-    if (stat(filepath, &st) == 0)
-    {
-        is_gzipped = true;
-    }
-    else
-    {
-        snprintf(filepath, sizeof(filepath), "%s%s", basePath, uri);
-        if (stat(filepath, &st) != 0)
+        // SPA fallback lives here, in the route layer — not in Resolve(), which
+        // stays "give me this exact file or nothing".
+        if (!Resolve(basePath, "/index.html", file))
         {
-            // SPA fallback: serve index.html for non-file routes
-            snprintf(filepath, sizeof(filepath), "%s/index.html.gz", basePath);
-            if (stat(filepath, &st) == 0)
-            {
-                is_gzipped = true;
-                type = "text/html";
-            }
-            else
-            {
-                snprintf(filepath, sizeof(filepath), "%s/index.html", basePath);
-                if (stat(filepath, &st) != 0)
-                {
-                    httpd_resp_send_404(req);
-                    return ESP_OK;
-                }
-                type = "text/html";
-            }
+            httpd_resp_send_404(req);
+            return ESP_OK;
         }
+        file.contentType = "text/html";
     }
 
-    FILE* f = fopen(filepath, "rb");
+    FILE* f = fopen(file.path, "rb");
     if (!f)
     {
         httpd_resp_send_404(req);
         return ESP_OK;
     }
 
-    httpd_resp_set_type(req, type);
-    if (is_gzipped)
+    httpd_resp_set_type(req, file.contentType);
+    if (file.gzipped)
     {
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     }

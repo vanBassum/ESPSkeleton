@@ -14,6 +14,14 @@ frontend copies (version skew: device-served UI can never mismatch its
 firmware). The server caches device files keyed on firmware version, so
 the slow fetch-through-the-pipe happens once per version, not per view.
 
+**MILESTONE 1 SHIPPED 2026-08-02** (branch `remote-access-step1`, verified on
+hardware). The vision above works end to end: device dials out, dashboard lists
+it, clicking it opens the device's own UI served through the command pipe, and
+commands + live logs work remotely. Demo server: `relay-server/relay.py` (Python,
+not ASP.NET — prove the path first). Remaining: file caching, TLS, the
+device→server credential, per-browser auth on a shared pipe. Full record in the
+spec's *Implementation status*.
+
 **Designed 2026-08-02 — see `docs/superpowers/specs/2026-08-02-remote-access-relay-design.md`.**
 The relay is a second `SessionLink` under the existing `SessionMux`;
 `RelayManager` only dials out, queues frames, and implements

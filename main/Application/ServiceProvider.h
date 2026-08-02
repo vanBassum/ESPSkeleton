@@ -4,6 +4,7 @@ class Board;
 class CommandManager;
 class ConsoleManager;
 class NetworkManager;
+class RelayManager;
 class SettingsManager;
 class SystemManager;
 class TimeManager;
@@ -17,6 +18,7 @@ public:
     virtual CommandManager& getCommandManager() = 0;
     virtual ConsoleManager& getConsoleManager() = 0;
     virtual NetworkManager& getNetworkManager() = 0;
+    virtual RelayManager& getRelayManager() = 0;
     virtual SettingsManager& getSettingsManager() = 0;
     virtual SystemManager& getSystemManager() = 0;
     virtual TimeManager& getTimeManager() = 0;

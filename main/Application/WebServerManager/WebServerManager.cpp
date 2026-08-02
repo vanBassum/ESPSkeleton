@@ -1,8 +1,14 @@
 #include "WebServerManager.h"
 #include "ConsoleManager.h"
 #include "SettingsManager.h"
+#include "CommandManager.h"
+#include "RelayManager.h"
+#include "HeaderLine.h"
+#include "JsonHelpers.h"
 
 #include <unistd.h>
+#include <cstdio>
+#include <cstring>
 #include <esp_log.h>
 #include <esp_vfs_fat.h>
 
@@ -34,6 +40,8 @@ void WebServerManager::Init()
     MountFatPartition();
     StartServer();
     RegisterRoutes();
+
+    serviceProvider_.getCommandManager().Register(this, commands_);
 
     // Wire console broadcast to WS clients
     serviceProvider_.getConsoleManager().SetBroadcastCallback(
@@ -106,10 +114,59 @@ void WebServerManager::Broadcast(const char* json, int len)
 {
     if (server_)
         wsHandler_.Broadcast(server_, json, len);
+
+    // ConsoleManager holds a single broadcast callback, so the fan-out to the
+    // second transport happens here: relayed frontends get the same live log
+    // stream. No-op while the relay is disabled or disconnected.
+    serviceProvider_.getRelayManager().BroadcastLog(json, len);
 }
 
 void WebServerManager::BroadcastBinary(const uint8_t* data, size_t len)
 {
     if (server_)
         wsHandler_.BroadcastBinary(server_, data, len);
+}
+
+// ──────────────────────────────────────────────────────────────
+// Commands
+// ──────────────────────────────────────────────────────────────
+
+void WebServerManager::Cmd_GetWebFile(Stream& in, Stream& out)
+{
+    char line[256];
+    ReadHeaderLine(in, line, sizeof(line));
+
+    char path[192] = {};
+    ExtractJsonString(line, "path", path, sizeof(path));
+
+    StaticFileHandler::Resolved file;
+    FILE* f = nullptr;
+
+    if (path[0] != '\0' && StaticFileHandler::Resolve(BASE_PATH, path, file))
+        f = fopen(file.path, "rb");
+
+    if (!f)
+    {
+        // A real 404 — SPA fallback is the asking route layer's decision, not
+        // ours (see StaticFileHandler::Resolve).
+        static constexpr const char* notFound = "{\"ok\":true,\"status\":404}\n";
+        out.write(notFound, strlen(notFound));
+        return;
+    }
+
+    char header[256];
+    int n = snprintf(header, sizeof(header),
+                     "{\"ok\":true,\"status\":200,\"contentType\":\"%s\"%s}\n",
+                     file.contentType,
+                     file.gzipped ? ",\"contentEncoding\":\"gzip\"" : "");
+    out.write(header, static_cast<size_t>(n));
+
+    // Streams out chunk-by-chunk through the session window; a 200 KB bundle
+    // never needs a 200 KB buffer here or on the transport.
+    char buf[512];
+    size_t r;
+    while ((r = fread(buf, 1, sizeof(buf), f)) > 0)
+        out.write(buf, r);
+
+    fclose(f);
 }

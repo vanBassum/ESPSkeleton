@@ -92,3 +92,7 @@ www/
 
 # Claude Code
 .claude/
+
+# Relay server demo (local venv + caches)
+relay-server/.venv/
+relay-server/__pycache__/

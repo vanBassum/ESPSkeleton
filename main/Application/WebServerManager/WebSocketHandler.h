@@ -4,12 +4,13 @@
 #include "Mutex.h"
 #include "SessionTable.h"
 #include "SessionMux.h"
+#include "CommandSink.h"
 #include "ConnectionRegistry.h"
 
 class CommandManager;
 class Authenticator;
 
-class WebSocketHandler : public SessionMux::Sink {
+class WebSocketHandler {
     static constexpr const char* TAG = "WebSocketHandler";
 
 public:
@@ -24,7 +25,8 @@ public:
     void OnClientDisconnected(int fd);
 
 private:
-    CommandManager* commandManager_ = nullptr;
+    // Dispatch is shared with the relay transport — see CommandSink.
+    CommandSink sink_;
     Authenticator* auth_ = nullptr;
 
     // Serializes ALL outgoing frame writes. Broadcasts run on the
@@ -70,5 +72,4 @@ private:
     // delegated to AuthGate, constructed locally per frame (it only holds an
     // Authenticator&, so this is cheap) — see AuthGate.h.
     void HandleBinary(httpd_req_t* req, const uint8_t* frame, size_t len);
-    void OnSessionOpened(Session& session) override;
 };

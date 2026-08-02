@@ -43,6 +43,23 @@ let nextSession = 1
 const FLAG_FINAL = 0x01
 const FLAG_REJECT = 0x02
 
+// The device UI runs in two places, and its WebSocket follows the page:
+//   • served by the device            → ws://<device>/ws
+//   • served through the relay server → ws://<server>/devices/<id>/ws
+//
+// Resolving "ws" against the page's own directory covers both, which keeps this
+// file ignorant that a relay exists — no device id is parsed here. `pnpm dev`
+// still talks to DEV_HOST.
+function resolveWsUrl(): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:"
+  if (import.meta.env.DEV) return `${proto}//${DEV_HOST}/ws`
+
+  // Drop the document name so "/devices/x/" and "/devices/x/index.html" both
+  // resolve to "/devices/x/ws".
+  const dir = location.pathname.replace(/[^/]*$/, "")
+  return `${proto}//${location.host}${dir}ws`
+}
+
 class BackendService {
   private ws: WebSocket | null = null
   private pending = new Map<number, PendingRequest>()
@@ -127,9 +144,7 @@ class BackendService {
     this.setStatus("connecting")
 
     const p = new Promise<void>((resolve, reject) => {
-      const host = import.meta.env.DEV ? DEV_HOST : location.host
-      const proto = location.protocol === "https:" ? "wss:" : "ws:"
-      const ws = new WebSocket(`${proto}//${host}/ws`)
+      const ws = new WebSocket(resolveWsUrl())
       ws.binaryType = "arraybuffer"
       let opened = false
 
