@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "If docs/reasoning/ exists, read the notes in it (all of them if they fit) so the project's prior understanding is in context before work begins."
+            "prompt": "Read docs/next-up.md if it exists — it is the ordered view of what to work on next, including which items are waiting on a decision from Bas rather than on code. Then, if docs/reasoning/ exists, read the notes in it (all of them if they fit) so the project's prior understanding is in context before work begins. Open the conversation by summarising what is next in a few lines, so the session starts from where the last one left off."
           }
         ]
       }
