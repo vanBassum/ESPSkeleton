@@ -203,10 +203,21 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
     char label[17] = {};
     ExtractJsonString(line, "partition", label, sizeof(label));
 
+    // No `offset` means the one-shot upload: start at zero, erase as we go, and
+    // activate at the end — the whole image in one command, exactly as before. An
+    // explicit offset (including 0) means the sender is driving the upload in
+    // pieces and owns the clearPartition and activatePartition steps itself.
+    //
+    // -1 as the default is how absence is detected: ExtractJsonInt cannot report
+    // it. A negative offset therefore reads as "absent" rather than as an error.
+    int32_t offset = ExtractJsonInt(line, "offset", -1);
+    const bool oneShot = (offset < 0);
+    if (oneShot) offset = 0;
+
     char msg[96];
 
     const char* err = nullptr;
-    PartitionWriter w(label, &err);
+    PartitionWriter w(label, static_cast<size_t>(offset), /*eraseAsNeeded=*/oneShot, &err);
     if (!w.ok())
     {
         int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err);
@@ -226,7 +237,7 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
     size_t reported = 0;
     while ((n = in.read(io.p, kIoBufSize)) > 0)   // 0 == end of stream == full image
     {
-        if (!w.write(io.p, n))                     // dtor aborts a half-written image
+        if (!w.write(io.p, n))
         {
             int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"write failed\"}");
             out.write(msg, len);
@@ -241,14 +252,13 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
         }
     }
 
-    // A stream that broke is not a complete image, even though it ended the same
-    // way a complete one does — read() returns 0 for both. Returning here without
-    // finish() leaves the destructor to abort the write, so a truncated image is
-    // never validated, never activated, and the sender is told the real reason
-    // instead of "image validation failed" a megabyte later.
+    // A stream that broke is not a complete write, even though it ended the same way
+    // a complete one does — read() returns 0 for both. Returning without activating
+    // leaves the boot pointer where it was, so a truncated image is inert and the
+    // sender is told the real reason instead of "image validation failed" later.
     if (in.failed())
     {
-        ESP_LOGE(TAG, "request stream failed after %u bytes, discarding the image",
+        ESP_LOGE(TAG, "request stream failed after %u bytes, not activating",
                  (unsigned)w.written());
         int len = snprintf(msg, sizeof(msg),
                            "{\"ok\":false,\"error\":\"stream failed at %lu bytes\"}",
@@ -257,11 +267,60 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
         return;
     }
 
-    err = w.finish();
+    // Chunked: this piece landed, and that is all this command claims. The sender
+    // activates when it has sent the last piece.
+    if (!oneShot)
+    {
+        int len = snprintf(msg, sizeof(msg), "{\"ok\":true,\"offset\":%lu,\"size\":%lu}",
+                           (unsigned long)offset, (unsigned long)w.written());
+        out.write(msg, len);
+        return;
+    }
+
+    err = PartitionWriter::Activate(label);
     int len = err
         ? snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err)
         : snprintf(msg, sizeof(msg), "{\"ok\":true,\"size\":%lu}", (unsigned long)w.written());
-    out.write(msg, len);   // OnSessionOpened's finish() emits this as the FINAL chunk
+    out.write(msg, len);   // the dispatcher's finish() emits this as the FINAL chunk
+}
+
+// ──────────────────────────────────────────────────────────────
+// Chunked-upload steps — the two halves the one-shot path does implicitly, so a
+// sender can drive an upload as many short sessions instead of one long one.
+// ──────────────────────────────────────────────────────────────
+
+void UpdateManager::Cmd_ClearPartition(Stream& in, Stream& out)
+{
+    JsonReader<256> req(in);
+    JsonObject resp(out);
+
+    char label[17] = {};
+    req.GetString("partition", label, sizeof(label));
+
+    if (const char* err = PartitionWriter::Clear(label))
+    {
+        resp.field("ok", false);
+        resp.field("error", err);
+        return;
+    }
+    resp.field("ok", true);
+}
+
+void UpdateManager::Cmd_ActivatePartition(Stream& in, Stream& out)
+{
+    JsonReader<256> req(in);
+    JsonObject resp(out);
+
+    char label[17] = {};
+    req.GetString("partition", label, sizeof(label));
+
+    if (const char* err = PartitionWriter::Activate(label))
+    {
+        resp.field("ok", false);
+        resp.field("error", err);
+        return;
+    }
+    resp.field("ok", true);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -307,7 +366,11 @@ void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
         int status = esp_http_client_get_status_code(client);
         if (status != 200) { err = "http status"; break; }
 
-        PartitionWriter w(label, &err);   // dtor aborts if we break before finish()
+        // The device pulls the whole image itself, so this is inherently one shot:
+        // start at zero, erase as we go, activate once the body is complete.
+        // Breaking out before Activate() leaves the boot pointer untouched, so a
+        // partial image is inert.
+        PartitionWriter w(label, 0, /*eraseAsNeeded=*/true, &err);
         if (!w.ok()) break;
 
         char buf[1024];
@@ -320,7 +383,7 @@ void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
         if (err) break;
         if (n < 0) { err = "read failed"; break; }
 
-        err = w.finish();
+        err = PartitionWriter::Activate(label);
     } while (false);
 
     esp_http_client_close(client);

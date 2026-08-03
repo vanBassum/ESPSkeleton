@@ -55,14 +55,35 @@ private:
     // ── Commands (registered with CommandManager in Init) ──
     void Cmd_UpdateStatus(Stream& in, Stream& out);
     void Cmd_Partitions(Stream& in, Stream& out);
-    void Cmd_WritePartition(Stream& in, Stream& out);   // streamed upload: header line + body
+    /// Streamed upload: header line + body. `offset` is optional and decides which
+    /// of two modes this is:
+    ///
+    ///   absent  — one shot. Erase as we go from zero and activate at the end; the
+    ///             whole image in a single command, which is what the web UI sends.
+    ///   present — one piece of a caller-driven upload. Writes exactly where told,
+    ///             erases nothing, activates nothing. The sender calls
+    ///             clearPartition first and activatePartition after the last piece,
+    ///             and may leave gaps between pieces for other traffic.
+    ///
+    /// The second mode exists because a single command that runs for tens of seconds
+    /// monopolises the transport, which is what the relay's in-flight timeout trips
+    /// over. Many short commands need no concurrency support to coexist with others.
+    void Cmd_WritePartition(Stream& in, Stream& out);
     void Cmd_UpdateFromUrl(Stream& in, Stream& out);
     void Cmd_DownloadPartition(Stream& in, Stream& out);
+
+    /// Erase a partition whole, so a chunked upload starts from a known state.
+    void Cmd_ClearPartition(Stream& in, Stream& out);
+
+    /// Validate an app image and make it the next boot slot. No-op for data.
+    void Cmd_ActivatePartition(Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "updateStatus",      &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },
         { "partitions",        &InvokeCommand<&UpdateManager::Cmd_Partitions> },
         { "writePartition",    &InvokeCommand<&UpdateManager::Cmd_WritePartition> },
+        { "clearPartition",    &InvokeCommand<&UpdateManager::Cmd_ClearPartition> },
+        { "activatePartition", &InvokeCommand<&UpdateManager::Cmd_ActivatePartition> },
         { "updateFromUrl",     &InvokeCommand<&UpdateManager::Cmd_UpdateFromUrl> },
         { "downloadPartition", &InvokeCommand<&UpdateManager::Cmd_DownloadPartition> },
     };

@@ -13,8 +13,8 @@
 // once per handler invocation before dispatch, so to read frames *beyond* the
 // first within a single handler call we must call it ourselves. This is a
 // deliberate, documented wart — the price of draining an inbound stream on the
-// httpd task without a worker; removed when the CommandManager worker task lands
-// (docs/backlog/2026-07-03-multiplexed-channels.md). A future IDF dropping the
+// httpd task without a worker; removed if the CommandManager worker task ever lands
+// (docs/backlog/2026-08-03-command-worker-task.md). A future IDF dropping the
 // symbol fails as a clean link error, not silent breakage.
 extern "C" esp_err_t httpd_ws_get_frame_type(httpd_req_t* req);
 
