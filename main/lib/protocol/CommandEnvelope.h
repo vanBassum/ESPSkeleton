@@ -28,22 +28,49 @@ namespace protocol
     // Command names are short by convention; a longer one simply won't match.
     inline constexpr size_t MAX_COMMAND_NAME = 32;
 
-    /// Copy the envelope line out of the session's first chunk (without consuming
-    /// it) and extract the command name. Empty when there is no parseable name.
+    /// Name the request from its first chunk, without consuming anything. Empty when
+    /// there is no parseable name.
+    ///
+    /// Two request formats are accepted, told apart by the first byte:
+    ///
+    ///   '{'    the JSON envelope — {"type":"name",...}\n[body]
+    ///   other  the console form  — name -flag value … [-- body]
+    ///
+    /// The console form is where this is going, because it can be read in a single
+    /// pass (see TokenReader). The JSON form is still here only until every handler
+    /// and the frontend have moved over; then this branch and the buffer it needs go
+    /// away together.
     inline void ReadCommandName(const Session& session, char* out, size_t cap)
     {
         const uint8_t* head = nullptr;
         size_t headLen = 0;
         session.peekRequest(head, headLen);
 
-        char line[MAX_ENVELOPE];
-        size_t n = std::min(headLen, sizeof(line) - 1);
-        if (n) memcpy(line, head, n);
-        line[n] = '\0';
-        if (char* nl = strchr(line, '\n')) *nl = '\0';
-
         out[0] = '\0';
-        ExtractJsonString(line, "type", out, cap);
+        if (headLen == 0) return;
+
+        if (head[0] == '{')
+        {
+            char line[MAX_ENVELOPE];
+            size_t n = std::min(headLen, sizeof(line) - 1);
+            memcpy(line, head, n);
+            line[n] = '\0';
+            if (char* nl = strchr(line, '\n')) *nl = '\0';
+            ExtractJsonString(line, "type", out, cap);
+            return;
+        }
+
+        // Console form: the name is simply the first token. No line to find, no
+        // buffer beyond the caller's name variable.
+        size_t i = 0;
+        while (i < headLen && i < cap - 1)
+        {
+            const char c = static_cast<char>(head[i]);
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') break;
+            out[i] = c;
+            ++i;
+        }
+        out[i] = '\0';
     }
 
     /// Run one opened session: name it, dispatch it, close or refuse the reply.

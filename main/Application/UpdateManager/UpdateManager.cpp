@@ -2,6 +2,7 @@
 #include "PartitionWriter.h"
 #include "CommandManager.h"
 #include "StringReader.h"
+#include "TokenReader.h"
 #include <cstdlib>
 #include "JsonScope.h"
 #include "JsonReader.h"
@@ -289,14 +290,44 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
 // sender can drive an upload as many short sessions instead of one long one.
 // ──────────────────────────────────────────────────────────────
 
+// These two are the first handlers written against the console request format
+// rather than the JSON envelope:
+//
+//     clearPartition -p ota_1
+//     activatePartition -p ota_1
+//
+// Note what is absent: no JsonReader, so no buffer holding the request. `label` is
+// seventeen bytes because a partition label is seventeen bytes — the request's length
+// does not enter into it. The reply stays JSON, which costs nothing because writing
+// is single-pass already.
+//
+// Converted first because they are new and nothing in the web UI calls them yet, so
+// the format can be proven on hardware without touching the frontend.
+
+namespace {
+
+/// Read the one argument these commands take: -p <partition label>.
+/// Consumes the command word first, then any flags in any order.
+void ReadPartitionArg(Stream& in, char* label, size_t cap)
+{
+    TokenReader tr(in);
+    char tok[24];
+
+    tr.next(tok, sizeof(tok));          // the command word itself, discarded
+    while (tr.next(tok, sizeof(tok)))
+    {
+        if (strcmp(tok, "-p") == 0) tr.next(label, cap);
+    }
+}
+
+} // namespace
+
 void UpdateManager::Cmd_ClearPartition(Stream& in, Stream& out)
 {
-    JsonReader<256> req(in);
-    JsonObject resp(out);
-
     char label[17] = {};
-    req.GetString("partition", label, sizeof(label));
+    ReadPartitionArg(in, label, sizeof(label));
 
+    JsonObject resp(out);
     if (const char* err = PartitionWriter::Clear(label))
     {
         resp.field("ok", false);
@@ -308,12 +339,10 @@ void UpdateManager::Cmd_ClearPartition(Stream& in, Stream& out)
 
 void UpdateManager::Cmd_ActivatePartition(Stream& in, Stream& out)
 {
-    JsonReader<256> req(in);
-    JsonObject resp(out);
-
     char label[17] = {};
-    req.GetString("partition", label, sizeof(label));
+    ReadPartitionArg(in, label, sizeof(label));
 
+    JsonObject resp(out);
     if (const char* err = PartitionWriter::Activate(label))
     {
         resp.field("ok", false);
