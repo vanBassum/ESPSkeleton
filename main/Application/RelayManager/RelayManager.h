@@ -37,7 +37,12 @@ class RelayManager
     // chunks to the local transport's 4096).
     static constexpr size_t INBOUND_WINDOW = 4096;
 
-    static constexpr int QUEUE_DEPTH = 8;
+    // Deep enough that a firmware push keeps streaming while the consumer pauses to
+    // write flash (~32 ms per 4 KB sector). Depth 8 was sized for request/reply; the
+    // KC1245 fork measured chunk loss at that depth on a continuous upload, and a
+    // dropped chunk is invisible to the session layer — it silently corrupts the
+    // image rather than failing.
+    static constexpr int QUEUE_DEPTH = 16;
     static constexpr int TASK_STACK  = 8192;
 
 public:
@@ -100,7 +105,9 @@ private:
     void OnConnected();
     void OnDisconnected();
     void OnData(const void* eventData);
-    void DrainQueue();
+    /// Discard everything queued; returns the number of real chunks dropped
+    /// (sentinels excluded) so a caller can report residue.
+    size_t DrainQueue();
 
     static void EventHandler(void* ctx, esp_event_base_t base, int32_t id, void* data);
 

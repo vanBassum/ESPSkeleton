@@ -3,6 +3,7 @@
 #include "Stream.h"
 #include "SessionLink.h"
 #include "SessionProtocol.h"
+#include "esp_log.h"
 #include <cstdint>
 #include <cstddef>
 #include <algorithm>
@@ -27,6 +28,7 @@ class Session : public Stream
     const uint8_t* req_ = nullptr;   // current chunk's payload
     size_t reqLen_ = 0;
     size_t reqPos_ = 0;
+    size_t consumed_ = 0;            // request bytes handed to the reader, for diagnostics
     bool   reqFinal_ = false;        // current chunk was FLAG_FINAL → no more after it
 
     uint8_t* inBuf_;      // buffer for pulled continuation chunks [ header | payload ]
@@ -67,14 +69,24 @@ public:
             if (reqFinal_ || failed_) return 0;        // EOF
             uint16_t sid = 0; uint8_t flags = 0;
             int n = link_.RecvChunk(inBuf_, inCap_, &sid, &flags);
-            if (n < 0 || sid != id_) { failed_ = true; return 0; }  // error / interleaved id
+            if (n < 0 || sid != id_)
+            {
+                // Logged because this returns 0, the same as a clean end of stream:
+                // without a line here a transport failure is silent, and a reader
+                // that trusts 0 to mean "complete" acts on a truncated request.
+                ESP_LOGE("Session", "read failed after %u bytes: n=%d sid=%u (want %u)",
+                         static_cast<unsigned>(consumed_), n,
+                         static_cast<unsigned>(sid), static_cast<unsigned>(id_));
+                failed_ = true;
+                return 0;
+            }
             req_ = inBuf_ + session::HEADER_LEN;
             reqLen_ = static_cast<size_t>(n);
             reqPos_ = 0;
             reqFinal_ = (flags & session::FLAG_FINAL) != 0;
         }
         size_t n = std::min(size, reqLen_ - reqPos_);
-        if (n) { memcpy(dst, req_ + reqPos_, n); reqPos_ += n; }
+        if (n) { memcpy(dst, req_ + reqPos_, n); reqPos_ += n; consumed_ += n; }
         return n;
     }
 
@@ -115,7 +127,11 @@ public:
         emitChunk(session::FLAG_REJECT);
     }
 
-    bool failed() const { return failed_; }
+    /// A read or write that stopped short because the transport broke, not because
+    /// the request ended. Both look like read() == 0 to the caller, so anything that
+    /// needs *all* of its input has to ask. An override, so a handler holding only a
+    /// `Stream&` can ask too.
+    bool failed() const override { return failed_; }
     uint16_t id() const { return id_; }
 };
 

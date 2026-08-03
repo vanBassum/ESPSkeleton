@@ -2,6 +2,7 @@
 #include "PartitionWriter.h"
 #include "CommandManager.h"
 #include "StringReader.h"
+#include <cstdlib>
 #include "JsonScope.h"
 #include "JsonReader.h"
 #include "JsonHelpers.h"
@@ -30,6 +31,27 @@ void UpdateManager::Init()
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
 }
+
+namespace {
+
+// Command handlers run on whichever transport task dispatched them, and those
+// stacks are a few KB — so a multi-KB *local* buffer eats most of one and can
+// scribble on whatever memory follows. In the KC1245 fork that surfaced as a NULL
+// semaphore inside lwIP's select teardown, with no clue in the backtrace pointing
+// at the real culprit. Anything of that size belongs on the heap, freed on every
+// exit path.
+struct HeapBuf
+{
+    uint8_t* p;
+    explicit HeapBuf(size_t n) : p(static_cast<uint8_t*>(malloc(n))) {}
+    ~HeapBuf() { free(p); }
+    HeapBuf(const HeapBuf&) = delete;
+    HeapBuf& operator=(const HeapBuf&) = delete;
+};
+
+constexpr size_t kIoBufSize = 4096;
+
+} // namespace
 
 const char* UpdateManager::GetRunningPartition() const
 {
@@ -192,12 +214,19 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
         return;
     }
 
-    uint8_t buf[4096];
+    HeapBuf io(kIoBufSize);
+    if (!io.p)
+    {
+        int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"out of memory\"}");
+        out.write(msg, len);
+        return;
+    }
+
     size_t n;
     size_t reported = 0;
-    while ((n = in.read(buf, sizeof(buf))) > 0)   // 0 == end of stream == full image
+    while ((n = in.read(io.p, kIoBufSize)) > 0)   // 0 == end of stream == full image
     {
-        if (!w.write(buf, n))                      // dtor aborts a half-written image
+        if (!w.write(io.p, n))                     // dtor aborts a half-written image
         {
             int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"write failed\"}");
             out.write(msg, len);
@@ -210,6 +239,22 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
             out.flush();                           // push this progress chunk now
             reported = w.written();
         }
+    }
+
+    // A stream that broke is not a complete image, even though it ended the same
+    // way a complete one does — read() returns 0 for both. Returning here without
+    // finish() leaves the destructor to abort the write, so a truncated image is
+    // never validated, never activated, and the sender is told the real reason
+    // instead of "image validation failed" a megabyte later.
+    if (in.failed())
+    {
+        ESP_LOGE(TAG, "request stream failed after %u bytes, discarding the image",
+                 (unsigned)w.written());
+        int len = snprintf(msg, sizeof(msg),
+                           "{\"ok\":false,\"error\":\"stream failed at %lu bytes\"}",
+                           (unsigned long)w.written());
+        out.write(msg, len);
+        return;
     }
 
     err = w.finish();
@@ -310,17 +355,25 @@ void UpdateManager::Cmd_DownloadPartition(Stream& in, Stream& out)
 
     ESP_LOGI(TAG, "Download partition '%s' (%lu bytes)", label, (unsigned long)p->size);
 
-    uint8_t buf[4096];
+    HeapBuf io(kIoBufSize);
+    if (!io.p)
+    {
+        JsonObject resp(out);
+        resp.field("ok", false);
+        resp.field("error", "out of memory");
+        return;
+    }
+
     size_t offset = 0;
     while (offset < p->size)
     {
-        size_t n = (p->size - offset < sizeof(buf)) ? (p->size - offset) : sizeof(buf);
-        if (esp_partition_read(p, offset, buf, n) != ESP_OK)
+        size_t n = (p->size - offset < kIoBufSize) ? (p->size - offset) : kIoBufSize;
+        if (esp_partition_read(p, offset, io.p, n) != ESP_OK)
         {
             ESP_LOGE(TAG, "esp_partition_read failed at offset %lu", (unsigned long)offset);
             return;
         }
-        if (out.write(buf, n) != n)
+        if (out.write(io.p, n) != n)
         {
             ESP_LOGW(TAG, "Client disconnected during download");
             return;

@@ -226,12 +226,17 @@ void RelayManager::OnData(const void* eventData)
     }
 }
 
-void RelayManager::DrainQueue()
+size_t RelayManager::DrainQueue()
 {
-    if (!inbound_) return;
+    if (!inbound_) return 0;
+    size_t n = 0;
     RelayFrame f{};
     while (xQueueReceive(inbound_, &f, 0) == pdTRUE)
-        free(f.data);   // free(nullptr) is a no-op, so sentinels are fine
+    {
+        if (f.data) ++n;   // sentinels are not chunks, so they do not count
+        free(f.data);      // free(nullptr) is a no-op, so sentinels are fine
+    }
+    return n;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -248,6 +253,16 @@ void RelayManager::TaskLoop()
 
         HandleFrame(f.data, f.len);
         free(f.data);
+
+        // The server holds one request in flight per device (its per-device gate),
+        // so anything still queued once a request returns is residue from a session
+        // that ended early — a broken pipe, a reject, the server's watchdog. Left
+        // there, the next loop reads a leftover *body* chunk as a session header and
+        // invents a command out of firmware bytes, so one failed upload poisons the
+        // next. Discard it, and say how much.
+        if (size_t stale = DrainQueue())
+            ESP_LOGW(TAG, "discarded %u stale chunk(s) after the session ended",
+                     static_cast<unsigned>(stale));
     }
 }
 
