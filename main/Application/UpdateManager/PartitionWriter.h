@@ -21,11 +21,11 @@
 // Activate(), and esp_ota_set_boot_partition validates the image before switching.
 // Until then otadata still points at the old slot, so a partial image is inert.
 //
-// Erasing is the caller's business, because only the caller knows whether this is a
-// fresh upload or the continuation of one. `eraseAsNeeded` erases each flash sector
-// just before the first write that lands in it — right for a write starting at 0,
-// and it must be OFF when resuming, or the sector holding the resume point would
-// take the already-written bytes with it.
+// It never erases. That is Clear()'s job, and keeping them apart is what lets a write
+// resume at any offset: erasing the sector a resumed write starts in would take the
+// previous piece's tail with it. Writing over unerased flash produces a wrong image
+// rather than an error — caught by Activate(), which validates before switching the
+// boot slot.
 class PartitionWriter
 {
     static constexpr const char* TAG = "PartitionWriter";
@@ -34,8 +34,7 @@ public:
     /// Setup: find the partition and check it may be written. On failure *err points
     /// at a static reason string and ok() is false. `startOffset` is where the first
     /// write lands and need not be sector aligned.
-    PartitionWriter(const char* label, size_t startOffset, bool eraseAsNeeded,
-                    const char** err);
+    PartitionWriter(const char* label, size_t startOffset, const char** err);
 
     PartitionWriter(const PartitionWriter&)            = delete;
     PartitionWriter& operator=(const PartitionWriter&) = delete;
@@ -57,10 +56,8 @@ public:
 
 private:
     const esp_partition_t* p_        = nullptr;   // nullptr == setup failed
-    bool                   erase_    = false;
     size_t                 offset_   = 0;         // absolute position of the next write
     size_t                 written_  = 0;         // bytes written by THIS instance
-    size_t                 erasedTo_ = 0;         // absolute, sector multiple
 
     /// Shared lookup plus the "may we write this?" check (never the running slot).
     static const esp_partition_t* Resolve(const char* label, const char** err);

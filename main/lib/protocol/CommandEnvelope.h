@@ -29,72 +29,89 @@ namespace protocol
     // Command names are short by convention; a longer one simply won't match.
     inline constexpr size_t MAX_COMMAND_NAME = 32;
 
-    /// Name the request from its first chunk, without consuming anything. Empty when
-    /// there is no parseable name.
+    /// Route the request from its first chunk, without consuming anything. Both parts
+    /// come back empty when there is nothing parseable.
     ///
-    /// Two request formats are accepted, told apart by the first byte:
+    /// Two request formats, told apart by the first byte:
     ///
-    ///   '{'    the JSON envelope — {"type":"name",...}\n[body]
-    ///   other  the console form  — name -flag value … [-- body]
+    ///   '{'    the JSON envelope: {"type":"partition write",...}\n[body]
+    ///   other  the console form:  partition write -flag value …\n[body]
     ///
-    /// The console form is where this is going, because it can be read in a single
-    /// pass (see TokenReader). The JSON form is still here only until every handler
-    /// and the frontend have moved over; then this branch and the buffer it needs go
-    /// away together.
-    inline void ReadCommandName(const Session& session, char* out, size_t cap)
+    /// Either way the route is two words. The console form is where this is going,
+    /// because it can be read in a single pass; the JSON branch and the buffer behind
+    /// it go away with the format.
+    inline void ReadCommandRoute(const Session& session,
+                                 char* category, size_t catCap,
+                                 char* command, size_t cmdCap)
     {
+        category[0] = '\0';
+        command[0]  = '\0';
+
         const uint8_t* head = nullptr;
         size_t headLen = 0;
         session.peekRequest(head, headLen);
-
-        out[0] = '\0';
         if (headLen == 0) return;
+
+        char route[MAX_COMMAND_NAME * 2];
+        size_t n = 0;
 
         if (head[0] == '{')
         {
             char line[MAX_ENVELOPE];
-            size_t n = std::min(headLen, sizeof(line) - 1);
-            memcpy(line, head, n);
-            line[n] = '\0';
+            size_t k = std::min(headLen, sizeof(line) - 1);
+            memcpy(line, head, k);
+            line[k] = '\0';
             if (char* nl = strchr(line, '\n')) *nl = '\0';
-            ExtractJsonString(line, "type", out, cap);
-            return;
+            if (!ExtractJsonString(line, "type", route, sizeof(route))) return;
+            n = strlen(route);
+        }
+        else
+        {
+            // Console form: the first two tokens, straight off the chunk.
+            while (n < headLen && n < sizeof(route) - 1) { route[n] = static_cast<char>(head[n]); ++n; }
+            route[n] = '\0';
         }
 
-        // Console form: the name is simply the first token. No line to find, no
-        // buffer beyond the caller's name variable.
+        // Split on the first run of whitespace: "partition write" -> two parts.
+        auto isSep = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+
         size_t i = 0;
-        while (i < headLen && i < cap - 1)
-        {
-            const char c = static_cast<char>(head[i]);
-            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') break;
-            out[i] = c;
-            ++i;
-        }
-        out[i] = '\0';
+        while (i < n && !isSep(route[i])) ++i;
+        const size_t catLen = std::min(i, catCap - 1);
+        memcpy(category, route, catLen);
+        category[catLen] = '\0';
+
+        while (i < n && isSep(route[i])) ++i;
+        size_t j = i;
+        while (j < n && !isSep(route[j])) ++j;
+        const size_t cmdLen = std::min(j - i, cmdCap - 1);
+        memcpy(command, route + i, cmdLen);
+        command[cmdLen] = '\0';
     }
 
     /// Run one opened session: name it, dispatch it, close or refuse the reply.
     ///
-    /// `dispatcher` is duck-typed on `bool Execute(const char*, Stream&, Stream&)`
+    /// `dispatcher` is duck-typed on
+    /// `RequestError Execute(category, command, Stream&, Stream&, const char**)`
     /// — a template rather than an interface so the protocol layer never depends
     /// upward on the dispatcher, and no callback inversion comes back.
     template <class Dispatcher>
     void RunCommandSession(Session& session, Dispatcher& dispatcher)
     {
-        char name[MAX_COMMAND_NAME] = {};
-        ReadCommandName(session, name, sizeof(name));
+        char category[MAX_COMMAND_NAME] = {};
+        char command[MAX_COMMAND_NAME]  = {};
+        ReadCommandRoute(session, category, sizeof(category), command, sizeof(command));
 
-        if (name[0] == '\0')
+        if (category[0] == '\0' || command[0] == '\0')
         {
-            session.reject("missing type");
+            session.reject("expected: <category> <command>");
             return;
         }
 
         // in == out: the handler reads its arguments and any body from the same
         // session it writes its reply to.
         const char* failedArg = nullptr;
-        const RequestError err = dispatcher.Execute(name, session, session, &failedArg);
+        const RequestError err = dispatcher.Execute(category, command, session, session, &failedArg);
         if (err != RequestError::Ok)
         {
             // Form failures refuse the request. REJECT ends the session like FINAL

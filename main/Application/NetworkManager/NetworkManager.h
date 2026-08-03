@@ -57,7 +57,7 @@ private:
     RequestError Cmd_WifiScan(CommandContext& ctx);
 
     inline static CommandEntry commands_[] = {
-        { "wifiScan", &InvokeCommand<&NetworkManager::Cmd_WifiScan> },
+        { "wifi", "scan", &InvokeCommand<&NetworkManager::Cmd_WifiScan> },
     };
 
     // ── Settings (registered with SettingsManager in Init) ──

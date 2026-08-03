@@ -82,8 +82,8 @@ private:
     RequestError Cmd_SaveSettings(CommandContext& ctx);
 
     inline static CommandEntry commands_[] = {
-        { "getSettings",  &InvokeCommand<&SettingsManager::Cmd_GetSettings> },
-        { "setSetting",   &InvokeCommand<&SettingsManager::Cmd_SetSetting> },
-        { "saveSettings", &InvokeCommand<&SettingsManager::Cmd_SaveSettings> },
+        { "settings", "list", &InvokeCommand<&SettingsManager::Cmd_GetSettings> },
+        { "settings", "set",  &InvokeCommand<&SettingsManager::Cmd_SetSetting> },
+        { "settings", "save", &InvokeCommand<&SettingsManager::Cmd_SaveSettings> },
     };
 };

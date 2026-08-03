@@ -50,8 +50,10 @@ public:
             // and cycle it → Execute() would hang. Chain-corruption class,
             // so FATAL (survives NDEBUG), not assert.
             if (commands[i].registered)
-                FATAL("command '%s' registered twice", commands[i].name);
-            assert(Find(commands[i].name) == nullptr && "duplicate command name");
+                FATAL("command '%s %s' registered twice",
+                      commands[i].category, commands[i].name);
+            assert(Find(commands[i].category, commands[i].name) == nullptr &&
+                   "duplicate command name");
 
             commands[i].ctx = ctx;
             commands[i].registered = true;
@@ -71,7 +73,8 @@ public:
     /// Whether the request has already been read depends on the handler's shape:
     /// an argument-pulling handler gets its envelope consumed by the framework
     /// first, an unconverted one still parses `in` itself. See CommandEntry.
-    RequestError Execute(const char* type, Stream& in, Stream& out,
+    RequestError Execute(const char* category, const char* name,
+                         Stream& in, Stream& out,
                          const char** failedArg = nullptr);
 
 private:
@@ -84,5 +87,5 @@ private:
     // Locks internally (recursive, so Register may call it under its own
     // lock). Handing the pointer out after unlock is safe because entries
     // are immortal and name/handler/ctx are written before linking.
-    const CommandEntry* Find(const char* name);
+    const CommandEntry* Find(const char* category, const char* name);
 };

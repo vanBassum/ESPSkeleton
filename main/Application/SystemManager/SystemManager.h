@@ -46,8 +46,8 @@ private:
     RequestError Cmd_Reboot(CommandContext& ctx);
 
     inline static CommandEntry commands_[] = {
-        { "ping",   &InvokeCommand<&SystemManager::Cmd_Ping> },
-        { "info",   &InvokeCommand<&SystemManager::Cmd_Info> },
-        { "reboot", &InvokeCommand<&SystemManager::Cmd_Reboot> },
+        { "system", "ping",   &InvokeCommand<&SystemManager::Cmd_Ping> },
+        { "system", "info",   &InvokeCommand<&SystemManager::Cmd_Info> },
+        { "system", "reboot", &InvokeCommand<&SystemManager::Cmd_Reboot> },
     };
 };

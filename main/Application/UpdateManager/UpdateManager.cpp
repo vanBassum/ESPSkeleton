@@ -3,7 +3,6 @@
 #include "CommandManager.h"
 #include <cstdlib>
 #include "JsonScope.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
 #include <cstring>
@@ -213,16 +212,11 @@ RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
         Optional("offset",    offset)
     ));
 
-    // A zero offset is indistinguishable from an absent one here, so the sentinel is
-    // the value itself: 0 means one-shot, which is also the only offset a one-shot
-    // upload would ever use.
-    const bool oneShot = (offset == 0);
-
     // `in` is now positioned at the body, past the envelope.
     char msg[96];
 
     const char* err = nullptr;
-    PartitionWriter w(label, offset, /*eraseAsNeeded=*/oneShot, &err);
+    PartitionWriter w(label, offset, &err);
     if (!w.ok())
     {
         int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err);
@@ -272,20 +266,10 @@ RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
         return RequestError::Ok;
     }
 
-    // Chunked: this piece landed, and that is all this command claims. The sender
-    // activates when it has sent the last piece.
-    if (!oneShot)
-    {
-        int len = snprintf(msg, sizeof(msg), "{\"ok\":true,\"offset\":%lu,\"size\":%lu}",
-                           (unsigned long)offset, (unsigned long)w.written());
-        ctx.out.write(msg, len);
-        return RequestError::Ok;
-    }
-
-    err = PartitionWriter::Activate(label);
-    int len = err
-        ? snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err)
-        : snprintf(msg, sizeof(msg), "{\"ok\":true,\"size\":%lu}", (unsigned long)w.written());
+    // This piece landed, and that is all this command claims. Erasing is `clear`'s
+    // job and switching the boot slot is `activate`'s; a write writes.
+    int len = snprintf(msg, sizeof(msg), "{\"ok\":true,\"offset\":%lu,\"size\":%lu}",
+                       (unsigned long)offset, (unsigned long)w.written());
     ctx.out.write(msg, len);   // the dispatcher's finish() emits this as the FINAL chunk
     return RequestError::Ok;
 }
@@ -338,91 +322,6 @@ RequestError UpdateManager::Cmd_ActivatePartition(CommandContext& ctx)
         return RequestError::Ok;
     }
     resp.field("ok", true);
-    return RequestError::Ok;
-}
-
-// ──────────────────────────────────────────────────────────────
-// Pull OTA — the device fetches the image itself, into the same writer.
-// ──────────────────────────────────────────────────────────────
-
-RequestError UpdateManager::Cmd_UpdateFromUrl(CommandContext& ctx)
-{
-    char url[256] = {};
-    char label[17] = {};
-    RETURN_IF_ERROR(ctx.readArgs(
-        Required("url",       url),
-        Optional("partition", label)
-    ));
-
-    JsonObject resp(ctx.out);
-
-    // No partition given defaults to the next OTA slot — the normal
-    // "update my firmware from here" case.
-    if (label[0] == '\0')
-    {
-        const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
-        if (!next)
-        {
-            resp.field("ok", false);
-            resp.field("error", "no ota slot");
-            return RequestError::Ok;
-        }
-        snprintf(label, sizeof(label), "%s", next->label);
-    }
-
-    esp_http_client_config_t cfg = {};
-    cfg.url = url;
-    cfg.timeout_ms = 15000;
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client)
-    {
-        resp.field("ok", false);
-        resp.field("error", "client init failed");
-        return RequestError::Ok;
-    }
-
-    const char* err = nullptr;
-    uint32_t total = 0;
-
-    do
-    {
-        if (esp_http_client_open(client, 0) != ESP_OK) { err = "connect failed"; break; }
-        esp_http_client_fetch_headers(client);
-        int status = esp_http_client_get_status_code(client);
-        if (status != 200) { err = "http status"; break; }
-
-        // The device pulls the whole image itself, so this is inherently one shot:
-        // start at zero, erase as we go, activate once the body is complete.
-        // Breaking out before Activate() leaves the boot pointer untouched, so a
-        // partial image is inert.
-        PartitionWriter w(label, 0, /*eraseAsNeeded=*/true, &err);
-        if (!w.ok()) break;
-
-        char buf[1024];
-        int n;
-        while ((n = esp_http_client_read(client, buf, sizeof(buf))) > 0)
-        {
-            if (!w.write(buf, n)) { err = "write failed"; break; }
-            total += n;
-        }
-        if (err) break;
-        if (n < 0) { err = "read failed"; break; }
-
-        err = PartitionWriter::Activate(label);
-    } while (false);
-
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-
-    if (err)
-    {
-        resp.field("ok", false);
-        resp.field("error", err);
-        return RequestError::Ok;
-    }
-    resp.field("ok", true);
-    resp.field("size", total);
-    ESP_LOGI(TAG, "Pull update from %s complete (%lu bytes)", url, (unsigned long)total);
     return RequestError::Ok;
 }
 

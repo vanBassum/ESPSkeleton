@@ -5,7 +5,7 @@ Proves the remote-access path over a LAN: devices dial *out* to this server, and
 browser reaches a device's own web UI through it.
 
     device  ──ws──►  /device?id=<id>&fw=<ver>     (outbound, NAT-friendly)
-    browser ──http─►  /devices/<id>/{path}        → getWebFile command on the device
+    browser ──http─►  /devices/<id>/{path}        → `web read` command on the device
     browser ──ws──►  /devices/<id>/ws             → relayed to the device pipe
 
 What this server understands and does not:
@@ -47,7 +47,7 @@ BROADCAST_SESSION = 0
 # Session-id ownership. Both this server and a browser would otherwise allocate
 # from 1 on the same device socket and collide — which presents as "the device
 # replied to the wrong request". So the server owns the space: browser ids are
-# rewritten into the low half, our own getWebFile sessions come from the high half.
+# rewritten into the low half, our own web-read sessions come from the high half.
 BROWSER_ID_BASE, BROWSER_ID_LIMIT = 1, 0x8000
 SERVER_ID_BASE, SERVER_ID_LIMIT = 0x8000, 0x10000
 
@@ -79,7 +79,7 @@ class DeviceConnection:
         # the same socket is not worth risking.
         self.send_lock = asyncio.Lock()
 
-        self.server_sessions: dict[int, asyncio.Queue] = {}      # our getWebFile calls
+        self.server_sessions: dict[int, asyncio.Queue] = {}      # our web-read calls
         self.browser_sessions: dict[int, tuple] = {}             # device sid -> (browser, browser sid)
         self.browser_map: dict[tuple, int] = {}                  # (browser, browser sid) -> device sid
         self.browsers: set[web.WebSocketResponse] = set()
@@ -216,14 +216,14 @@ class DeviceConnection:
 
         await self.acquire_gate(sid)
         try:
-            request = json.dumps({"type": "getWebFile", "path": path}) + "\n"
+            request = json.dumps({"type": "web read", "path": path}) + "\n"
             await self.send_chunk(sid, FLAG_FINAL, request.encode())
 
             body = bytearray()
             while True:
                 flags, payload = await asyncio.wait_for(queue.get(), REQUEST_TIMEOUT)
                 if flags & FLAG_REJECT:
-                    raise RelayError(f"device rejected getWebFile: "
+                    raise RelayError(f"device rejected web read: "
                                      f"{payload.decode('utf-8', 'replace')}")
                 body += payload
                 if flags & FLAG_FINAL:
@@ -234,11 +234,11 @@ class DeviceConnection:
 
         newline = body.find(b"\n")
         if newline < 0:
-            raise RelayError("malformed getWebFile reply (no header line)")
+            raise RelayError("malformed web read reply (no header line)")
         try:
             header = json.loads(bytes(body[:newline]))
         except ValueError as exc:
-            raise RelayError(f"unparseable getWebFile header: {exc}") from exc
+            raise RelayError(f"unparseable web read header: {exc}") from exc
         return header, bytes(body[newline + 1:])
 
     async def close(self) -> None:
@@ -323,7 +323,7 @@ async def browser_ws(request: web.Request) -> web.StreamResponse:
 
 
 async def device_frontend(request: web.Request) -> web.StreamResponse:
-    """Serve the device's own frontend, one getWebFile per request (no cache yet)."""
+    """Serve the device's own frontend, one web read per request (no cache yet)."""
     device_id = request.match_info["deviceId"]
     tail = request.match_info.get("path", "")
 

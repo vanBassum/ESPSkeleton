@@ -21,6 +21,12 @@ class Stream;
 // ──────────────────────────────────────────────────────────────
 struct CommandEntry
 {
+    // Two-part route: `partition write`, `system ping`. The category is the domain the
+    // owning manager already claims, which is the one piece of structure a flat
+    // registry threw away — and it is what lets `list` and `status` exist in several
+    // places without colliding. Two levels, fixed: deeper nesting would turn dispatch
+    // into a tree walk for nothing.
+    const char* category;
     const char* name;
     RequestError (*handler)(void* ctx, CommandContext& c);
 
@@ -50,7 +56,7 @@ struct CommandEntry
 // (usually private, non-static) member of the owning manager:
 //
 //     RequestError Cmd_Ping(CommandContext& ctx);
-//     { "ping", &InvokeCommand<&SystemManager::Cmd_Ping> },
+//     { "system", "ping", &InvokeCommand<&SystemManager::Cmd_Ping> },
 //
 // or a free/static function (e.g. quick hacking in main.cpp —
 // register with ctx = nullptr).

@@ -22,10 +22,11 @@ void CommandManager::Init()
     ESP_LOGI(TAG, "Initialized");
 }
 
-RequestError CommandManager::Execute(const char* type, Stream& in, Stream& out,
+RequestError CommandManager::Execute(const char* category, const char* name,
+                                     Stream& in, Stream& out,
                                      const char** failedArg)
 {
-    const CommandEntry* e = Find(type);
+    const CommandEntry* e = Find(category, name);
     if (e == nullptr)
         return RequestError::UnknownCommand;
 
@@ -67,11 +68,11 @@ const char* DescribeRequestError(RequestError e, const char* arg, char* buf, siz
     return "bad request";
 }
 
-const CommandEntry* CommandManager::Find(const char* name)
+const CommandEntry* CommandManager::Find(const char* category, const char* name)
 {
     LOCK(mutex_);
     for (CommandEntry* e = head_; e != nullptr; e = e->next)
-        if (strcmp(name, e->name) == 0)
+        if (strcmp(name, e->name) == 0 && strcmp(category, e->category) == 0)
             return e;
     return nullptr;
 }

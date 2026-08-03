@@ -18,18 +18,14 @@ const esp_partition_t* PartitionWriter::Resolve(const char* label, const char** 
 }
 
 PartitionWriter::PartitionWriter(const char* label, size_t startOffset,
-                                 bool eraseAsNeeded, const char** err)
+                                 const char** err)
 {
     const esp_partition_t* p = Resolve(label, err);
     if (!p) return;
 
     if (startOffset >= p->size) { *err = "offset beyond partition"; return; }
 
-    erase_    = eraseAsNeeded;
     offset_   = startOffset;
-    // Round down: the sector containing the start is the first that may need
-    // erasing, and only when erase_ is on.
-    erasedTo_ = startOffset - (startOffset % SPI_FLASH_SEC_SIZE);
 
     p_ = p;   // ok() now true
 }
@@ -44,23 +40,6 @@ bool PartitionWriter::write(const void* data, size_t size)
     {
         ESP_LOGE(TAG, "write exceeds partition size");
         return false;
-    }
-
-    if (erase_)
-    {
-        // Erase every sector this write touches, exactly once, just in time.
-        // Position only advances, so erasedTo_ only advances.
-        while (erasedTo_ < end)
-        {
-            esp_err_t e = esp_partition_erase_range(p_, erasedTo_, SPI_FLASH_SEC_SIZE);
-            if (e != ESP_OK)
-            {
-                ESP_LOGE(TAG, "erase @0x%lx: %s",
-                         (unsigned long)erasedTo_, esp_err_to_name(e));
-                return false;
-            }
-            erasedTo_ += SPI_FLASH_SEC_SIZE;
-        }
     }
 
     esp_err_t e = esp_partition_write(p_, pos, data, size);

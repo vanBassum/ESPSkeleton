@@ -69,7 +69,6 @@ private:
     /// monopolises the transport, which is what the relay's in-flight timeout trips
     /// over. Many short commands need no concurrency support to coexist with others.
     RequestError Cmd_WritePartition(CommandContext& ctx);
-    RequestError Cmd_UpdateFromUrl(CommandContext& ctx);
     RequestError Cmd_DownloadPartition(CommandContext& ctx);
 
     /// Erase a partition whole, so a chunked upload starts from a known state.
@@ -79,12 +78,11 @@ private:
     RequestError Cmd_ActivatePartition(CommandContext& ctx);
 
     inline static CommandEntry commands_[] = {
-        { "updateStatus",      &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },
-        { "partitions",        &InvokeCommand<&UpdateManager::Cmd_Partitions> },
-        { "writePartition",    &InvokeCommand<&UpdateManager::Cmd_WritePartition> },
-        { "clearPartition",    &InvokeCommand<&UpdateManager::Cmd_ClearPartition> },
-        { "activatePartition", &InvokeCommand<&UpdateManager::Cmd_ActivatePartition> },
-        { "updateFromUrl",     &InvokeCommand<&UpdateManager::Cmd_UpdateFromUrl> },
-        { "downloadPartition", &InvokeCommand<&UpdateManager::Cmd_DownloadPartition> },
+        { "partition", "status",   &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },
+        { "partition", "list",     &InvokeCommand<&UpdateManager::Cmd_Partitions> },
+        { "partition", "write",    &InvokeCommand<&UpdateManager::Cmd_WritePartition> },
+        { "partition", "clear",    &InvokeCommand<&UpdateManager::Cmd_ClearPartition> },
+        { "partition", "activate", &InvokeCommand<&UpdateManager::Cmd_ActivatePartition> },
+        { "partition", "read",     &InvokeCommand<&UpdateManager::Cmd_DownloadPartition> },
     };
 };
