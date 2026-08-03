@@ -34,7 +34,8 @@ void WebServerManager::Init()
 
     wsHandler_.SetCommandManager(serviceProvider_.getCommandManager());
 
-    auth_.Register(serviceProvider_.getSettingsManager());
+    serviceProvider_.getSettingsManager().Register({ &webPassword_ });
+    auth_.Init();   // snapshot the stored password (after registration)
     wsHandler_.SetAuth(auth_);
 
     MountFatPartition();

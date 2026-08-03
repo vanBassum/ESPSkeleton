@@ -4,6 +4,7 @@
 #include "ServiceProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
+#include "TypedSettings.h"
 #include "StaticFileHandler.h"
 #include "WebSocketHandler.h"
 #include "Authenticator.h"
@@ -40,9 +41,14 @@ private:
     StaticFileHandler staticFileHandler_;
     WebSocketHandler wsHandler_;
 
+    // ── Settings (registered with SettingsManager in Init) ──
+    // Empty means no login is required at all.
+    inline static StringSetting webPassword_{ "web.password", "Web Password", "" };
+
     // Credential authority (owned here; used by the WS auth gate). No HTTP auth
-    // surface remains — the WebSocket carries all device interaction.
-    Authenticator auth_;
+    // surface remains — the WebSocket carries all device interaction. Reads
+    // webPassword_ live by reference — see Authenticator.h.
+    Authenticator auth_{ webPassword_ };
 
     void MountFatPartition();
     void StartServer();

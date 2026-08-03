@@ -4,16 +4,25 @@
 #include "Mutex.h"
 #include <cstddef>
 
-class SettingsManager;
-
-// The credential authority: owns web.password + the RAM session-key table +
-// change detection. Transport-neutral; no connection state. Owned by
-// WebServerManager (a plain class, not a ServiceProvider manager).
+// The credential authority: checks the configured password, owns the RAM
+// session-key table, and detects a password change. Transport-neutral; no
+// connection state. Owned by WebServerManager (a plain class, not a
+// ServiceProvider manager).
+//
+// It does not DECLARE the password setting — settings belong to the manager that
+// owns them, and this is not a manager. It holds a reference to WebServerManager's
+// setting and reads it live on every check: a copy taken at Init would make
+// change detection blind, since nothing notifies on a setting write.
 class Authenticator {
 public:
-    void Register(SettingsManager& settings);   // register web.password
+    explicit Authenticator(StringSetting& password) : password_(password) {}
 
-    bool AuthRequired();                 // web.password non-empty
+    /// Snapshot the stored password. Must run AFTER the owning manager has
+    /// registered the setting, or the first check would see NVS-value-vs-default
+    /// and report a spurious password change.
+    void Init();
+
+    bool AuthRequired();                 // password non-empty
     bool CheckPassword(const char* pw);  // epoch-check, then compare
     void MintKey(char* out);             // SessionTable::Create (out >= SessionTable::TOKEN_LEN)
     bool ValidateKey(const char* key);   // epoch-check, then SessionTable::Touch
@@ -22,9 +31,9 @@ public:
 private:
     static constexpr const char* TAG = "Authenticator";
 
-    inline static StringSetting webPassword_{ "web.password", "Web Password", "" };
+    StringSetting& password_;            // declared and registered by WebServerManager
     SessionTable sessions_;
     char passwordSnapshot_[64] = {};
     Mutex authMutex_;
-    void CheckPasswordEpoch();           // clears sessions_ when web.password changed
+    void CheckPasswordEpoch();           // clears sessions_ when the password changed
 };

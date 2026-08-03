@@ -7,8 +7,8 @@
 // ──────────────────────────────────────────────────────────────
 // Fixed-slot bearer-token session table — pure token bookkeeping.
 // Password checking and password-change detection live in
-// WebServerManager (the owner of the setting); this class only
-// mints, refreshes, and expires opaque tokens.
+// Authenticator (WebServerManager declares the setting itself);
+// this class only mints, refreshes, and expires opaque tokens.
 //
 // The idle timeout is a garbage collector, not a UX rule: any WS
 // frame or authenticated HTTP request refreshes a session, so an
