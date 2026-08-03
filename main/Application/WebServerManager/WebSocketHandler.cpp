@@ -16,7 +16,7 @@ static constexpr const char* TAG = "WebSocketHandler";
 
 void WebSocketHandler::SetCommandManager(CommandManager& commandManager)
 {
-    sink_.SetCommandManager(commandManager);
+    commandManager_ = &commandManager;
 }
 
 void WebSocketHandler::SetAuth(Authenticator& auth)
@@ -223,7 +223,7 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     {
         case AuthGate::Disposition::PassToMux:
         {
-            SessionMux mux(link, sink_, sessionFrame_, SESSION_WINDOW,
+            SessionMux mux(link, *commandManager_, sessionFrame_, SESSION_WINDOW,
                            sessionInbound_, sizeof(sessionInbound_));
             mux.OnChunk(sid, flags, payload, plen);
             break;

@@ -29,7 +29,6 @@ void RelayManager::Init()
     serviceProvider_.getSettingsManager().Register({ &enabled_, &url_, &deviceId_setting_ });
 
     auth_ = &serviceProvider_.getWebServerManager().GetAuthenticator();
-    sink_.SetCommandManager(serviceProvider_.getCommandManager());
 
     if (!enabled_.Get())
     {
@@ -264,14 +263,15 @@ void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
     // Identical to the local transport's frame path (WebSocketHandler::
     // HandleBinary) because everything above SessionLink is shared: the gate
     // handles hello/login/auth, the mux turns the chunk into a Session, and
-    // CommandSink runs the command.
+    // CommandManager runs the command.
     RelaySessionLink link(client_, inbound_);
     AuthGate gate(*auth_);
     switch (gate.Handle(conn_, link, sid, payload, plen))
     {
         case AuthGate::Disposition::PassToMux:
         {
-            SessionMux mux(link, sink_, sessionFrame_, SESSION_WINDOW,
+            SessionMux mux(link, serviceProvider_.getCommandManager(),
+                           sessionFrame_, SESSION_WINDOW,
                            sessionInbound_, sizeof(sessionInbound_));
             mux.OnChunk(sid, flags, payload, plen);
             break;

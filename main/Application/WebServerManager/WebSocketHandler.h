@@ -4,7 +4,6 @@
 #include "Mutex.h"
 #include "SessionTable.h"
 #include "SessionMux.h"
-#include "CommandSink.h"
 #include "ConnectionRegistry.h"
 
 class CommandManager;
@@ -25,8 +24,8 @@ public:
     void OnClientDisconnected(int fd);
 
 private:
-    // Dispatch is shared with the relay transport — see CommandSink.
-    CommandSink sink_;
+    // The session sink: CommandManager dispatches, this transport only frames.
+    CommandManager* commandManager_ = nullptr;
     Authenticator* auth_ = nullptr;
 
     // Serializes ALL outgoing frame writes. Broadcasts run on the

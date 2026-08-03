@@ -5,16 +5,20 @@
 #include "CommandEntry.h"
 #include "RecursiveMutex.h"
 #include "ContextLock.h"
+#include "SessionMux.h"
 #include <cstring>
 #include <cassert>
 #include <cstddef>
 
-class Stream;
-
 // Pure dispatcher — knows no commands and no other managers. Every
 // command lives in the manager that owns its domain and is registered
 // from that manager's Init().
-class CommandManager {
+//
+// It is also the SessionMux::Sink: routing an opened session means reading the
+// routing key off it, which is the router's own job. Every transport hands its
+// sessions here, so dispatch exists once no matter how many transports there
+// are, with no adapter class in between.
+class CommandManager : public SessionMux::Sink {
     static constexpr const char* TAG = "CommandManager";
 
 public:
@@ -58,6 +62,11 @@ public:
     /// `out`. The caller owns any transport envelope around it.
     /// Returns true if the command was recognized.
     bool Execute(const char* type, Stream& in, Stream& out);
+
+    /// Dispatch a session opened by any transport: peek its header line for
+    /// `type`, run the handler with the session as both `in` and `out`, close the
+    /// reply. Rejects an unparseable or unknown type.
+    void OnSessionOpened(Session& session) override;
 
 private:
     ServiceProvider& serviceProvider_;

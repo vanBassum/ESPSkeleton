@@ -6,7 +6,6 @@
 #include "Task.h"
 #include "SessionMux.h"
 #include "SessionProtocol.h"
-#include "CommandSink.h"
 #include "WsConnection.h"
 #include "RelaySessionLink.h"
 
@@ -68,7 +67,6 @@ private:
     volatile bool linkUp_ = false;
 
     Authenticator* auth_ = nullptr;
-    CommandSink sink_;
 
     // Auth state for the pipe. One WsConnection because the pipe IS one
     // connection: every browser the server relays shares it, so a login by one

@@ -13,7 +13,6 @@ set(SOURCE_FILES_LIST
     "Application/WebServerManager/SessionTable.cpp"
     "Application/RelayManager/RelayManager.cpp"
     "Application/CommandManager/CommandManager.cpp"
-    "Application/CommandManager/CommandSink.cpp"
     "Application/UpdateManager/UpdateManager.cpp"
     "Application/UpdateManager/PartitionWriter.cpp"
     "Application/SettingsManager/SettingsManager.cpp"
