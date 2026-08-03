@@ -41,7 +41,7 @@ set(INCLUDE_DIRS_LIST
     "lib/common"
     "lib/rtos"
     "lib/json"
-    "lib/session"
+    "lib/protocol"
     "lib/system"
 )
 

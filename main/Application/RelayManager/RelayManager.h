@@ -4,7 +4,7 @@
 #include "InitState.h"
 #include "TypedSettings.h"
 #include "Task.h"
-#include "Session.h"
+#include "CommandEnvelope.h"
 #include "SessionProtocol.h"
 #include "WsConnection.h"
 #include "RelaySessionLink.h"

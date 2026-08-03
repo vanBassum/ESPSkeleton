@@ -3,7 +3,7 @@
 #include <esp_http_server.h>
 #include "Mutex.h"
 #include "SessionTable.h"
-#include "Session.h"
+#include "CommandEnvelope.h"
 #include "ConnectionRegistry.h"
 
 class CommandManager;

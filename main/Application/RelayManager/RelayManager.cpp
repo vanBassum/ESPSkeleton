@@ -285,10 +285,10 @@ void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
     {
         case AuthGate::Disposition::Dispatch:
         {
-            Session session(sid, link, sessionFrame_, SESSION_WINDOW,
-                            sessionInbound_, sizeof(sessionInbound_));
-            session.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
-            serviceProvider_.getCommandManager().Execute(session);
+            Session s(sid, link, sessionFrame_, SESSION_WINDOW,
+                      sessionInbound_, sizeof(sessionInbound_));
+            s.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
+            protocol::RunCommandSession(s, serviceProvider_.getCommandManager());
             break;
         }
         case AuthGate::Disposition::Handled:

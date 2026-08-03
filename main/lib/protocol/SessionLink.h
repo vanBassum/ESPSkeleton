@@ -8,9 +8,10 @@
 // per-transport code — Session and every command handler are written against this
 // interface and are identical across transports.
 //
-// This header, SessionProtocol.h and Session.h are the whole of the session layer,
-// and they depend on nothing but Stream. They live in lib/ rather than under a
-// transport because the transports depend on them, not the reverse.
+// This header, SessionProtocol.h, Session.h and CommandEnvelope.h are the whole of
+// the protocol layer, depending on nothing but Stream and the JSON helpers. They
+// live in lib/ rather than under a transport because the transports depend on them,
+// not the reverse.
 //
 // Implementations, each owned by the manager that owns its transport:
 //   WsSessionLink    — the local browser socket. One chunk = one WS binary frame;

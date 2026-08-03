@@ -227,10 +227,10 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
             // first chunk opens it, and its FLAG_FINAL tells the Session whether a
             // body follows (further chunks pulled by read()) or the request ends
             // here. Runs synchronously on the httpd task.
-            Session session(sid, link, sessionFrame_, SESSION_WINDOW,
-                            sessionInbound_, sizeof(sessionInbound_));
-            session.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
-            commandManager_->Execute(session);
+            Session s(sid, link, sessionFrame_, SESSION_WINDOW,
+                      sessionInbound_, sizeof(sessionInbound_));
+            s.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
+            protocol::RunCommandSession(s, *commandManager_);
             break;
         }
         case AuthGate::Disposition::Handled:

@@ -5,19 +5,22 @@
 #include "CommandEntry.h"
 #include "RecursiveMutex.h"
 #include "ContextLock.h"
-#include "Session.h"
 #include <cstring>
 #include <cassert>
 #include <cstddef>
+
+class Stream;
 
 // Pure dispatcher — knows no commands and no other managers. Every
 // command lives in the manager that owns its domain and is registered
 // from that manager's Init().
 //
-// Two layers meet here: a transport turns wire bytes into a Session, this turns a
-// Session into a handler call. Every transport hands its sessions to Execute, so
-// dispatch exists once no matter how many transports there are — no adapter, no
-// callback, nothing in between.
+// Deliberately knows nothing about sessions, transports or the wire format: give
+// it a command name and two streams and it runs the handler. That is what keeps it
+// the one piece of the request path that can be reasoned about on its own.
+//
+// Naming a request from its envelope is the protocol layer's job — see
+// protocol::RunCommandSession, which every transport calls.
 class CommandManager {
     static constexpr const char* TAG = "CommandManager";
 
@@ -62,21 +65,6 @@ public:
     /// `out`. The caller owns any transport envelope around it.
     /// Returns true if the command was recognized.
     bool Execute(const char* type, Stream& in, Stream& out);
-
-    /// Run a session a transport just opened: peek its header line for `type`, run
-    /// the handler with the session as both `in` and `out`, close the reply. Rejects
-    /// an unparseable or unknown type.
-    ///
-    /// The envelope convention this implies, and which handlers rely on: a
-    /// request starts with a single '\n'-terminated line of JSON, and the body —
-    /// if any — is whatever bytes follow it in the same session.
-    ///
-    ///     {"type":"updateWrite","partition":"ota_1"}\n<firmware bytes…>
-    ///
-    /// Dispatch only *peeks* that line, so a handler with a body consumes its own
-    /// envelope on line one (StringReader::readLine) and then reads the body. A
-    /// handler without a body just parses the line as its JSON request.
-    void Execute(Session& session);
 
 private:
     ServiceProvider& serviceProvider_;

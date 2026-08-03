@@ -198,11 +198,16 @@ Before -> Now — offer a delta (with `builds-on` or `supersedes`). A stated fac
 that silently contradicts a prior note is one of the most important deltas to
 catch.
 
-## The gate
+## No gate — just write
 
-Draft the note(s), show them, let the user approve or tweak in one quick exchange
-(the proposition-title makes this a single glance), then write. Never write
-silently.
+Write the note(s) straight to `docs/reasoning/` without asking. Do not draft them
+in the chat for approval and do not wait for a nod: asking costs a round trip on
+every delta and the interruption is what stops the log getting written at all.
+Report afterwards in one line — the titles are propositions, so they are checkable
+at a glance.
+
+If a note turns out to be wrong or badly framed, immutability still holds: write a
+new note that `supersedes` it. Never edit or delete the old one.
 
 ## Immutability (do not violate)
 
