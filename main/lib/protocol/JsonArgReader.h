@@ -7,19 +7,19 @@
 
 // ArgReader over today's JSON envelope: {"type":"…","partition":"ota_1"}\n[body]
 //
-// Deliberately simple: it buffers the envelope line and uses the existing JSON
-// helpers to look each declared argument up. Yes, that keeps a request-sized buffer —
-// but this format is on its way out, and hand-writing a streaming JSON parser for it
-// would be effort spent on something we intend to delete. The zero-buffer parse
-// arrives with the token reader, where the format is designed for it.
+// Deliberately simple: it buffers the envelope line and uses the existing JSON helpers
+// to look each declared argument up. That keeps a request-sized buffer — about 700 bytes
+// of dispatch stack — which is a known cost rather than an oversight. A streaming parse
+// would need the whole JSON grammar handled by hand, and the RAM that actually matters on
+// this device is elsewhere (the relay's per-frame allocation, the 4 KB upload buffer).
 //
-// What matters is that handlers cannot tell: they declare their arguments once
-// through CommandContext, so replacing this class converts every command at once.
+// What matters is that handlers cannot tell. They declare their arguments once through
+// CommandContext, so a different reader — a single-pass one over a simpler format, parked
+// for now — would convert every command at once without touching a handler.
 class JsonArgReader final : public ArgReader
 {
     static constexpr size_t MAX_ENVELOPE = 512;
     static constexpr size_t MAX_VALUE    = 192;
-    static constexpr size_t MAX_NAME     = 32;
 
 public:
     /// Consumes the envelope line, leaving `in` positioned at the body.
@@ -35,13 +35,14 @@ public:
         line_[i] = '\0';
     }
 
-    /// Fills the declared arguments. Does NOT refuse undeclared ones, deliberately:
+    /// Fills the declared arguments. Undeclared ones are IGNORED, deliberately:
     /// enumerating an envelope's keys means telling keys from values, handling escapes
-    /// and nesting, and not mistaking a key that merely starts with "type" for the
-    /// routing key. Fiddly, easy to get subtly wrong, and all of it thrown away with
-    /// this format. In the token form an undeclared `-name` is unambiguous, so that is
-    /// where UnknownArgument gets enforced. Until then a misspelled optional argument
-    /// is silently ignored here.
+    /// and nesting, and not mistaking a key that merely begins with "type" for the
+    /// routing key — a mistake I made on the first attempt. Refusing them is the
+    /// behaviour we want, but it belongs with a format where an undeclared argument is
+    /// unambiguous, and the benefit is thin while the only client is a generated
+    /// frontend that cannot mistype. A misspelled OPTIONAL argument therefore leaves its
+    /// destination at the default, silently; a misspelled required one still fails.
     RequestError read(const ArgSpec* specs, size_t count) override
     {
         for (size_t i = 0; i < count; ++i)
@@ -54,7 +55,6 @@ public:
 
 private:
     char line_[MAX_ENVELOPE] = {};
-    char failedName_[MAX_NAME] = {};
 
     RequestError fill(const ArgSpec& s)
     {

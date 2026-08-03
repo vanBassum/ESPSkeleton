@@ -55,9 +55,6 @@ const char* DescribeRequestError(RequestError e, const char* arg, char* buf, siz
     case RequestError::MissingArgument:
         snprintf(buf, cap, "missing required argument: %s", arg ? arg : "?");
         return buf;
-    case RequestError::UnknownArgument:
-        snprintf(buf, cap, "unknown argument: %s", arg ? arg : "?");
-        return buf;
     case RequestError::MalformedRequest:  return "malformed request";
     case RequestError::MalformedNumber:
         snprintf(buf, cap, "malformed number: %s", arg ? arg : "?");

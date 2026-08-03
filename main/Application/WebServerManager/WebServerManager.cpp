@@ -3,7 +3,6 @@
 #include "SettingsManager.h"
 #include "CommandManager.h"
 #include "RelayManager.h"
-#include "StringReader.h"
 #include "JsonHelpers.h"
 #include "JsonScope.h"
 #include "SessionTable.h"

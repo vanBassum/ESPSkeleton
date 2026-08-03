@@ -37,9 +37,9 @@ namespace protocol
     ///   '{'    the JSON envelope: {"type":"partition write",...}\n[body]
     ///   other  the console form:  partition write -flag value …\n[body]
     ///
-    /// Either way the route is two words. The console form is where this is going,
-    /// because it can be read in a single pass; the JSON branch and the buffer behind
-    /// it go away with the format.
+    /// Either way the route is two words, which is why the second branch exists at all:
+    /// it is the seam a single-pass format would slot into. That format is parked, not
+    /// planned — see docs/reasoning/ — so today every real request takes the JSON path.
     inline void ReadCommandRoute(const Session& session,
                                  char* category, size_t catCap,
                                  char* command, size_t cmdCap)

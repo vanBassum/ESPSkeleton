@@ -43,7 +43,6 @@ enum class RequestError : uint8_t
     Ok = 0,
     UnknownCommand,
     MissingArgument,
-    UnknownArgument,
     MalformedNumber,
     ArgumentTooLong,
     MalformedRequest,
@@ -83,10 +82,11 @@ public:
 
     /// Fill the declared destinations and leave the stream at the first body byte.
     ///
-    /// An argument that was not declared is a refusal (UnknownArgument), which is
-    /// what catches a misspelled optional one — the failure that would otherwise
-    /// silently change behaviour. Refusing rather than skipping also means the reader
-    /// never has to guess an unknown argument's arity, since it stops there.
+    /// An argument that was not declared is currently IGNORED. Refusing one is the
+    /// behaviour we want, but it belongs with a reader whose format makes an undeclared
+    /// argument unambiguous; in the JSON envelope it needs a quote- and depth-aware key
+    /// scan for a benefit that is thin while the only client is the generated frontend.
+    /// See docs/reasoning/ on the console format being parked.
     ///
     /// An absent Optional leaves its destination alone, so the caller's initialiser
     /// stands as the default.
