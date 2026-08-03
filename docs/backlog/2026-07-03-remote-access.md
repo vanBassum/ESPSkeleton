@@ -57,7 +57,12 @@ frontend gets device login for free, handlers oblivious). Remaining auth
 work is the *device credential to the server*; until it exists, milestone 1
 stays off public IPs.
 
-Not a prerequisite but the thing that makes it pleasant:
-`2026-07-03-multiplexed-channels.md` (the concurrency half — worker task +
-slot table). Without it the server must keep one request in flight per
-device, so an uncached page load is N sequential WAN round trips.
+One request in flight per device is now permanent, not a stage: multiplexed
+channels were **rejected 2026-08-03** (concurrency is not worth a slot table and
+per-channel buffers on this much RAM). So an uncached page load stays N sequential
+WAN round trips, and the fix for that is **caching on the server**, keyed on
+`(deviceId, firmware, path)` — not concurrency on the device.
+
+Long uploads no longer need concurrency either: `writePartition` takes a start
+address, so a firmware push is many short sessions with gaps between them rather
+than one session holding the pipe (see `2026-08-02-relay-gate-watchdog-upload.md`).

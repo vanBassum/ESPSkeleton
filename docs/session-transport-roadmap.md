@@ -23,7 +23,7 @@ byte-pump bridge are for.
 | 3 | Partition download over WS | **DONE** (`main`) — verified on live device: nvs/www exact-size, unknown-partition error, over the same reply-streaming path | — (shipped) |
 | 4 | Retire `/api/command` + `/api/login` + CORS (HTTP static-only) | **DONE** (`main`) — verified on device: HTTP serves the WS upgrade + static app only (`GET /` → 200, `POST /api/command` → 405 route gone); WS auth-matrix intact. `/api/login` went in step 5. | — (shipped) |
 | 5 | Login over WS (per-connection auth; session key) | **DONE** (`main`, `a97b9f7`..`e89942e`) — verified on device: empty-password and password-set matrix over a fresh WS (`hello`/`login`/`auth` resume all pass), empty password restored, `getLogs` works with no login — [design](superpowers/specs/2026-07-10-login-over-websocket-design.md) | — (shipped) |
-| 6 | Concurrency: worker task + slot table (removes the private-API wart) | NOT PART OF THIS ROADMAP | [multiplexed-channels](backlog/2026-07-03-multiplexed-channels.md) |
+| 6 | Concurrency: worker task + slot table | **REJECTED 2026-08-03** — not worth a slot table and per-channel buffers on this much RAM. Long uploads instead become many short sessions via an addressed `writePartition`. The stack-tax and private-API halves survive on their own. | [command-worker-task](backlog/2026-08-03-command-worker-task.md) |
 
 Code quality refactor: **DONE** — `WebServerManager`/`WebSocketHandler` decomposed
 into `Authenticator` (credential authority), `WsConnection`/`ConnectionRegistry`
@@ -51,7 +51,7 @@ designed properly at a later stage.
 ## Key facts a fresh session must know
 
 - **Single-in-flight is synchronous today:** a step-1 session lives only within one `OnChunk` call on the httpd task, so there is **no busy-gate, no `REJECT` for concurrency, and no client serialization** yet. Both the gate and the frontend open-queue arrive in **step 2**, when a streamed upload holds the socket across frames.
-- **Inbound-drain primitive:** `WsRequestStream` + the forward-declared **private `httpd_ws_get_frame_type`** (in `WebSocketHandler.cpp`) drain multi-frame bodies on the httpd task. Dormant now; first exercised in step 2; the private call is removed in step 6 when the worker task lands (see the note in the multiplexed-channels backlog).
+- **Inbound-drain primitive:** `WsRequestStream` + the forward-declared **private `httpd_ws_get_frame_type`** (in `WebSocketHandler.cpp`) drain multi-frame bodies on the httpd task. Dormant now; first exercised in step 2; the private call is removed only if the worker task ever lands (see [command-worker-task](backlog/2026-08-03-command-worker-task.md)) — step 6 as a concurrency step is rejected.
 - **Verification (no unit tests):** build + flash, then drive over the socket. Build env per [memory] (dot-source `C:\Espressif` v6.0 profile + `PYTHONUTF8=1`, `idf.py build`), flash `idf.py -p COM3 flash`. Probe pattern: `POST /api/login {"password":"admin"}` → token → WS `?token=` → send binary `[sid|FLAG_FINAL|{"type":...}\n]`, read binary chunks (skip session 0 broadcasts) until `FLAG_FINAL`, reassemble → JSON. Device typically at `192.168.50.111`.
 
 ## Step 2 — as built

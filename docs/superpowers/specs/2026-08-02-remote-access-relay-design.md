@@ -93,7 +93,7 @@ fills. Consequences to design for, not discover:
   the handler blocks in `read()` waiting for the queue that only that same task
   can fill. `RelayManager` needs its own task that owns the mux and runs
   handlers, sized for the heaviest handler (the "stack for the worst command"
-  tax from `2026-07-03-multiplexed-channels.md`).
+  tax — see `docs/backlog/2026-08-03-command-worker-task.md`).
 - **Disconnect must unblock a waiting reader.** On `WEBSOCKET_EVENT_DISCONNECTED`
   queue a sentinel so `RecvChunk` returns -1 and in-flight sessions EOF, rather
   than hanging until `portMAX_DELAY`.
@@ -196,9 +196,10 @@ the WAN. Mitigations, in order of when they should happen:
    it takes every load after the first to zero device round trips. Have devices
    report firmware version at registration so the key exists from day one even
    though the cache does not.
-3. The real fix: the worker task + slot table from
-   `2026-07-03-multiplexed-channels.md`. That is what makes remote access
-   *pleasant* rather than merely working, and it changes nothing on the wire.
+3. ~~The real fix: the worker task + slot table.~~ **Rejected 2026-08-03** — see
+   `docs/reasoning/2026-08-03-12h30-addressing-replaces-concurrency.md`. One request
+   in flight per device is permanent, so caching (point 2) *is* the fix for page-load
+   latency, not a stopgap before concurrency.
 
 ## Frontend changes (smaller than expected)
 
@@ -351,9 +352,10 @@ throughout — the same commands work directly against the device.
 ### Still owed
 
 Caching (the next thing to do if page loads annoy), TLS/WSS, the device→server
-credential, per-browser auth on a shared pipe, and the concurrency half from
-`2026-07-03-multiplexed-channels.md` that would remove the one-request-in-flight
-serialization.
+credential, and per-browser auth on a shared pipe. The one-request-in-flight
+serialization is **not** on this list any more: concurrency was rejected 2026-08-03,
+and long uploads instead split into many short sessions via an addressed
+`writePartition`.
 
 **Known bug, found by inspection 2026-08-02:** the in-flight gate's watchdog is
 per-session but sized for one small round trip, so it fires mid-upload and lets a

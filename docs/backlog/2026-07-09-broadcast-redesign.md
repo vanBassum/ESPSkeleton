@@ -69,7 +69,7 @@ Open questions for that design pass:
   before the retry that would log them).
 - Backpressure / drop policy for a slow client (logs must not block the device).
 - Relationship to the worker task from
-  [multiplexed-channels](2026-07-03-multiplexed-channels.md).
+  [command-worker-task](2026-08-03-command-worker-task.md).
 
 ## Cheap interim (optional, if the storm is annoying before the redesign)
 
