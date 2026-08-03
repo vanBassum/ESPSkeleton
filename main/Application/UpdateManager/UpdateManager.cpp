@@ -1,7 +1,7 @@
 #include "UpdateManager.h"
 #include "PartitionWriter.h"
 #include "CommandManager.h"
-#include "HeaderLine.h"
+#include "StringReader.h"
 #include "JsonScope.h"
 #include "JsonReader.h"
 #include "JsonHelpers.h"
@@ -176,7 +176,7 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
     static constexpr size_t REPORT_EVERY = 32 * 1024;
 
     char line[128];
-    ReadHeaderLine(in, line, sizeof(line));   // consume the envelope; body follows
+    StringReader(in).readLine(line, sizeof(line));   // consume the envelope; body follows
 
     char label[17] = {};
     ExtractJsonString(line, "partition", label, sizeof(label));

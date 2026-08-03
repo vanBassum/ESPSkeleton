@@ -3,7 +3,7 @@
 #include "SettingsManager.h"
 #include "CommandManager.h"
 #include "RelayManager.h"
-#include "HeaderLine.h"
+#include "StringReader.h"
 #include "JsonHelpers.h"
 
 #include <unistd.h>
@@ -134,7 +134,7 @@ void WebServerManager::BroadcastBinary(const uint8_t* data, size_t len)
 void WebServerManager::Cmd_GetWebFile(Stream& in, Stream& out)
 {
     char line[256];
-    ReadHeaderLine(in, line, sizeof(line));
+    StringReader(in).readLine(line, sizeof(line));
 
     char path[192] = {};
     ExtractJsonString(line, "path", path, sizeof(path));

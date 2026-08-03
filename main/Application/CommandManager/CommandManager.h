@@ -66,6 +66,16 @@ public:
     /// Dispatch a session opened by any transport: peek its header line for
     /// `type`, run the handler with the session as both `in` and `out`, close the
     /// reply. Rejects an unparseable or unknown type.
+    ///
+    /// The envelope convention this implies, and which handlers rely on: a
+    /// request starts with a single '\n'-terminated line of JSON, and the body —
+    /// if any — is whatever bytes follow it in the same session.
+    ///
+    ///     {"type":"updateWrite","partition":"ota_1"}\n<firmware bytes…>
+    ///
+    /// Dispatch only *peeks* that line, so a handler with a body consumes its own
+    /// envelope on line one (StringReader::readLine) and then reads the body. A
+    /// handler without a body just parses the line as its JSON request.
     void OnSessionOpened(Session& session) override;
 
 private:
