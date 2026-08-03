@@ -275,26 +275,16 @@ void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
     const uint8_t* payload = frame + session::HEADER_LEN;
     size_t plen = len - session::HEADER_LEN;
 
-    // Identical to the local transport's frame path (WebSocketHandler::
-    // HandleBinary) because everything above SessionLink is shared: the gate
-    // handles hello/login/auth, then the chunk becomes a Session and
-    // CommandManager runs the command.
+    // Identical to the local transport's frame path (WebSocketHandler::HandleBinary),
+    // because everything above SessionLink is shared: the gate says what may run yet,
+    // the chunk becomes a Session, and CommandManager runs the command.
     RelaySessionLink link(client_, inbound_);
-    AuthGate gate(*auth_);
-    switch (gate.Handle(conn_, link, sid, payload, plen))
-    {
-        case AuthGate::Disposition::Dispatch:
-        {
-            Session s(sid, link, sessionFrame_, SESSION_WINDOW,
-                      sessionInbound_, sizeof(sessionInbound_));
-            s.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
-            protocol::RunCommandSession(s, serviceProvider_.getCommandManager());
-            break;
-        }
-        case AuthGate::Disposition::Handled:
-        case AuthGate::Disposition::Rejected:
-            break;
-    }
+    AuthGate gate(conn_, *auth_);
+
+    Session s(sid, link, sessionFrame_, SESSION_WINDOW,
+              sessionInbound_, sizeof(sessionInbound_));
+    s.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
+    protocol::RunCommandSession(s, serviceProvider_.getCommandManager(), gate);
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -24,6 +24,7 @@ void CommandManager::Init()
 
 RequestError CommandManager::Execute(const char* category, const char* name,
                                      Stream& in, Stream& out,
+                                     ConnectionAuth* connection,
                                      const char** failedArg)
 {
     const CommandEntry* e = Find(category, name);
@@ -38,7 +39,7 @@ RequestError CommandManager::Execute(const char* category, const char* name,
     // path holding a request-sized buffer — swapping in a token implementation here
     // deletes it without touching a single handler.
     JsonArgReader reader(in);
-    CommandContext ctx(reader, in, out);
+    CommandContext ctx(reader, in, out, connection);
     const RequestError err = e->handler(e->ctx, ctx);
     if (err != RequestError::Ok && failedArg)
         *failedArg = reader.failedArgument();

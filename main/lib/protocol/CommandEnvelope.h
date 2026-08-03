@@ -95,8 +95,12 @@ namespace protocol
     /// `RequestError Execute(category, command, Stream&, Stream&, const char**)`
     /// — a template rather than an interface so the protocol layer never depends
     /// upward on the dispatcher, and no callback inversion comes back.
-    template <class Dispatcher>
-    void RunCommandSession(Session& session, Dispatcher& dispatcher)
+    /// `gate` is duck-typed on `bool Allows(const char* category) const` plus
+    /// `ConnectionAuth&`-conversion — the transport decides what may run before a
+    /// connection has authenticated, and lends the auth state to the handlers that
+    /// need it. Checked AFTER routing, because the decision is per-category.
+    template <class Dispatcher, class Gate>
+    void RunCommandSession(Session& session, Dispatcher& dispatcher, Gate& gate)
     {
         char category[MAX_COMMAND_NAME] = {};
         char command[MAX_COMMAND_NAME]  = {};
@@ -108,10 +112,17 @@ namespace protocol
             return;
         }
 
+        if (!gate.Allows(category))
+        {
+            session.reject("unauthorized");
+            return;
+        }
+
         // in == out: the handler reads its arguments and any body from the same
         // session it writes its reply to.
         const char* failedArg = nullptr;
-        const RequestError err = dispatcher.Execute(category, command, session, session, &failedArg);
+        const RequestError err =
+            dispatcher.Execute(category, command, session, session, &gate, &failedArg);
         if (err != RequestError::Ok)
         {
             // Form failures refuse the request. REJECT ends the session like FINAL

@@ -75,6 +75,7 @@ public:
     /// first, an unconverted one still parses `in` itself. See CommandEntry.
     RequestError Execute(const char* category, const char* name,
                          Stream& in, Stream& out,
+                         ConnectionAuth* connection = nullptr,
                          const char** failedArg = nullptr);
 
 private:

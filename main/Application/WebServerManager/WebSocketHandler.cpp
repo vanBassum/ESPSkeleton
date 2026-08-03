@@ -217,24 +217,19 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     WsConnection* conn = registry_.find(fd);
     if (!conn) return;   // unknown fd (closed mid-frame)
 
+    // The session lives on this stack frame for exactly one dispatch: the first chunk
+    // opens it, and its FLAG_FINAL tells the Session whether a body follows (further
+    // chunks pulled by read()) or the request ends here. Runs synchronously on the
+    // httpd task.
+    //
+    // The gate decides what may run before this connection has authenticated, and
+    // lends its auth state to the `auth` handlers. No handshake parsing here any more
+    // — the handshake is three ordinary commands.
     WsSessionLink link(req, sendMutex_);
-    AuthGate gate(*auth_);
-    switch (gate.Handle(*conn, link, sid, payload, plen))
-    {
-        case AuthGate::Disposition::Dispatch:
-        {
-            // The session lives on this stack frame for exactly one dispatch: the
-            // first chunk opens it, and its FLAG_FINAL tells the Session whether a
-            // body follows (further chunks pulled by read()) or the request ends
-            // here. Runs synchronously on the httpd task.
-            Session s(sid, link, sessionFrame_, SESSION_WINDOW,
-                      sessionInbound_, sizeof(sessionInbound_));
-            s.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
-            protocol::RunCommandSession(s, *commandManager_);
-            break;
-        }
-        case AuthGate::Disposition::Handled:
-        case AuthGate::Disposition::Rejected:
-            break;
-    }
+    AuthGate gate(*conn, *auth_);
+
+    Session s(sid, link, sessionFrame_, SESSION_WINDOW,
+              sessionInbound_, sizeof(sessionInbound_));
+    s.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
+    protocol::RunCommandSession(s, *commandManager_, gate);
 }

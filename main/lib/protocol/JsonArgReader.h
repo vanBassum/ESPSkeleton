@@ -58,21 +58,32 @@ private:
 
     RequestError fill(const ArgSpec& s)
     {
-        char value[MAX_VALUE] = {};
-        const bool quoted = ExtractJsonString(line_, s.name, value, sizeof(value));
-
-        if (!quoted || value[0] == '\0')
+        // Branch on the raw field text, NOT on whether a typed extractor succeeded.
+        // Probing an extractor cannot tell "absent" from "present but not the type I
+        // asked for" — and getting that wrong turned an explicitly empty string into
+        // the string "0", which silently corrupted a stored password.
+        const char* raw = FindJsonField(line_, s.name);
+        if (!raw || *raw == 'n')   // absent, or JSON null
         {
-            // Numbers and booleans are unquoted, so the string extractor misses them.
-            // Two probes with different fallbacks tell absence from a real value.
-            const int32_t a = ExtractJsonInt(line_, s.name, 0);
-            const int32_t b = ExtractJsonInt(line_, s.name, 1);
-            if (a == 0 && b == 1)
-            {
-                if (s.required) { failed_ = s.name; return RequestError::MissingArgument; }
-                return RequestError::Ok;   // absent: the caller's initialiser stands
-            }
-            snprintf(value, sizeof(value), "%ld", static_cast<long>(a));
+            if (s.required) { failed_ = s.name; return RequestError::MissingArgument; }
+            return RequestError::Ok;   // absent: the caller's initialiser stands
+        }
+
+        char value[MAX_VALUE] = {};
+        if (*raw == '"')
+        {
+            // A quoted value, possibly empty — an empty string IS a value.
+            ExtractJsonString(line_, s.name, value, sizeof(value));
+        }
+        else
+        {
+            // A bare token: number, 0x-prefixed hex, or true/false. Copy to the
+            // delimiter and let the type decide what it means.
+            size_t i = 0;
+            for (const char* p = raw;
+                 *p && *p != ',' && *p != '}' && *p != ' ' && i < sizeof(value) - 1; ++p)
+                value[i++] = *p;
+            value[i] = '\0';
         }
 
         switch (s.type)   // no default: a new ArgType must be handled here

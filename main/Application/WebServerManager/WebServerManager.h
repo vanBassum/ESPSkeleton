@@ -64,7 +64,28 @@ private:
     //   {"ok":true,"status":200,"contentType":"...","contentEncoding":"gzip"}\n<bytes>
     RequestError Cmd_GetWebFile(CommandContext& ctx);
 
+    // ── auth: the handshake, as ordinary commands ──
+    //
+    // These live here because this manager owns the Authenticator and declares
+    // web.password. They are the only commands a connection may run before
+    // authenticating (AuthGate whitelists the category), and the only ones that touch
+    // ctx.connection.
+
+    /// Does this device want a password at all? Answered before login, so a client
+    /// knows whether to prompt.
+    RequestError Cmd_AuthHello(CommandContext& ctx);
+
+    /// Password in, session key out. The key lets a reconnect resume without
+    /// re-prompting.
+    RequestError Cmd_AuthLogin(CommandContext& ctx);
+
+    /// Resume with a key minted earlier.
+    RequestError Cmd_AuthResume(CommandContext& ctx);
+
     inline static CommandEntry commands_[] = {
-        { "web", "read", &InvokeCommand<&WebServerManager::Cmd_GetWebFile> },
+        { "web",  "read",   &InvokeCommand<&WebServerManager::Cmd_GetWebFile> },
+        { "auth", "hello",  &InvokeCommand<&WebServerManager::Cmd_AuthHello>  },
+        { "auth", "login",  &InvokeCommand<&WebServerManager::Cmd_AuthLogin>  },
+        { "auth", "resume", &InvokeCommand<&WebServerManager::Cmd_AuthResume> },
     };
 };

@@ -100,17 +100,40 @@ protected:
     const char* failed_ = nullptr;
 };
 
+/// The authentication state of the connection a request arrived on, lent by the
+/// transport. Per-connection state is transport-specific — a socket has one shape, an
+/// outbound pipe another — so a handler that needs it (the `auth` commands, and
+/// nothing else) receives it through the context rather than reaching for it.
+///
+/// Null for a transport that does no gating.
+class ConnectionAuth
+{
+public:
+    virtual ~ConnectionAuth() = default;
+
+    /// Mark this connection authenticated, remembering the session key so a
+    /// reconnect can resume.
+    virtual void authenticate(const char* key) = 0;
+
+    virtual bool isAuthed() const = 0;
+};
+
 class CommandContext
 {
 public:
-    CommandContext(ArgReader& reader, Stream& request, Stream& reply)
-        : in(request), out(reply), reader_(reader) {}
+    CommandContext(ArgReader& reader, Stream& request, Stream& reply,
+                   ConnectionAuth* connection = nullptr)
+        : in(request), out(reply), connection(connection), reader_(reader) {}
 
     CommandContext(const CommandContext&) = delete;
     CommandContext& operator=(const CommandContext&) = delete;
 
     Stream& in;    ///< request body, positioned there by readArgs
     Stream& out;   ///< reply
+
+    /// Auth state of the connection this arrived on; null when the transport gates
+    /// nothing. Only the `auth` commands have any business touching it.
+    ConnectionAuth* const connection;
 
     /// Declare and read every argument at once. Call it even with none — it is what
     /// advances the stream to the body and what stops a handler under `help`.

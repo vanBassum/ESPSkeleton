@@ -5,6 +5,8 @@
 #include "RelayManager.h"
 #include "StringReader.h"
 #include "JsonHelpers.h"
+#include "JsonScope.h"
+#include "SessionTable.h"
 
 #include <unistd.h>
 #include <cstdio>
@@ -169,5 +171,61 @@ RequestError WebServerManager::Cmd_GetWebFile(CommandContext& ctx)
         ctx.out.write(buf, r);
 
     fclose(f);
+    return RequestError::Ok;
+}
+
+// ──────────────────────────────────────────────────────────────
+// auth — the handshake as ordinary commands. Nothing here frames its own reply or
+// parses its own wire format any more; it is a handler like every other.
+// ──────────────────────────────────────────────────────────────
+
+RequestError WebServerManager::Cmd_AuthHello(CommandContext& ctx)
+{
+    RETURN_IF_ERROR(ctx.readArgs());
+
+    JsonObject resp(ctx.out);
+    resp.field("authRequired", auth_.AuthRequired());
+    return RequestError::Ok;
+}
+
+RequestError WebServerManager::Cmd_AuthLogin(CommandContext& ctx)
+{
+    char password[64] = {};
+    RETURN_IF_ERROR(ctx.readArgs(Optional("password", password)));
+
+    JsonObject resp(ctx.out);
+
+    // A wrong password is MEANING, not form: the request was perfectly well made, the
+    // answer is no. So it is a reply, not a refusal.
+    if (!auth_.CheckPassword(password))
+    {
+        resp.field("ok", false);
+        return RequestError::Ok;
+    }
+
+    char key[SessionTable::TOKEN_LEN] = {};
+    auth_.MintKey(key);
+    if (ctx.connection) ctx.connection->authenticate(key);
+
+    resp.field("ok", true);
+    resp.field("key", key);
+    return RequestError::Ok;
+}
+
+RequestError WebServerManager::Cmd_AuthResume(CommandContext& ctx)
+{
+    char key[SessionTable::TOKEN_LEN] = {};
+    RETURN_IF_ERROR(ctx.readArgs(Required("key", key)));
+
+    JsonObject resp(ctx.out);
+
+    if (!auth_.ValidateKey(key))
+    {
+        resp.field("ok", false);
+        return RequestError::Ok;
+    }
+
+    if (ctx.connection) ctx.connection->authenticate(key);
+    resp.field("ok", true);
     return RequestError::Ok;
 }

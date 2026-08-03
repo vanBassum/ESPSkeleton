@@ -9,7 +9,6 @@ set(SOURCE_FILES_LIST
     "Application/WebServerManager/StaticFileHandler.cpp"
     "Application/WebServerManager/WebSocketHandler.cpp"
     "Application/WebServerManager/ConnectionRegistry.cpp"
-    "Application/WebServerManager/AuthGate.cpp"
     "Application/WebServerManager/SessionTable.cpp"
     "Application/RelayManager/RelayManager.cpp"
     "Application/CommandManager/CommandManager.cpp"

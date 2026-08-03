@@ -198,14 +198,14 @@ class BackendService {
   // login page. Runs on every (re)connect.
   private async doHandshake() {
     try {
-      const info = await this.send<{ authRequired: boolean }>("hello")
+      const info = await this.send<{ authRequired: boolean }>("auth hello")
       if (!info.authRequired) {
         this.setAuthenticated(true)
         this.startHeartbeat()
         return
       }
       if (this.token) {
-        const res = await this.send<{ ok: boolean }>("auth", { key: this.token })
+        const res = await this.send<{ ok: boolean }>("auth resume", { key: this.token })
         if (res.ok) {
           this.setAuthenticated(true)
           this.startHeartbeat()
@@ -483,7 +483,7 @@ class BackendService {
    *  stores the session key and marks the connection authenticated. */
   async login(password: string): Promise<boolean> {
     await this.ensureConnected()
-    const res = await this.send<{ ok: boolean; key?: string }>("login", { password })
+    const res = await this.send<{ ok: boolean; key?: string }>("auth login", { password })
     if (!res.ok) return false
     this.token = res.key ?? null
     if (this.token) sessionStorage.setItem(TOKEN_KEY, this.token)
