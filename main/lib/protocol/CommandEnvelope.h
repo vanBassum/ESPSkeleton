@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Session.h"
-#include "Args.h"
+#include "CommandContext.h"
 #include "JsonHelpers.h"
 
 #include <algorithm>

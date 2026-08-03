@@ -145,9 +145,11 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
 // Status / enumeration commands
 // ──────────────────────────────────────────────────────────────
 
-RequestError UpdateManager::Cmd_UpdateStatus(Args& args, Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_UpdateStatus(CommandContext& ctx)
 {
-    JsonObject resp(out);
+    RETURN_IF_ERROR(ctx.readArgs());
+
+    JsonObject resp(ctx.out);
 
     const esp_app_desc_t* app = esp_app_get_description();
 
@@ -157,13 +159,15 @@ RequestError UpdateManager::Cmd_UpdateStatus(Args& args, Stream& in, Stream& out
     return RequestError::Ok;
 }
 
-RequestError UpdateManager::Cmd_Partitions(Args& args, Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_Partitions(CommandContext& ctx)
 {
     static constexpr int MAX_PARTITIONS = 16;
     PartitionInfo parts[MAX_PARTITIONS];
+    RETURN_IF_ERROR(ctx.readArgs());
+
     int count = GetPartitions(parts, MAX_PARTITIONS);
 
-    JsonObject root(out);
+    JsonObject root(ctx.out);
     JsonArray arr = root.array("partitions");
 
     for (int i = 0; i < count; i++)
@@ -188,7 +192,7 @@ RequestError UpdateManager::Cmd_Partitions(Args& args, Stream& in, Stream& out)
 // Envelope: {"type":"writePartition","partition":"<label>"}\n<bytes…>
 // ──────────────────────────────────────────────────────────────
 
-RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
 {
     // Reply is a stream of newline-free JSON messages, one per chunk: zero or more
     // progress reports {"p":<bytesWritten>} flushed as they happen, then a final
@@ -204,10 +208,15 @@ RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& o
     // at the end, the whole image in one command, which is what the web UI sends.
     // An explicit offset (including 0) means the sender is driving the upload in
     // pieces and owns the clearPartition and activatePartition steps itself.
-    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
-    const bool oneShot = !args.has("offset");
-    ARG_CHECK(args.uint32("offset", offset, Arg::Optional));
-    ARG_DONE(args);
+    RETURN_IF_ERROR(ctx.readArgs(
+        Required("partition", label),
+        Optional("offset",    offset)
+    ));
+
+    // A zero offset is indistinguishable from an absent one here, so the sentinel is
+    // the value itself: 0 means one-shot, which is also the only offset a one-shot
+    // upload would ever use.
+    const bool oneShot = (offset == 0);
 
     // `in` is now positioned at the body, past the envelope.
     char msg[96];
@@ -217,7 +226,7 @@ RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& o
     if (!w.ok())
     {
         int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err);
-        out.write(msg, len);
+        ctx.out.write(msg, len);
         return RequestError::Ok;
     }
 
@@ -225,25 +234,25 @@ RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& o
     if (!io.p)
     {
         int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"out of memory\"}");
-        out.write(msg, len);
+        ctx.out.write(msg, len);
         return RequestError::Ok;
     }
 
     size_t n;
     size_t reported = 0;
-    while ((n = in.read(io.p, kIoBufSize)) > 0)   // 0 == end of stream == full image
+    while ((n = ctx.in.read(io.p, kIoBufSize)) > 0)   // 0 == end of stream == full image
     {
         if (!w.write(io.p, n))
         {
             int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"write failed\"}");
-            out.write(msg, len);
+            ctx.out.write(msg, len);
             return RequestError::Ok;
         }
         if (w.written() - reported >= REPORT_EVERY)
         {
             int len = snprintf(msg, sizeof(msg), "{\"p\":%lu}", (unsigned long)w.written());
-            out.write(msg, len);
-            out.flush();                           // push this progress chunk now
+            ctx.out.write(msg, len);
+            ctx.out.flush();                       // push this progress chunk now
             reported = w.written();
         }
     }
@@ -252,14 +261,14 @@ RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& o
     // a complete one does — read() returns 0 for both. Returning without activating
     // leaves the boot pointer where it was, so a truncated image is inert and the
     // sender is told the real reason instead of "image validation failed" later.
-    if (in.failed())
+    if (ctx.in.failed())
     {
         ESP_LOGE(TAG, "request stream failed after %u bytes, not activating",
                  (unsigned)w.written());
         int len = snprintf(msg, sizeof(msg),
                            "{\"ok\":false,\"error\":\"stream failed at %lu bytes\"}",
                            (unsigned long)w.written());
-        out.write(msg, len);
+        ctx.out.write(msg, len);
         return RequestError::Ok;
     }
 
@@ -269,7 +278,7 @@ RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& o
     {
         int len = snprintf(msg, sizeof(msg), "{\"ok\":true,\"offset\":%lu,\"size\":%lu}",
                            (unsigned long)offset, (unsigned long)w.written());
-        out.write(msg, len);
+        ctx.out.write(msg, len);
         return RequestError::Ok;
     }
 
@@ -277,7 +286,7 @@ RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& o
     int len = err
         ? snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err)
         : snprintf(msg, sizeof(msg), "{\"ok\":true,\"size\":%lu}", (unsigned long)w.written());
-    out.write(msg, len);   // the dispatcher's finish() emits this as the FINAL chunk
+    ctx.out.write(msg, len);   // the dispatcher's finish() emits this as the FINAL chunk
     return RequestError::Ok;
 }
 
@@ -300,13 +309,12 @@ RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& o
 // Converted first because they are new and nothing in the web UI calls them yet, so
 // the format can be proven on hardware without touching the frontend.
 
-RequestError UpdateManager::Cmd_ClearPartition(Args& args, Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_ClearPartition(CommandContext& ctx)
 {
     char label[17] = {};
-    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
-    ARG_DONE(args);
+    RETURN_IF_ERROR(ctx.readArgs(Required("partition", label)));
 
-    JsonObject resp(out);
+    JsonObject resp(ctx.out);
     if (const char* err = PartitionWriter::Clear(label))
     {
         resp.field("ok", false);
@@ -317,13 +325,12 @@ RequestError UpdateManager::Cmd_ClearPartition(Args& args, Stream& in, Stream& o
     return RequestError::Ok;
 }
 
-RequestError UpdateManager::Cmd_ActivatePartition(Args& args, Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_ActivatePartition(CommandContext& ctx)
 {
     char label[17] = {};
-    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
-    ARG_DONE(args);
+    RETURN_IF_ERROR(ctx.readArgs(Required("partition", label)));
 
-    JsonObject resp(out);
+    JsonObject resp(ctx.out);
     if (const char* err = PartitionWriter::Activate(label))
     {
         resp.field("ok", false);
@@ -338,15 +345,16 @@ RequestError UpdateManager::Cmd_ActivatePartition(Args& args, Stream& in, Stream
 // Pull OTA — the device fetches the image itself, into the same writer.
 // ──────────────────────────────────────────────────────────────
 
-RequestError UpdateManager::Cmd_UpdateFromUrl(Args& args, Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_UpdateFromUrl(CommandContext& ctx)
 {
     char url[256] = {};
     char label[17] = {};
-    ARG_CHECK(args.string("url",       url,   sizeof(url),   Arg::Required));
-    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Optional));
-    ARG_DONE(args);
+    RETURN_IF_ERROR(ctx.readArgs(
+        Required("url",       url),
+        Optional("partition", label)
+    ));
 
-    JsonObject resp(out);
+    JsonObject resp(ctx.out);
 
     // No partition given defaults to the next OTA slot — the normal
     // "update my firmware from here" case.
@@ -422,17 +430,16 @@ RequestError UpdateManager::Cmd_UpdateFromUrl(Args& args, Stream& in, Stream& ou
 // Partition download — tiny JSON request in, raw bytes out
 // ──────────────────────────────────────────────────────────────
 
-RequestError UpdateManager::Cmd_DownloadPartition(Args& args, Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_DownloadPartition(CommandContext& ctx)
 {
     char label[17] = {};
-    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
-    ARG_DONE(args);
+    RETURN_IF_ERROR(ctx.readArgs(Required("partition", label)));
 
     const esp_partition_t* p = esp_partition_find_first(
         ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, label);
     if (!p)
     {
-        JsonObject resp(out);
+        JsonObject resp(ctx.out);
         resp.field("ok", false);
         resp.field("error", "unknown partition");
         return RequestError::Ok;
@@ -443,7 +450,7 @@ RequestError UpdateManager::Cmd_DownloadPartition(Args& args, Stream& in, Stream
     HeapBuf io(kIoBufSize);
     if (!io.p)
     {
-        JsonObject resp(out);
+        JsonObject resp(ctx.out);
         resp.field("ok", false);
         resp.field("error", "out of memory");
         return RequestError::Ok;
@@ -458,7 +465,7 @@ RequestError UpdateManager::Cmd_DownloadPartition(Args& args, Stream& in, Stream
             ESP_LOGE(TAG, "esp_partition_read failed at offset %lu", (unsigned long)offset);
             return RequestError::Ok;
         }
-        if (out.write(io.p, n) != n)
+        if (ctx.out.write(io.p, n) != n)
         {
             ESP_LOGW(TAG, "Client disconnected during download");
             return RequestError::Ok;

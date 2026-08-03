@@ -188,12 +188,14 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-RequestError NetworkManager::Cmd_WifiScan(Args& args, Stream& in, Stream& out)
+RequestError NetworkManager::Cmd_WifiScan(CommandContext& ctx)
 {
     WiFiInterface::ScanResult results[20] = {};
+    RETURN_IF_ERROR(ctx.readArgs());
+
     int count = wifi().Scan(results, 20);
 
-    JsonObject root(out);
+    JsonObject root(ctx.out);
     root.field("ok", true);
     JsonArray networks = root.array("networks");
 

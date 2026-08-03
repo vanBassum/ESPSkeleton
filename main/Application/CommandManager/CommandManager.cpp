@@ -1,5 +1,5 @@
 #include "CommandManager.h"
-#include "JsonArgs.h"
+#include "JsonArgReader.h"
 #include "esp_log.h"
 #include <cstdio>
 #include <cstring>
@@ -36,10 +36,11 @@ RequestError CommandManager::Execute(const char* type, Stream& in, Stream& out,
     // `in` already positioned at the body. JsonArgs is the only thing in the request
     // path holding a request-sized buffer — swapping in a token implementation here
     // deletes it without touching a single handler.
-    JsonArgs args(in);
-    const RequestError err = e->handler(e->ctx, args, in, out);
+    JsonArgReader reader(in);
+    CommandContext ctx(reader, in, out);
+    const RequestError err = e->handler(e->ctx, ctx);
     if (err != RequestError::Ok && failedArg)
-        *failedArg = args.failedArgument();
+        *failedArg = reader.failedArgument();
     return err;
 }
 
@@ -52,6 +53,10 @@ const char* DescribeRequestError(RequestError e, const char* arg, char* buf, siz
     case RequestError::MissingArgument:
         snprintf(buf, cap, "missing required argument: %s", arg ? arg : "?");
         return buf;
+    case RequestError::UnknownArgument:
+        snprintf(buf, cap, "unknown argument: %s", arg ? arg : "?");
+        return buf;
+    case RequestError::MalformedRequest:  return "malformed request";
     case RequestError::MalformedNumber:
         snprintf(buf, cap, "malformed number: %s", arg ? arg : "?");
         return buf;

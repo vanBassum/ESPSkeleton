@@ -185,9 +185,11 @@ bool SettingsManager::WriteString(const char* key, const char* v)
 // knows nothing about JSON. Anyone wanting YAML writes their own.
 // ──────────────────────────────────────────────────────────────
 
-RequestError SettingsManager::Cmd_GetSettings(Args& args, Stream& in, Stream& out)
+RequestError SettingsManager::Cmd_GetSettings(CommandContext& ctx)
 {
-    JsonObject root(out);
+    RETURN_IF_ERROR(ctx.readArgs());
+
+    JsonObject root(ctx.out);
     JsonArray settings = root.array("settings");
 
     for (const Setting& s : *this)
@@ -215,15 +217,16 @@ RequestError SettingsManager::Cmd_GetSettings(Args& args, Stream& in, Stream& ou
     return RequestError::Ok;
 }
 
-RequestError SettingsManager::Cmd_SetSetting(Args& args, Stream& in, Stream& out)
+RequestError SettingsManager::Cmd_SetSetting(CommandContext& ctx)
 {
     char key[64] = {};
     char value[128] = {};
-    ARG_CHECK(args.string("key",   key,   sizeof(key),   Arg::Required));
-    ARG_CHECK(args.string("value", value, sizeof(value), Arg::Optional));
-    ARG_DONE(args);
+    RETURN_IF_ERROR(ctx.readArgs(
+        Required("key",   key),
+        Optional("value", value)
+    ));
 
-    JsonObject resp(out);
+    JsonObject resp(ctx.out);
 
     for (Setting& s : *this)
     {
@@ -261,9 +264,11 @@ RequestError SettingsManager::Cmd_SetSetting(Args& args, Stream& in, Stream& out
     return RequestError::Ok;
 }
 
-RequestError SettingsManager::Cmd_SaveSettings(Args& args, Stream& in, Stream& out)
+RequestError SettingsManager::Cmd_SaveSettings(CommandContext& ctx)
 {
-    JsonObject resp(out);
+    RETURN_IF_ERROR(ctx.readArgs());
+
+    JsonObject resp(ctx.out);
     resp.field("ok", Save());
     return RequestError::Ok;
 }

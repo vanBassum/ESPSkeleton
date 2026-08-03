@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Fatal.h"
-#include "Args.h"
+#include "CommandContext.h"
 #include <type_traits>
 
 class Stream;
@@ -22,7 +22,7 @@ class Stream;
 struct CommandEntry
 {
     const char* name;
-    RequestError (*handler)(void* ctx, Args& args, Stream& in, Stream& out);
+    RequestError (*handler)(void* ctx, CommandContext& c);
 
     // Managed by CommandManager::Register() — owners never touch these.
     void* ctx = nullptr;
@@ -49,7 +49,7 @@ struct CommandEntry
 // Handlers are ordinary functions with no ctx in sight — either a
 // (usually private, non-static) member of the owning manager:
 //
-//     RequestError Cmd_Ping(Args& args, Stream& in, Stream& out);
+//     RequestError Cmd_Ping(CommandContext& ctx);
 //     { "ping", &InvokeCommand<&SystemManager::Cmd_Ping> },
 //
 // or a free/static function (e.g. quick hacking in main.cpp —
@@ -69,19 +69,19 @@ struct CommandEntry
 // one chain hold commands of many classes) but it lives only here.
 // ──────────────────────────────────────────────────────────────
 template <typename T> struct CommandOwner;
-template <typename C> struct CommandOwner<RequestError (C::*)(Args&, Stream&, Stream&)>       { using type = C; };
-template <typename C> struct CommandOwner<RequestError (C::*)(Args&, Stream&, Stream&) const> { using type = const C; };
+template <typename C> struct CommandOwner<RequestError (C::*)(CommandContext&)>       { using type = C; };
+template <typename C> struct CommandOwner<RequestError (C::*)(CommandContext&) const> { using type = const C; };
 
 template <auto Handler>
-RequestError InvokeCommand(void* ctx, Args& args, Stream& in, Stream& out)
+RequestError InvokeCommand(void* ctx, CommandContext& c)
 {
     if constexpr (std::is_member_function_pointer_v<decltype(Handler)>)
     {
         using C = typename CommandOwner<decltype(Handler)>::type;
-        return (static_cast<C*>(ctx)->*Handler)(args, in, out);
+        return (static_cast<C*>(ctx)->*Handler)(c);
     }
     else
     {
-        return Handler(args, in, out);
+        return Handler(c);
     }
 }

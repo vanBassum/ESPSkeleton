@@ -132,13 +132,12 @@ void WebServerManager::BroadcastBinary(const uint8_t* data, size_t len)
 // Commands
 // ──────────────────────────────────────────────────────────────
 
-RequestError WebServerManager::Cmd_GetWebFile(Args& args, Stream& in, Stream& out)
+RequestError WebServerManager::Cmd_GetWebFile(CommandContext& ctx)
 {
     // First handler on the pull contract: no envelope handling, no JsonReader, and
     // it will keep working unchanged when the request format stops being JSON.
     char path[192] = {};
-    ARG_CHECK(args.string("path", path, sizeof(path), Arg::Required));
-    ARG_DONE(args);
+    RETURN_IF_ERROR(ctx.readArgs(Required("path", path)));
 
     StaticFileHandler::Resolved file;
     FILE* f = nullptr;
@@ -151,7 +150,7 @@ RequestError WebServerManager::Cmd_GetWebFile(Args& args, Stream& in, Stream& ou
         // A real 404 — SPA fallback is the asking route layer's decision, not
         // ours (see StaticFileHandler::Resolve).
         static constexpr const char* notFound = "{\"ok\":true,\"status\":404}\n";
-        out.write(notFound, strlen(notFound));
+        ctx.out.write(notFound, strlen(notFound));
         return RequestError::Ok;   // the request was fine; the file simply is not there
     }
 
@@ -160,14 +159,14 @@ RequestError WebServerManager::Cmd_GetWebFile(Args& args, Stream& in, Stream& ou
                      "{\"ok\":true,\"status\":200,\"contentType\":\"%s\"%s}\n",
                      file.contentType,
                      file.gzipped ? ",\"contentEncoding\":\"gzip\"" : "");
-    out.write(header, static_cast<size_t>(n));
+    ctx.out.write(header, static_cast<size_t>(n));
 
     // Streams out chunk-by-chunk through the session window; a 200 KB bundle
     // never needs a 200 KB buffer here or on the transport.
     char buf[512];
     size_t r;
     while ((r = fread(buf, 1, sizeof(buf), f)) > 0)
-        out.write(buf, r);
+        ctx.out.write(buf, r);
 
     fclose(f);
     return RequestError::Ok;

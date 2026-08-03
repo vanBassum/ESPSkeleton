@@ -43,16 +43,20 @@ void SystemManager::GetDeviceName(char* out, size_t maxLen)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-RequestError SystemManager::Cmd_Ping(Args& args, Stream& in, Stream& out)
+RequestError SystemManager::Cmd_Ping(CommandContext& ctx)
 {
-    JsonObject resp(out);
+    RETURN_IF_ERROR(ctx.readArgs());
+
+    JsonObject resp(ctx.out);
     resp.field("pong", true);
     return RequestError::Ok;
 }
 
-RequestError SystemManager::Cmd_Info(Args& args, Stream& in, Stream& out)
+RequestError SystemManager::Cmd_Info(CommandContext& ctx)
 {
-    JsonObject resp(out);
+    RETURN_IF_ERROR(ctx.readArgs());
+
+    JsonObject resp(ctx.out);
 
     const esp_app_desc_t* app = esp_app_get_description();
 
@@ -77,10 +81,12 @@ RequestError SystemManager::Cmd_Info(Args& args, Stream& in, Stream& out)
     return RequestError::Ok;
 }
 
-RequestError SystemManager::Cmd_Reboot(Args& args, Stream& in, Stream& out)
+RequestError SystemManager::Cmd_Reboot(CommandContext& ctx)
 {
+    RETURN_IF_ERROR(ctx.readArgs());
+
     {
-        JsonObject resp(out);
+        JsonObject resp(ctx.out);
         resp.field("ok", true);
     }   // close the scope BEFORE restarting so the reply is complete
 
