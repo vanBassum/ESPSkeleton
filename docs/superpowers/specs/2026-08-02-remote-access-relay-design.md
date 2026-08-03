@@ -326,9 +326,10 @@ the order above landed. Six refinements emerged while building it:
   the server to carry a client identity alongside the session id.
 - **The in-flight gate is held per session, not per chunk**, with a watchdog. A
   device that dies mid-session (`reboot` never sends FINAL — the handler restarts
-  before `CommandSink` closes the reply) would otherwise wedge the pipe forever.
-- **`ReadHeaderLine` moved to `CommandManager/HeaderLine.h`** from
-  `UpdateManager.cpp`'s anonymous namespace — `getWebFile` was its second caller.
+  before `CommandManager` closes the reply) would otherwise wedge the pipe forever.
+- **`ReadHeaderLine` became `StringReader` in `lib/common`** — lifted out of
+  `UpdateManager.cpp`'s anonymous namespace once `getWebFile` was a second caller,
+  then generalised: reading a line off a Stream is not a command concept.
 
 ### Verified on hardware
 
