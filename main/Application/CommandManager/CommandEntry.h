@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Fatal.h"
+#include "Args.h"
 #include <type_traits>
 
 class Stream;
@@ -21,7 +22,19 @@ class Stream;
 struct CommandEntry
 {
     const char* name;
-    void (*handler)(void* ctx, Stream& in, Stream& out);
+
+    // Exactly one of these is set.
+    //
+    // `handler` is the original shape: it owns the request stream and parses the
+    // envelope itself. `argsHandler` is the new shape: the framework parses the
+    // arguments first and hands them over.
+    //
+    // Both exist only during the migration, and the reason is stream ownership
+    // rather than convenience — building an Args consumes the envelope line, which
+    // would leave nothing for a handler that still reads the request itself. When
+    // the last handler is converted, `handler` and this comment go away together.
+    void (*handler)(void* ctx, Stream& in, Stream& out) = nullptr;
+    RequestError (*argsHandler)(void* ctx, Args& args, Stream& in, Stream& out) = nullptr;
 
     // Managed by CommandManager::Register() — owners never touch these.
     void* ctx = nullptr;
@@ -84,5 +97,33 @@ void InvokeCommand(void* ctx, Stream& in, Stream& out)
     else
     {
         Handler(in, out);   // free/static function — ctx unused
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Trampoline for the argument-pulling shape:
+//
+//     RequestError Cmd_GetWebFile(Args& args, Stream& in, Stream& out);
+//     { "getWebFile", nullptr, &InvokeArgsCommand<&WebServerManager::Cmd_GetWebFile> },
+//
+// The framework has already parsed the arguments; `in` arrives positioned at the
+// body. Returning anything but Ok makes the framework refuse the request — the
+// handler never writes error text and never names a framework error.
+// ──────────────────────────────────────────────────────────────
+template <typename T> struct ArgsCommandOwner;
+template <typename C> struct ArgsCommandOwner<RequestError (C::*)(Args&, Stream&, Stream&)>       { using type = C; };
+template <typename C> struct ArgsCommandOwner<RequestError (C::*)(Args&, Stream&, Stream&) const> { using type = const C; };
+
+template <auto Handler>
+RequestError InvokeArgsCommand(void* ctx, Args& args, Stream& in, Stream& out)
+{
+    if constexpr (std::is_member_function_pointer_v<decltype(Handler)>)
+    {
+        using C = typename ArgsCommandOwner<decltype(Handler)>::type;
+        return (static_cast<C*>(ctx)->*Handler)(args, in, out);
+    }
+    else
+    {
+        return Handler(args, in, out);
     }
 }

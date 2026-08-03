@@ -62,9 +62,9 @@ private:
     // a header line then the raw bytes:
     //
     //   {"ok":true,"status":200,"contentType":"...","contentEncoding":"gzip"}\n<bytes>
-    void Cmd_GetWebFile(Stream& in, Stream& out);
+    RequestError Cmd_GetWebFile(Args& args, Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
-        { "getWebFile", &InvokeCommand<&WebServerManager::Cmd_GetWebFile> },
+        { "getWebFile", nullptr, &InvokeArgsCommand<&WebServerManager::Cmd_GetWebFile> },
     };
 };

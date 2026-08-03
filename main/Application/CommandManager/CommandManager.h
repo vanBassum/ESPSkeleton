@@ -63,8 +63,16 @@ public:
     /// Execute a command by type name. `in` carries the request payload;
     /// the handler writes its complete reply (e.g. one JSON object) to
     /// `out`. The caller owns any transport envelope around it.
-    /// Returns true if the command was recognized.
-    bool Execute(const char* type, Stream& in, Stream& out);
+    ///
+    /// Returns Ok, UnknownCommand, or whatever a failed argument pull reported.
+    /// `failedArg` (when non-null) receives the argument name a pull was looking
+    /// for, so the caller can compose the refusal text.
+    ///
+    /// Whether the request has already been read depends on the handler's shape:
+    /// an argument-pulling handler gets its envelope consumed by the framework
+    /// first, an unconverted one still parses `in` itself. See CommandEntry.
+    RequestError Execute(const char* type, Stream& in, Stream& out,
+                         const char** failedArg = nullptr);
 
 private:
     ServiceProvider& serviceProvider_;

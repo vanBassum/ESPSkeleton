@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Session.h"
+#include "Args.h"
 #include "JsonHelpers.h"
 
 #include <algorithm>
@@ -92,9 +93,15 @@ namespace protocol
 
         // in == out: the handler reads its arguments and any body from the same
         // session it writes its reply to.
-        if (!dispatcher.Execute(name, session, session))
+        const char* failedArg = nullptr;
+        const RequestError err = dispatcher.Execute(name, session, session, &failedArg);
+        if (err != RequestError::Ok)
         {
-            session.reject(name);   // unknown command
+            // Form failures refuse the request. REJECT ends the session like FINAL
+            // does, so this composes with anything the handler already wrote — a
+            // refusal can always be last.
+            char buf[96];
+            session.reject(DescribeRequestError(err, failedArg, buf, sizeof(buf)));
             return;
         }
 

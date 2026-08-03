@@ -132,18 +132,18 @@ void WebServerManager::BroadcastBinary(const uint8_t* data, size_t len)
 // Commands
 // ──────────────────────────────────────────────────────────────
 
-void WebServerManager::Cmd_GetWebFile(Stream& in, Stream& out)
+RequestError WebServerManager::Cmd_GetWebFile(Args& args, Stream& in, Stream& out)
 {
-    char line[256];
-    StringReader(in).readLine(line, sizeof(line));
-
+    // First handler on the pull contract: no envelope handling, no JsonReader, and
+    // it will keep working unchanged when the request format stops being JSON.
     char path[192] = {};
-    ExtractJsonString(line, "path", path, sizeof(path));
+    ARG_CHECK(args.string("path", path, sizeof(path), Arg::Required));
+    ARG_DONE(args);
 
     StaticFileHandler::Resolved file;
     FILE* f = nullptr;
 
-    if (path[0] != '\0' && StaticFileHandler::Resolve(BASE_PATH, path, file))
+    if (StaticFileHandler::Resolve(BASE_PATH, path, file))
         f = fopen(file.path, "rb");
 
     if (!f)
@@ -152,7 +152,7 @@ void WebServerManager::Cmd_GetWebFile(Stream& in, Stream& out)
         // ours (see StaticFileHandler::Resolve).
         static constexpr const char* notFound = "{\"ok\":true,\"status\":404}\n";
         out.write(notFound, strlen(notFound));
-        return;
+        return RequestError::Ok;   // the request was fine; the file simply is not there
     }
 
     char header[256];
@@ -170,4 +170,5 @@ void WebServerManager::Cmd_GetWebFile(Stream& in, Stream& out)
         out.write(buf, r);
 
     fclose(f);
+    return RequestError::Ok;
 }
