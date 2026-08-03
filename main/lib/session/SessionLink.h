@@ -5,14 +5,17 @@
 
 // The transport seam under SessionMux: turn an already-framed session chunk into
 // wire bytes, and hand inbound wire bytes back to the mux as chunks. This is the
-// ONLY per-transport code — SessionMux, Session, AuthGate, CommandManager and
-// every command handler are written against this interface and are identical
-// across transports.
+// ONLY per-transport code — SessionMux, Session, and every command handler are
+// written against this interface and are identical across transports.
 //
-// Implementations:
+// This header, SessionProtocol.h and SessionMux.h/.cpp are the whole of the
+// session layer, and they depend on nothing but Stream. They live in lib/ rather
+// than under a transport because the transports depend on them, not the reverse.
+//
+// Implementations, each owned by the manager that owns its transport:
 //   WsSessionLink    — the local browser socket. One chunk = one WS binary frame;
 //                      inbound frames are read synchronously on the httpd task.
-//   RelaySessionLink — the outbound socket to the relay server (not built yet).
+//   RelaySessionLink — the outbound socket to the relay server.
 //                      esp_websocket_client is event-callback driven, so its
 //                      RecvChunk blocks on a queue the callback fills. See
 //                      docs/superpowers/specs/2026-08-02-remote-access-relay-design.md.

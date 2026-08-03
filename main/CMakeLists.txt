@@ -10,7 +10,6 @@ set(SOURCE_FILES_LIST
     "Application/WebServerManager/WebSocketHandler.cpp"
     "Application/WebServerManager/ConnectionRegistry.cpp"
     "Application/WebServerManager/AuthGate.cpp"
-    "Application/WebServerManager/SessionMux.cpp"
     "Application/WebServerManager/SessionTable.cpp"
     "Application/RelayManager/RelayManager.cpp"
     "Application/CommandManager/CommandManager.cpp"
@@ -22,6 +21,7 @@ set(SOURCE_FILES_LIST
     "Application/SystemManager/SystemManager.cpp"
     "Application/ConsoleManager/ConsoleManager.cpp"
     "Application/TimeManager/TimeManager.cpp"
+    "lib/session/SessionMux.cpp"
     "lib/system/DateTime.cpp"
     "lib/system/TimeSpan.cpp"
 )
@@ -43,6 +43,7 @@ set(INCLUDE_DIRS_LIST
     "lib/common"
     "lib/rtos"
     "lib/json"
+    "lib/session"
     "lib/system"
 )
 
