@@ -77,9 +77,9 @@ private:
 
     // ── WebSocket commands (the JSON converter lives HERE, at the
     //    edge — not in the schema/storage core above) ──────────
-    void Cmd_GetSettings(Stream& in, Stream& out);
-    void Cmd_SetSetting(Stream& in, Stream& out);
-    void Cmd_SaveSettings(Stream& in, Stream& out);
+    RequestError Cmd_GetSettings(Args& args, Stream& in, Stream& out);
+    RequestError Cmd_SetSetting(Args& args, Stream& in, Stream& out);
+    RequestError Cmd_SaveSettings(Args& args, Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "getSettings",  &InvokeCommand<&SettingsManager::Cmd_GetSettings> },

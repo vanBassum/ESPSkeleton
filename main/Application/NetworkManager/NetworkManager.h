@@ -54,7 +54,7 @@ private:
     void FallbackToAP();
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    void Cmd_WifiScan(Stream& in, Stream& out);
+    RequestError Cmd_WifiScan(Args& args, Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "wifiScan", &InvokeCommand<&NetworkManager::Cmd_WifiScan> },

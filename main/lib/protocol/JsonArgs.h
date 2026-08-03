@@ -62,6 +62,15 @@ public:
         return RequestError::Ok;
     }
 
+    bool has(const char* name) override
+    {
+        char tmp[8] = {};
+        if (ExtractJsonString(line_, name, tmp, sizeof(tmp))) return true;
+        // Unquoted (numeric/boolean) values need the other extractor; two probes with
+        // different sentinels distinguish "absent" from "present and equal to one".
+        return ExtractJsonInt(line_, name, 0) != 0 || ExtractJsonInt(line_, name, 1) != 1;
+    }
+
     bool flag(const char* name) override
     {
         char tmp[8] = {};

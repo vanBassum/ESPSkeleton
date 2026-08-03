@@ -32,19 +32,15 @@ RequestError CommandManager::Execute(const char* type, Stream& in, Stream& out,
     // Handler runs OUTSIDE the lock: entries are immortal, so the pointer
     // stays valid, and a handler may register commands or dispatch nested
     // commands without deadlocking.
-    if (e->argsHandler)
-    {
-        // Parse the arguments first, so the handler receives them already
-        // validated and `in` already positioned at the body.
-        JsonArgs args(in);
-        const RequestError err = e->argsHandler(e->ctx, args, in, out);
-        if (err != RequestError::Ok && failedArg)
-            *failedArg = args.failedArgument();
-        return err;
-    }
-
-    e->handler(e->ctx, in, out);
-    return RequestError::Ok;
+    // Parse the arguments first, so the handler receives them already validated and
+    // `in` already positioned at the body. JsonArgs is the only thing in the request
+    // path holding a request-sized buffer — swapping in a token implementation here
+    // deletes it without touching a single handler.
+    JsonArgs args(in);
+    const RequestError err = e->handler(e->ctx, args, in, out);
+    if (err != RequestError::Ok && failedArg)
+        *failedArg = args.failedArgument();
+    return err;
 }
 
 const char* DescribeRequestError(RequestError e, const char* arg, char* buf, size_t cap)

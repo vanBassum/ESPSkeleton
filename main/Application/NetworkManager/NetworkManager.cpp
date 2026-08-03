@@ -188,7 +188,7 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void NetworkManager::Cmd_WifiScan(Stream& in, Stream& out)
+RequestError NetworkManager::Cmd_WifiScan(Args& args, Stream& in, Stream& out)
 {
     WiFiInterface::ScanResult results[20] = {};
     int count = wifi().Scan(results, 20);
@@ -205,4 +205,5 @@ void NetworkManager::Cmd_WifiScan(Stream& in, Stream& out)
         n.field("channel", static_cast<int32_t>(results[i].channel));
         n.field("secure", results[i].secure);
     }
+    return RequestError::Ok;
 }

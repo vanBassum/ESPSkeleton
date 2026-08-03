@@ -65,6 +65,6 @@ private:
     RequestError Cmd_GetWebFile(Args& args, Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
-        { "getWebFile", nullptr, &InvokeArgsCommand<&WebServerManager::Cmd_GetWebFile> },
+        { "getWebFile", &InvokeCommand<&WebServerManager::Cmd_GetWebFile> },
     };
 };

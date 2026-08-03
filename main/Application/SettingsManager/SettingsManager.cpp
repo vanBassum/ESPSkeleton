@@ -185,7 +185,7 @@ bool SettingsManager::WriteString(const char* key, const char* v)
 // knows nothing about JSON. Anyone wanting YAML writes their own.
 // ──────────────────────────────────────────────────────────────
 
-void SettingsManager::Cmd_GetSettings(Stream& in, Stream& out)
+RequestError SettingsManager::Cmd_GetSettings(Args& args, Stream& in, Stream& out)
 {
     JsonObject root(out);
     JsonArray settings = root.array("settings");
@@ -212,24 +212,18 @@ void SettingsManager::Cmd_GetSettings(Stream& in, Stream& out)
         }
         }
     }   // each `o` closes at end of iteration; `settings` and `root` at return
+    return RequestError::Ok;
 }
 
-void SettingsManager::Cmd_SetSetting(Stream& in, Stream& out)
+RequestError SettingsManager::Cmd_SetSetting(Args& args, Stream& in, Stream& out)
 {
-    JsonReader<512> req(in);
-    JsonObject resp(out);
-
     char key[64] = {};
     char value[128] = {};
-    req.GetString("key", key, sizeof(key));
-    req.GetString("value", value, sizeof(value));
+    ARG_CHECK(args.string("key",   key,   sizeof(key),   Arg::Required));
+    ARG_CHECK(args.string("value", value, sizeof(value), Arg::Optional));
+    ARG_DONE(args);
 
-    if (key[0] == '\0')
-    {
-        resp.field("ok", false);
-        resp.field("error", "missing key");
-        return;
-    }
+    JsonObject resp(out);
 
     for (Setting& s : *this)
     {
@@ -257,15 +251,19 @@ void SettingsManager::Cmd_SetSetting(Stream& in, Stream& out)
         }
 
         resp.field("ok", ok);
-        return;
+        return RequestError::Ok;
     }
 
+    // An unrecognised setting key is MEANING, not form — the framework has no idea
+    // which keys exist. So it is a reply, not a refusal.
     resp.field("ok", false);
     resp.field("error", "unknown key");
+    return RequestError::Ok;
 }
 
-void SettingsManager::Cmd_SaveSettings(Stream& in, Stream& out)
+RequestError SettingsManager::Cmd_SaveSettings(Args& args, Stream& in, Stream& out)
 {
     JsonObject resp(out);
     resp.field("ok", Save());
+    return RequestError::Ok;
 }

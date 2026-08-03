@@ -165,8 +165,9 @@ void ConsoleManager::WriteHistory(JsonObject& resp) const
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void ConsoleManager::Cmd_GetLogs(Stream& in, Stream& out)
+RequestError ConsoleManager::Cmd_GetLogs(Args& args, Stream& in, Stream& out)
 {
     JsonObject resp(out);
     WriteHistory(resp);
+    return RequestError::Ok;
 }

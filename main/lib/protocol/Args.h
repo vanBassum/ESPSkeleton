@@ -45,8 +45,12 @@ public:
     /// Decimal or 0x-prefixed hex.
     virtual RequestError uint32(const char* name, uint32_t& dst, Arg req) = 0;
 
-    /// Presence test — no value to malform and absence is the answer, so it cannot
-    /// fail and takes no Arg.
+    /// Was this argument supplied at all? Needed where absence and a legitimate zero
+    /// mean different things — an upload's start address, say.
+    virtual bool has(const char* name) = 0;
+
+    /// Presence test for a boolean — no value to malform and absence is the answer,
+    /// so it cannot fail and takes no Arg.
     virtual bool flag(const char* name) = 0;
 
     /// End of the argument block. Nothing today; this is the seam where generated

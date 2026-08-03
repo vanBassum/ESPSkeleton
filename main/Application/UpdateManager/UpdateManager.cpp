@@ -1,12 +1,8 @@
 #include "UpdateManager.h"
 #include "PartitionWriter.h"
 #include "CommandManager.h"
-#include "StringReader.h"
-#include "TokenReader.h"
 #include <cstdlib>
 #include "JsonScope.h"
-#include "JsonReader.h"
-#include "JsonHelpers.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -149,7 +145,7 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
 // Status / enumeration commands
 // ──────────────────────────────────────────────────────────────
 
-void UpdateManager::Cmd_UpdateStatus(Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_UpdateStatus(Args& args, Stream& in, Stream& out)
 {
     JsonObject resp(out);
 
@@ -158,9 +154,10 @@ void UpdateManager::Cmd_UpdateStatus(Stream& in, Stream& out)
     resp.field("firmware", app->version);
     resp.field("running", GetRunningPartition());
     resp.field("nextSlot", GetNextPartition());
+    return RequestError::Ok;
 }
 
-void UpdateManager::Cmd_Partitions(Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_Partitions(Args& args, Stream& in, Stream& out)
 {
     static constexpr int MAX_PARTITIONS = 16;
     PartitionInfo parts[MAX_PARTITIONS];
@@ -183,6 +180,7 @@ void UpdateManager::Cmd_Partitions(Stream& in, Stream& out)
         o.field("uploadable", p.uploadable);
         o.field("version",    p.version);
     }
+    return RequestError::Ok;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -190,7 +188,7 @@ void UpdateManager::Cmd_Partitions(Stream& in, Stream& out)
 // Envelope: {"type":"writePartition","partition":"<label>"}\n<bytes…>
 // ──────────────────────────────────────────────────────────────
 
-void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_WritePartition(Args& args, Stream& in, Stream& out)
 {
     // Reply is a stream of newline-free JSON messages, one per chunk: zero or more
     // progress reports {"p":<bytesWritten>} flushed as they happen, then a final
@@ -198,32 +196,29 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
     // so the client's bar tracks the real write, not bytes queued into the socket.
     static constexpr size_t REPORT_EVERY = 32 * 1024;
 
-    char line[128];
-    StringReader(in).readLine(line, sizeof(line));   // consume the envelope; body follows
-
     char label[17] = {};
-    ExtractJsonString(line, "partition", label, sizeof(label));
+    uint32_t offset = 0;
 
-    // No `offset` means the one-shot upload: start at zero, erase as we go, and
-    // activate at the end — the whole image in one command, exactly as before. An
-    // explicit offset (including 0) means the sender is driving the upload in
+    // Absence and a legitimate zero mean different things here, hence has():
+    // no `offset` is the one-shot upload — start at zero, erase as we go, activate
+    // at the end, the whole image in one command, which is what the web UI sends.
+    // An explicit offset (including 0) means the sender is driving the upload in
     // pieces and owns the clearPartition and activatePartition steps itself.
-    //
-    // -1 as the default is how absence is detected: ExtractJsonInt cannot report
-    // it. A negative offset therefore reads as "absent" rather than as an error.
-    int32_t offset = ExtractJsonInt(line, "offset", -1);
-    const bool oneShot = (offset < 0);
-    if (oneShot) offset = 0;
+    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
+    const bool oneShot = !args.has("offset");
+    ARG_CHECK(args.uint32("offset", offset, Arg::Optional));
+    ARG_DONE(args);
 
+    // `in` is now positioned at the body, past the envelope.
     char msg[96];
 
     const char* err = nullptr;
-    PartitionWriter w(label, static_cast<size_t>(offset), /*eraseAsNeeded=*/oneShot, &err);
+    PartitionWriter w(label, offset, /*eraseAsNeeded=*/oneShot, &err);
     if (!w.ok())
     {
         int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err);
         out.write(msg, len);
-        return;
+        return RequestError::Ok;
     }
 
     HeapBuf io(kIoBufSize);
@@ -231,7 +226,7 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
     {
         int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"out of memory\"}");
         out.write(msg, len);
-        return;
+        return RequestError::Ok;
     }
 
     size_t n;
@@ -242,7 +237,7 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
         {
             int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"write failed\"}");
             out.write(msg, len);
-            return;
+            return RequestError::Ok;
         }
         if (w.written() - reported >= REPORT_EVERY)
         {
@@ -265,7 +260,7 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
                            "{\"ok\":false,\"error\":\"stream failed at %lu bytes\"}",
                            (unsigned long)w.written());
         out.write(msg, len);
-        return;
+        return RequestError::Ok;
     }
 
     // Chunked: this piece landed, and that is all this command claims. The sender
@@ -275,7 +270,7 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
         int len = snprintf(msg, sizeof(msg), "{\"ok\":true,\"offset\":%lu,\"size\":%lu}",
                            (unsigned long)offset, (unsigned long)w.written());
         out.write(msg, len);
-        return;
+        return RequestError::Ok;
     }
 
     err = PartitionWriter::Activate(label);
@@ -283,6 +278,7 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
         ? snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err)
         : snprintf(msg, sizeof(msg), "{\"ok\":true,\"size\":%lu}", (unsigned long)w.written());
     out.write(msg, len);   // the dispatcher's finish() emits this as the FINAL chunk
+    return RequestError::Ok;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -304,78 +300,65 @@ void UpdateManager::Cmd_WritePartition(Stream& in, Stream& out)
 // Converted first because they are new and nothing in the web UI calls them yet, so
 // the format can be proven on hardware without touching the frontend.
 
-namespace {
-
-/// Read the one argument these commands take: -p <partition label>.
-/// Consumes the command word first, then any flags in any order.
-void ReadPartitionArg(Stream& in, char* label, size_t cap)
-{
-    TokenReader tr(in);
-    char tok[24];
-
-    tr.next(tok, sizeof(tok));          // the command word itself, discarded
-    while (tr.next(tok, sizeof(tok)))
-    {
-        if (strcmp(tok, "-p") == 0) tr.next(label, cap);
-    }
-}
-
-} // namespace
-
-void UpdateManager::Cmd_ClearPartition(Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_ClearPartition(Args& args, Stream& in, Stream& out)
 {
     char label[17] = {};
-    ReadPartitionArg(in, label, sizeof(label));
+    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
+    ARG_DONE(args);
 
     JsonObject resp(out);
     if (const char* err = PartitionWriter::Clear(label))
     {
         resp.field("ok", false);
         resp.field("error", err);
-        return;
+        return RequestError::Ok;
     }
     resp.field("ok", true);
+    return RequestError::Ok;
 }
 
-void UpdateManager::Cmd_ActivatePartition(Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_ActivatePartition(Args& args, Stream& in, Stream& out)
 {
     char label[17] = {};
-    ReadPartitionArg(in, label, sizeof(label));
+    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
+    ARG_DONE(args);
 
     JsonObject resp(out);
     if (const char* err = PartitionWriter::Activate(label))
     {
         resp.field("ok", false);
         resp.field("error", err);
-        return;
+        return RequestError::Ok;
     }
     resp.field("ok", true);
+    return RequestError::Ok;
 }
 
 // ──────────────────────────────────────────────────────────────
 // Pull OTA — the device fetches the image itself, into the same writer.
 // ──────────────────────────────────────────────────────────────
 
-void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_UpdateFromUrl(Args& args, Stream& in, Stream& out)
 {
-    JsonReader<512> req(in);
+    char url[256] = {};
+    char label[17] = {};
+    ARG_CHECK(args.string("url",       url,   sizeof(url),   Arg::Required));
+    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Optional));
+    ARG_DONE(args);
+
     JsonObject resp(out);
 
-    char url[256] = {};
-    if (!req.GetString("url", url, sizeof(url)))
-    {
-        resp.field("ok", false);
-        resp.field("error", "missing url");
-        return;
-    }
-
-    // Partition by label; defaults to the next OTA slot (the normal
-    // "update my firmware from here" case).
-    char label[17] = {};
-    if (!req.GetString("partition", label, sizeof(label)))
+    // No partition given defaults to the next OTA slot — the normal
+    // "update my firmware from here" case.
+    if (label[0] == '\0')
     {
         const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
-        if (!next) { resp.field("ok", false); resp.field("error", "no ota slot"); return; }
+        if (!next)
+        {
+            resp.field("ok", false);
+            resp.field("error", "no ota slot");
+            return RequestError::Ok;
+        }
         snprintf(label, sizeof(label), "%s", next->label);
     }
 
@@ -383,7 +366,12 @@ void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
     cfg.url = url;
     cfg.timeout_ms = 15000;
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) { resp.field("ok", false); resp.field("error", "client init failed"); return; }
+    if (!client)
+    {
+        resp.field("ok", false);
+        resp.field("error", "client init failed");
+        return RequestError::Ok;
+    }
 
     const char* err = nullptr;
     uint32_t total = 0;
@@ -418,22 +406,27 @@ void UpdateManager::Cmd_UpdateFromUrl(Stream& in, Stream& out)
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
 
-    if (err) { resp.field("ok", false); resp.field("error", err); return; }
+    if (err)
+    {
+        resp.field("ok", false);
+        resp.field("error", err);
+        return RequestError::Ok;
+    }
     resp.field("ok", true);
     resp.field("size", total);
     ESP_LOGI(TAG, "Pull update from %s complete (%lu bytes)", url, (unsigned long)total);
+    return RequestError::Ok;
 }
 
 // ──────────────────────────────────────────────────────────────
 // Partition download — tiny JSON request in, raw bytes out
 // ──────────────────────────────────────────────────────────────
 
-void UpdateManager::Cmd_DownloadPartition(Stream& in, Stream& out)
+RequestError UpdateManager::Cmd_DownloadPartition(Args& args, Stream& in, Stream& out)
 {
-    JsonReader<256> req(in);
-
     char label[17] = {};
-    req.GetString("partition", label, sizeof(label));
+    ARG_CHECK(args.string("partition", label, sizeof(label), Arg::Required));
+    ARG_DONE(args);
 
     const esp_partition_t* p = esp_partition_find_first(
         ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, label);
@@ -442,7 +435,7 @@ void UpdateManager::Cmd_DownloadPartition(Stream& in, Stream& out)
         JsonObject resp(out);
         resp.field("ok", false);
         resp.field("error", "unknown partition");
-        return;
+        return RequestError::Ok;
     }
 
     ESP_LOGI(TAG, "Download partition '%s' (%lu bytes)", label, (unsigned long)p->size);
@@ -453,7 +446,7 @@ void UpdateManager::Cmd_DownloadPartition(Stream& in, Stream& out)
         JsonObject resp(out);
         resp.field("ok", false);
         resp.field("error", "out of memory");
-        return;
+        return RequestError::Ok;
     }
 
     size_t offset = 0;
@@ -463,13 +456,14 @@ void UpdateManager::Cmd_DownloadPartition(Stream& in, Stream& out)
         if (esp_partition_read(p, offset, io.p, n) != ESP_OK)
         {
             ESP_LOGE(TAG, "esp_partition_read failed at offset %lu", (unsigned long)offset);
-            return;
+            return RequestError::Ok;
         }
         if (out.write(io.p, n) != n)
         {
             ESP_LOGW(TAG, "Client disconnected during download");
-            return;
+            return RequestError::Ok;
         }
         offset += n;
     }
+    return RequestError::Ok;
 }

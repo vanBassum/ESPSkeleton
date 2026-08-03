@@ -43,13 +43,14 @@ void SystemManager::GetDeviceName(char* out, size_t maxLen)
 // WebSocket commands
 // ──────────────────────────────────────────────────────────────
 
-void SystemManager::Cmd_Ping(Stream& in, Stream& out)
+RequestError SystemManager::Cmd_Ping(Args& args, Stream& in, Stream& out)
 {
     JsonObject resp(out);
     resp.field("pong", true);
+    return RequestError::Ok;
 }
 
-void SystemManager::Cmd_Info(Stream& in, Stream& out)
+RequestError SystemManager::Cmd_Info(Args& args, Stream& in, Stream& out)
 {
     JsonObject resp(out);
 
@@ -73,9 +74,10 @@ void SystemManager::Cmd_Info(Stream& in, Stream& out)
     if (now.YearLocal() >= 2020)
         now.ToStringLocal(deviceTimeStr, sizeof(deviceTimeStr), "%F %T");
     resp.field("deviceTime", deviceTimeStr);
+    return RequestError::Ok;
 }
 
-void SystemManager::Cmd_Reboot(Stream& in, Stream& out)
+RequestError SystemManager::Cmd_Reboot(Args& args, Stream& in, Stream& out)
 {
     {
         JsonObject resp(out);

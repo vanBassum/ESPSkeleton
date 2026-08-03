@@ -53,8 +53,8 @@ private:
     int GetPartitions(PartitionInfo* out, int maxCount) const;
 
     // ── Commands (registered with CommandManager in Init) ──
-    void Cmd_UpdateStatus(Stream& in, Stream& out);
-    void Cmd_Partitions(Stream& in, Stream& out);
+    RequestError Cmd_UpdateStatus(Args& args, Stream& in, Stream& out);
+    RequestError Cmd_Partitions(Args& args, Stream& in, Stream& out);
     /// Streamed upload: header line + body. `offset` is optional and decides which
     /// of two modes this is:
     ///
@@ -68,15 +68,15 @@ private:
     /// The second mode exists because a single command that runs for tens of seconds
     /// monopolises the transport, which is what the relay's in-flight timeout trips
     /// over. Many short commands need no concurrency support to coexist with others.
-    void Cmd_WritePartition(Stream& in, Stream& out);
-    void Cmd_UpdateFromUrl(Stream& in, Stream& out);
-    void Cmd_DownloadPartition(Stream& in, Stream& out);
+    RequestError Cmd_WritePartition(Args& args, Stream& in, Stream& out);
+    RequestError Cmd_UpdateFromUrl(Args& args, Stream& in, Stream& out);
+    RequestError Cmd_DownloadPartition(Args& args, Stream& in, Stream& out);
 
     /// Erase a partition whole, so a chunked upload starts from a known state.
-    void Cmd_ClearPartition(Stream& in, Stream& out);
+    RequestError Cmd_ClearPartition(Args& args, Stream& in, Stream& out);
 
     /// Validate an app image and make it the next boot slot. No-op for data.
-    void Cmd_ActivatePartition(Stream& in, Stream& out);
+    RequestError Cmd_ActivatePartition(Args& args, Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "updateStatus",      &InvokeCommand<&UpdateManager::Cmd_UpdateStatus> },

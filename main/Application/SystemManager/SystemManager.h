@@ -41,9 +41,9 @@ private:
     inline static StringSetting name_{ "device.name", "Device Name", "Strux" };
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
-    void Cmd_Ping(Stream& in, Stream& out);
-    void Cmd_Info(Stream& in, Stream& out);
-    void Cmd_Reboot(Stream& in, Stream& out);
+    RequestError Cmd_Ping(Args& args, Stream& in, Stream& out);
+    RequestError Cmd_Info(Args& args, Stream& in, Stream& out);
+    RequestError Cmd_Reboot(Args& args, Stream& in, Stream& out);
 
     inline static CommandEntry commands_[] = {
         { "ping",   &InvokeCommand<&SystemManager::Cmd_Ping> },
