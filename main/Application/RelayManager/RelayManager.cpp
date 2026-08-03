@@ -277,18 +277,18 @@ void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
 
     // Identical to the local transport's frame path (WebSocketHandler::
     // HandleBinary) because everything above SessionLink is shared: the gate
-    // handles hello/login/auth, the mux turns the chunk into a Session, and
+    // handles hello/login/auth, then the chunk becomes a Session and
     // CommandManager runs the command.
     RelaySessionLink link(client_, inbound_);
     AuthGate gate(*auth_);
     switch (gate.Handle(conn_, link, sid, payload, plen))
     {
-        case AuthGate::Disposition::PassToMux:
+        case AuthGate::Disposition::Dispatch:
         {
-            SessionMux mux(link, serviceProvider_.getCommandManager(),
-                           sessionFrame_, SESSION_WINDOW,
-                           sessionInbound_, sizeof(sessionInbound_));
-            mux.OnChunk(sid, flags, payload, plen);
+            Session session(sid, link, sessionFrame_, SESSION_WINDOW,
+                            sessionInbound_, sizeof(sessionInbound_));
+            session.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
+            serviceProvider_.getCommandManager().Execute(session);
             break;
         }
         case AuthGate::Disposition::Handled:

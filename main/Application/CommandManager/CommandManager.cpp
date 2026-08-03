@@ -35,7 +35,7 @@ bool CommandManager::Execute(const char* type, Stream& in, Stream& out)
     return true;
 }
 
-void CommandManager::OnSessionOpened(Session& session)
+void CommandManager::Execute(Session& session)
 {
     // The request's first chunk carries the header line — {"type":"...",...args}
     // terminated by '\n' — followed (for a streamed command) by the body. Peek

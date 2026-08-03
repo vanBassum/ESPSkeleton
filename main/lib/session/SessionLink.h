@@ -3,14 +3,14 @@
 #include <cstdint>
 #include <cstddef>
 
-// The transport seam under SessionMux: turn an already-framed session chunk into
-// wire bytes, and hand inbound wire bytes back to the mux as chunks. This is the
-// ONLY per-transport code — SessionMux, Session, and every command handler are
-// written against this interface and are identical across transports.
+// The transport seam under Session: turn an already-framed session chunk into wire
+// bytes, and pull inbound wire bytes back as chunks. This is the ONLY
+// per-transport code — Session and every command handler are written against this
+// interface and are identical across transports.
 //
-// This header, SessionProtocol.h and SessionMux.h/.cpp are the whole of the
-// session layer, and they depend on nothing but Stream. They live in lib/ rather
-// than under a transport because the transports depend on them, not the reverse.
+// This header, SessionProtocol.h and Session.h are the whole of the session layer,
+// and they depend on nothing but Stream. They live in lib/ rather than under a
+// transport because the transports depend on them, not the reverse.
 //
 // Implementations, each owned by the manager that owns its transport:
 //   WsSessionLink    — the local browser socket. One chunk = one WS binary frame;

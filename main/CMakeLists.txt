@@ -20,7 +20,6 @@ set(SOURCE_FILES_LIST
     "Application/SystemManager/SystemManager.cpp"
     "Application/ConsoleManager/ConsoleManager.cpp"
     "Application/TimeManager/TimeManager.cpp"
-    "lib/session/SessionMux.cpp"
     "lib/system/DateTime.cpp"
     "lib/system/TimeSpan.cpp"
 )

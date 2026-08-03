@@ -16,11 +16,11 @@ class AuthGate {
 public:
     explicit AuthGate(Authenticator& auth) : auth_(auth) {}
 
-    enum class Disposition { Handled, PassToMux, Rejected };
+    enum class Disposition { Handled, Dispatch, Rejected };
 
     // Parse the first chunk's `type`. hello/login/auth → handled here (reply via
     // `link`, flip conn.authed on success), returns Handled. An authed non-verb
-    // → PassToMux. An unauthenticated non-verb → REJECT reply, Rejected.
+    // → Dispatch (the caller opens a Session and runs it). An unauthenticated non-verb → REJECT reply, Rejected.
     Disposition Handle(WsConnection& conn, SessionLink& link,
                        uint16_t sid, const uint8_t* payload, size_t len);
 

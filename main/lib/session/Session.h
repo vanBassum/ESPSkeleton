@@ -9,17 +9,23 @@
 #include <algorithm>
 #include <cstring>
 
-// A session's stream. read() = the request bytes; write() = the reply,
-// accumulated and flushed as binary DATA chunks, closed by finish() with
-// FLAG_FINAL. The reply is assembled directly into an EXTERNAL framing buffer
-// (owned by the transport, off the httpd-task stack): payload goes after the
-// 3-byte header slot, so a flush is one SendRaw with no extra copy.
+// A session's stream, and the only thing that crosses the transport/dispatch
+// boundary: a transport turns wire bytes into one of these, the dispatcher turns
+// it into a handler call. There is no layer in between — a transport constructs a
+// Session on its own stack, feeds it the first chunk, and hands it to
+// CommandManager::Execute.
+//
+// read() = the request bytes; write() = the reply, accumulated and flushed as
+// binary DATA chunks, closed by finish() with FLAG_FINAL. The reply is assembled
+// directly into an EXTERNAL framing buffer (owned by the transport, off the
+// task stack): payload goes after the 3-byte header slot, so a flush is one
+// SendRaw with no extra copy.
 //
 // The request is a run of session chunks that share this id: the first is fed
 // up front (feedRequest); once it's drained, read() pulls further chunks off
-// the socket via the link (RecvChunk) until a chunk carries FLAG_FINAL. A small
-// no-body command is a single FLAG_FINAL chunk, so read() never blocks; a
-// streamed upload is many chunks ending in FLAG_FINAL.
+// the link (RecvChunk) until a chunk carries FLAG_FINAL. A small no-body command
+// is a single FLAG_FINAL chunk, so read() never blocks; a streamed upload is many
+// chunks ending in FLAG_FINAL.
 class Session : public Stream
 {
     uint16_t id_;
@@ -133,34 +139,4 @@ public:
     /// `Stream&` can ask too.
     bool failed() const override { return failed_; }
     uint16_t id() const { return id_; }
-};
-
-// Routes inbound chunks to sessions. Step 1: every inbound chunk is a complete
-// single-chunk request, dispatched synchronously; no persistent state, no
-// busy-gate (a session lives only for the duration of OnChunk). Step 2 adds a
-// slot table + busy-refuse + multi-chunk request bodies. The framing buffer is
-// supplied by the transport (off the httpd-task stack) and lent to each Session.
-class SessionMux
-{
-public:
-    struct Sink
-    {
-        virtual ~Sink() = default;
-        virtual void OnSessionOpened(Session& session) = 0;
-    };
-
-    SessionMux(SessionLink& link, Sink& sink, uint8_t* buf, size_t payloadCap,
-               uint8_t* inBuf, size_t inCap)
-        : link_(link), sink_(sink), buf_(buf), payloadCap_(payloadCap),
-          inBuf_(inBuf), inCap_(inCap) {}
-
-    void OnChunk(uint16_t id, uint8_t flags, const uint8_t* payload, size_t len);
-
-private:
-    SessionLink& link_;
-    Sink& sink_;
-    uint8_t* buf_;
-    size_t payloadCap_;
-    uint8_t* inBuf_;
-    size_t inCap_;
 };

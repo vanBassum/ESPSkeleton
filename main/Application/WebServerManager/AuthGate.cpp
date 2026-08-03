@@ -70,7 +70,7 @@ AuthGate::Disposition AuthGate::Handle(WsConnection& conn, SessionLink& link,
         return Disposition::Handled;
     }
 
-    if (conn.authed) return Disposition::PassToMux;
+    if (conn.authed) return Disposition::Dispatch;
     SendReject(link, sid, "unauthorized");
     return Disposition::Rejected;
 }

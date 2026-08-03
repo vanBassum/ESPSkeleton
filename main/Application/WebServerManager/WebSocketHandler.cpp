@@ -221,11 +221,16 @@ void WebSocketHandler::HandleBinary(httpd_req_t* req, const uint8_t* frame, size
     AuthGate gate(*auth_);
     switch (gate.Handle(*conn, link, sid, payload, plen))
     {
-        case AuthGate::Disposition::PassToMux:
+        case AuthGate::Disposition::Dispatch:
         {
-            SessionMux mux(link, *commandManager_, sessionFrame_, SESSION_WINDOW,
-                           sessionInbound_, sizeof(sessionInbound_));
-            mux.OnChunk(sid, flags, payload, plen);
+            // The session lives on this stack frame for exactly one dispatch: the
+            // first chunk opens it, and its FLAG_FINAL tells the Session whether a
+            // body follows (further chunks pulled by read()) or the request ends
+            // here. Runs synchronously on the httpd task.
+            Session session(sid, link, sessionFrame_, SESSION_WINDOW,
+                            sessionInbound_, sizeof(sessionInbound_));
+            session.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
+            commandManager_->Execute(session);
             break;
         }
         case AuthGate::Disposition::Handled:

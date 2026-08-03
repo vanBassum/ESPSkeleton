@@ -4,7 +4,7 @@
 #include "InitState.h"
 #include "TypedSettings.h"
 #include "Task.h"
-#include "SessionMux.h"
+#include "Session.h"
 #include "SessionProtocol.h"
 #include "WsConnection.h"
 #include "RelaySessionLink.h"
@@ -16,7 +16,7 @@ class Authenticator;
 // The device's outbound connection to a relay server, so the device is reachable
 // from outside its LAN without a VPN or a port forward.
 //
-// It is *only* a transport: a second SessionLink under the same SessionMux the
+// It is *only* a transport: a second SessionLink feeding the same Session type the
 // local browser socket uses, so AuthGate, CommandManager and every command
 // handler are reached unchanged and know nothing about the relay. The server asks
 // for frontend files with the ordinary `getWebFile` command and relays browser
@@ -90,7 +90,7 @@ private:
     uint8_t sessionInbound_[session::HEADER_LEN + INBOUND_WINDOW];
 
     // WebSocket frame reassembly. esp_websocket_client can deliver one frame as
-    // several DATA events; a chunk must be whole before it is queued or the mux
+    // several DATA events; a chunk must be whole before it is queued or dispatch
     // gets a truncated header.
     uint8_t asmBuf_[session::HEADER_LEN + INBOUND_WINDOW];
     size_t  asmLen_ = 0;
