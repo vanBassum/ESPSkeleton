@@ -107,7 +107,7 @@ void ConsoleManager::FlushLine()
     if (queue_)
     {
         LogQueueItem item = {};
-        strncpy(item.text, lineBuf_, sizeof(item.text) - 1);
+        snprintf(item.text, sizeof(item.text), "%s", lineBuf_);
         xQueueSend(queue_, &item, 0);
     }
 

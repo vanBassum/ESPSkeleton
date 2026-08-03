@@ -38,7 +38,7 @@ private:
 
     struct PartitionInfo
     {
-        char     label[16];
+        char     label[17];     // esp_partition_t::label is char[17] — 16 + NUL
         char     type[8];       // "app" or "data"
         char     subtype[16];   // "ota_0" / "fat" / "nvs" / "0xNN" …
         uint32_t offset;

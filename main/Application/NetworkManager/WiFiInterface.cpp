@@ -1,6 +1,7 @@
 #include "WiFiInterface.h"
 
 #include <assert.h>
+#include <cstdio>
 #include <cstring>
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -47,6 +48,10 @@ void WiFiInterface::ConnectSta(const char* ssid, const char* password)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
     wifi_config_t config = {};
+    // strncpy, NOT snprintf, and deliberately so: these are esp_wifi's fixed-width
+    // fields, not C strings. A 32-character SSID legitimately fills ssid[32] with no
+    // terminator, so snprintf would silently drop its last character. Do not
+    // "modernize" these four calls — see the note in NetworkManager.
     strncpy((char*)config.sta.ssid, ssid, sizeof(config.sta.ssid) - 1);
     strncpy((char*)config.sta.password, password, sizeof(config.sta.password) - 1);
 
@@ -65,6 +70,7 @@ void WiFiInterface::StartAP(const char* ssid, const char* password, uint8_t chan
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 
     wifi_config_t config = {};
+    // Fixed-width esp_wifi fields — see the note in Connect().
     strncpy((char*)config.ap.ssid, ssid, sizeof(config.ap.ssid) - 1);
     config.ap.ssid_len = strlen(ssid);
     strncpy((char*)config.ap.password, password, sizeof(config.ap.password) - 1);
@@ -119,8 +125,8 @@ int WiFiInterface::Scan(ScanResult* out, int maxResults)
 
     for (uint16_t i = 0; i < count; i++)
     {
-        strncpy(out[i].ssid, reinterpret_cast<const char*>(records[i].ssid), sizeof(out[i].ssid) - 1);
-        out[i].ssid[sizeof(out[i].ssid) - 1] = '\0';
+        snprintf(out[i].ssid, sizeof(out[i].ssid), "%s",
+                 reinterpret_cast<const char*>(records[i].ssid));
         out[i].rssi = records[i].rssi;
         out[i].channel = records[i].primary;
         out[i].secure = records[i].authmode != WIFI_AUTH_OPEN;

@@ -85,8 +85,9 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
         const esp_partition_t* p = esp_partition_get(it);
         PartitionInfo& info = out[count++];
 
-        strncpy(info.label, p->label, sizeof(info.label) - 1);
-        info.label[sizeof(info.label) - 1] = '\0';
+        // snprintf, not strncpy: a partition label can fill our buffer exactly,
+        // and strncpy would then leave it unterminated (-Wstringop-truncation).
+        snprintf(info.label, sizeof(info.label), "%s", p->label);
 
         // Subtype values collide across types (e.g. APP_FACTORY and DATA_OTA are both 0x00),
         // so we branch by type first.
@@ -130,8 +131,7 @@ int UpdateManager::GetPartitions(PartitionInfo* out, int maxCount) const
             esp_app_desc_t desc;
             if (esp_ota_get_partition_description(p, &desc) == ESP_OK)
             {
-                strncpy(info.version, desc.version, sizeof(info.version) - 1);
-                info.version[sizeof(info.version) - 1] = '\0';
+                snprintf(info.version, sizeof(info.version), "%s", desc.version);
             }
         }
 
