@@ -90,8 +90,14 @@ www/
 .vscode/
 .idea/
 
-# Claude Code
-.claude/
+# Claude Code — skills, slash commands and shared settings are part of the repo
+# (forks inherit them); personal settings and runtime state are not.
+# NOTE: must be `.claude/*`, not `.claude/`, or git will not descend to see the
+# negations below.
+.claude/*
+!.claude/skills/
+!.claude/commands/
+!.claude/settings.json
 
 # Relay server demo (local venv + caches)
 relay-server/.venv/

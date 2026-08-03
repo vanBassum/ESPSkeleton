@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "If docs/reasoning/ exists, read the notes in it (all of them if they fit) so the project's prior understanding is in context before work begins."
+          }
+        ]
+      }
+    ]
+  }
+}
