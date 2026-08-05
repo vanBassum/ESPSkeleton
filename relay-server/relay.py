@@ -4,7 +4,7 @@
 Proves the remote-access path over a LAN: devices dial *out* to this server, and a
 browser reaches a device's own web UI through it.
 
-    device  ──ws──►  /device?id=<id>&fw=<ver>     (outbound, NAT-friendly)
+    device  ──ws──►  /device?id=<id>&fw=<ver>…    (outbound, NAT-friendly)
     browser ──http─►  /devices/<id>/{path}        → `web read` command on the device
     browser ──ws──►  /devices/<id>/ws             → relayed to the device pipe
 
@@ -15,8 +15,18 @@ What this server understands and does not:
   * It never parses a session payload. Commands, auth, uploads and log lines are
     opaque bytes it moves between two sockets.
 
-Deliberately out of scope for now, and all of it on the way in: TLS, authentication
-of devices to this server, user accounts, persistence, and file caching.
+Who may connect: a device must be approved, and must present the token it was
+approved with in an `X-Strux-Token` header, or the upgrade is refused with a 403.
+Approvals live in SQLite; pairing a new device is one click in the dashboard. The
+device id is technical (MAC-derived, public, in every URL) while `name` is what a
+human reads — nothing is keyed on the name.
+
+The human side of this server is expected to sit behind a reverse proxy that
+authenticates users; there are no accounts here. `/device` cannot be, because a
+device cannot follow a login redirect — hence the token.
+
+Deliberately out of scope for now: file caching, and per-device origin isolation
+(every device's UI is served from this one origin).
 
 Open work: docs/backlog/2026-07-03-remote-access.md
 Deployment: docs/backlog/2026-08-05-relay-in-production.md
@@ -26,8 +36,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import json
 import logging
+import sqlite3
 import struct
 import time
 
@@ -75,9 +87,15 @@ class RelayError(Exception):
 class DeviceConnection:
     """One ESP32's outbound socket: id space, session maps, and the in-flight gate."""
 
-    def __init__(self, device_id: str, firmware: str, ws: web.WebSocketResponse):
+    def __init__(self, device_id: str, firmware: str, ws: web.WebSocketResponse,
+                 name: str = "", project: str = ""):
         self.device_id = device_id
         self.firmware = firmware
+        # Display only. device_id is the technical identity and the thing the token
+        # proves; these two are what a human reads in the device list, so nothing is
+        # ever keyed on them and a rename costs a device nothing.
+        self.name = name or device_id
+        self.project = project
         self.ws = ws
         self.connected_at = time.time()
 
@@ -303,6 +321,187 @@ class DeviceConnection:
         self.browsers.clear()
 
 
+# ── Pairing store ─────────────────────────────────────────────────────────────
+# What survives a restart: which device ids are approved and what token each one
+# proved itself with, plus a log of refusals and approvals.
+#
+# A device id is public — it is in every /devices/<id>/ URL, and it is derived from
+# the board's MAC. The token is what is secret, and it is the *device* that generates
+# it: this server only ever pins the value a device presented, so there is no
+# server→device message that could set one and no network-triggered NVS write.
+#
+# Queries here are per-connect and tiny, so they run inline on the event loop.
+# Anything blob-sized (the file cache this will grow) belongs in asyncio.to_thread.
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS approved (
+    device_id  TEXT PRIMARY KEY,
+    token      TEXT NOT NULL,
+    name       TEXT,
+    project    TEXT,
+    firmware   TEXT,
+    approved_at REAL NOT NULL,
+    last_seen  REAL
+);
+
+-- Keyed on the PAIR, not the id: two different tokens claiming one id is what
+-- somebody guessing looks like, and collapsing them would hide exactly that.
+CREATE TABLE IF NOT EXISTS pending (
+    device_id  TEXT NOT NULL,
+    token      TEXT NOT NULL,
+    name       TEXT,
+    project    TEXT,
+    firmware   TEXT,
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (device_id, token)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    at        REAL NOT NULL,
+    kind      TEXT NOT NULL,
+    device_id TEXT,
+    detail    TEXT
+);
+CREATE INDEX IF NOT EXISTS events_at ON events (at DESC);
+"""
+
+# A public endpoint that INSERTs is a disk-filling machine, so the pending list is
+# bounded. Past the cap, a *known* pair still counts its attempts (so the signal
+# keeps rising) but no new row is created.
+MAX_PENDING = 50
+
+
+class Store:
+    def __init__(self, path: str):
+        self.db = sqlite3.connect(path)
+        self.db.row_factory = sqlite3.Row
+        # WAL so a reader never blocks the connect path.
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=NORMAL")
+        self.db.executescript(SCHEMA)
+        self.db.commit()
+        log.info("pairing store at %s (%d approved)", path, self.approved_count())
+
+    def approved_count(self) -> int:
+        return self.db.execute("SELECT count(*) FROM approved").fetchone()[0]
+
+    def log_event(self, kind: str, device_id: str | None, detail: str = "") -> None:
+        self.db.execute(
+            "INSERT INTO events (at, kind, device_id, detail) VALUES (?,?,?,?)",
+            (time.time(), kind, device_id, detail))
+        self.db.commit()
+
+    # ── the connect decision ──────────────────────────────────────────────────
+
+    def authenticate(self, device_id: str, token: str, name: str,
+                     project: str, firmware: str) -> tuple[bool, str]:
+        """May this device have the pipe? Returns (ok, reason-if-not).
+
+        A refusal records the pair as pending, which is the only way a new device
+        ever gets paired: it is refused once, shows up in the dashboard, and the
+        reconnect after approval succeeds.
+        """
+        now = time.time()
+        row = self.db.execute(
+            "SELECT token FROM approved WHERE device_id = ?", (device_id,)).fetchone()
+
+        if row is not None:
+            # compare_digest rather than ==: token comparison is the one place here
+            # where how long a mismatch takes tells an attacker something.
+            if token and hmac.compare_digest(row["token"], token):
+                self.db.execute(
+                    "UPDATE approved SET last_seen = ?, name = ?, project = ?, "
+                    "firmware = ? WHERE device_id = ?",
+                    (now, name, project, firmware, device_id))
+                self.db.commit()
+                return True, ""
+
+            # Approved id, wrong token. Somebody is either guessing, or this is the
+            # same board after an NVS wipe — the MAC-derived id survives that, the
+            # token does not. Both look identical from here, so record and refuse:
+            # the human decides which it was, in the dashboard.
+            self._remember_pending(device_id, token, name, project, firmware, now)
+            self.log_event("refused", device_id, "token mismatch")
+            return False, "token mismatch"
+
+        self._remember_pending(device_id, token, name, project, firmware, now)
+        self.log_event("refused", device_id, "not approved")
+        return False, "device not approved"
+
+    def _remember_pending(self, device_id: str, token: str, name: str,
+                          project: str, firmware: str, now: float) -> None:
+        cur = self.db.execute(
+            "UPDATE pending SET last_seen = ?, attempts = attempts + 1, name = ?, "
+            "project = ?, firmware = ? WHERE device_id = ? AND token = ?",
+            (now, name, project, firmware, device_id, token))
+        if cur.rowcount == 0:
+            n = self.db.execute("SELECT count(*) FROM pending").fetchone()[0]
+            if n >= MAX_PENDING:
+                self.db.commit()
+                log.warning("pending list is full (%d) — not recording %s",
+                            MAX_PENDING, device_id)
+                return
+            self.db.execute(
+                "INSERT INTO pending (device_id, token, name, project, firmware, "
+                "first_seen, last_seen) VALUES (?,?,?,?,?,?,?)",
+                (device_id, token, name, project, firmware, now, now))
+        self.db.commit()
+
+    # ── what the dashboard drives ─────────────────────────────────────────────
+
+    def pending(self) -> list[dict]:
+        rows = self.db.execute(
+            "SELECT * FROM pending ORDER BY first_seen").fetchall()
+        return [dict(r) for r in rows]
+
+    def approved(self) -> list[dict]:
+        rows = self.db.execute(
+            "SELECT * FROM approved ORDER BY device_id").fetchall()
+        return [dict(r) for r in rows]
+
+    def approve(self, device_id: str, token: str) -> bool:
+        """Pin the token this pair presented. Replaces any existing approval for
+        the id, which is what re-pairing a wiped board is."""
+        row = self.db.execute(
+            "SELECT * FROM pending WHERE device_id = ? AND token = ?",
+            (device_id, token)).fetchone()
+        if row is None:
+            return False
+        self.db.execute(
+            "INSERT INTO approved (device_id, token, name, project, firmware, "
+            "approved_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(device_id) DO UPDATE SET token=excluded.token, "
+            "name=excluded.name, project=excluded.project, "
+            "firmware=excluded.firmware, approved_at=excluded.approved_at",
+            (device_id, token, row["name"], row["project"], row["firmware"],
+             time.time()))
+        # Every pending row for this id goes, not just the approved pair: the other
+        # rows were guesses at an id that is now settled.
+        self.db.execute("DELETE FROM pending WHERE device_id = ?", (device_id,))
+        self.db.commit()
+        self.log_event("approved", device_id)
+        return True
+
+    def forget(self, device_id: str) -> bool:
+        cur = self.db.execute("DELETE FROM approved WHERE device_id = ?", (device_id,))
+        self.db.execute("DELETE FROM pending WHERE device_id = ?", (device_id,))
+        self.db.commit()
+        if cur.rowcount:
+            self.log_event("forgotten", device_id)
+        return bool(cur.rowcount)
+
+    def recent_events(self, limit: int = 50) -> list[dict]:
+        rows = self.db.execute(
+            "SELECT * FROM events ORDER BY at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+store: Store | None = None
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 devices: dict[str, DeviceConnection] = {}
@@ -314,13 +513,26 @@ async def device_ws(request: web.Request) -> web.StreamResponse:
     """The device's outbound pipe. Registration is the query string — no protocol verb."""
     device_id = request.query.get("id")
     firmware = request.query.get("fw", "unknown")
+    name = request.query.get("name", "")
+    project = request.query.get("project", "")
+    token = request.headers.get("X-Strux-Token", "")
     if not device_id:
         return web.Response(status=400, text="missing ?id=")
+
+    # Refused BEFORE the upgrade, so the device gets an HTTP status it already logs
+    # ("upgrade refused with HTTP 403") instead of a socket that opens and dies. This
+    # is the check that makes the endpoint safe to leave on the public internet: no
+    # stranger can register, and nobody can take an approved device's slot.
+    assert store is not None
+    ok, reason = store.authenticate(device_id, token, name, project, firmware)
+    if not ok:
+        log.warning("refused device %s from %s: %s", device_id, request.remote, reason)
+        return web.Response(status=403, text=reason)
 
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
 
-    conn = DeviceConnection(device_id, firmware, ws)
+    conn = DeviceConnection(device_id, firmware, ws, name, project)
     previous = devices.get(device_id)
     if previous is not None:
         log.info("device %s reconnected, dropping the previous pipe", device_id)
@@ -425,51 +637,217 @@ async def api_devices(request: web.Request) -> web.StreamResponse:
     return web.json_response([
         {
             "deviceId": conn.device_id,
+            "name": conn.name,
+            "project": conn.project,
             "firmware": conn.firmware,
             "online": not conn.ws.closed,
             "uptimeSeconds": int(now - conn.connected_at),
             "browsers": len(conn.browsers),
         }
-        for conn in sorted(devices.values(), key=lambda c: c.device_id)
+        # Sorted by the human-readable name, since that is what the list shows first.
+        for conn in sorted(devices.values(), key=lambda c: (c.name.lower(), c.device_id))
     ])
+
+
+# ── Pairing API ───────────────────────────────────────────────────────────────
+# Everything under here is on the browser side of the proxy, so Authentik has
+# already decided who is asking. There is no additional check: whoever can load
+# the dashboard is an admin, because that is what the proxy provider grants.
+
+async def api_pairing(request: web.Request) -> web.StreamResponse:
+    assert store is not None
+    return web.json_response({
+        "pending": store.pending(),
+        "approved": store.approved(),
+        "events": store.recent_events(20),
+        "connected": sorted(devices.keys()),
+    })
+
+
+async def api_approve(request: web.Request) -> web.StreamResponse:
+    assert store is not None
+    body = await request.json()
+    device_id, token = body.get("deviceId"), body.get("token")
+    if not device_id or token is None:
+        return web.json_response({"error": "deviceId and token are required"}, status=400)
+
+    if not store.approve(device_id, token):
+        return web.json_response({"error": "no such pending device"}, status=404)
+
+    # Nothing is pushed to the device: it is already retrying every few seconds, so
+    # the next attempt is the one that succeeds. That is the whole handshake.
+    log.info("approved device %s", device_id)
+    return web.json_response({"ok": True})
+
+
+async def api_forget(request: web.Request) -> web.StreamResponse:
+    assert store is not None
+    body = await request.json()
+    device_id = body.get("deviceId")
+    if not device_id:
+        return web.json_response({"error": "deviceId is required"}, status=400)
+
+    forgotten = store.forget(device_id)
+
+    # Drop the live pipe too, or a device stays connected after being revoked —
+    # the token is only checked when a connection is made.
+    conn = devices.get(device_id)
+    if conn is not None:
+        await conn.close()
+        try:
+            await conn.ws.close()
+        except Exception:
+            pass
+        devices.pop(device_id, None)
+
+    log.info("forgot device %s", device_id)
+    return web.json_response({"ok": True, "wasApproved": forgotten})
 
 
 DASHBOARD = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Strux relay</title>
 <style>
  :root { color-scheme: light dark; }
- body { font: 15px/1.5 system-ui, sans-serif; margin: 3rem auto; max-width: 46rem; padding: 0 1rem; }
+ body { font: 15px/1.5 system-ui, sans-serif; margin: 3rem auto; max-width: 52rem; padding: 0 1rem; }
  h1 { font-size: 1.3rem; margin-bottom: .25rem; }
+ h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: #888;
+      margin: 2.5rem 0 0; }
  p.sub { color: #888; margin-top: 0; }
- table { border-collapse: collapse; width: 100%; margin-top: 1.5rem; }
- th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #8883; }
+ table { border-collapse: collapse; width: 100%; margin-top: .75rem; }
+ th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #8883;
+          vertical-align: top; }
  th { font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
  .dot { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; background: #22c55e; }
+ .dot.off { background: #71717a; }
  code { font-size: .85em; color: #888; }
+ .id { font-size: .8em; color: #888; font-family: ui-monospace, monospace; }
  .empty { color: #888; padding: 2rem 0; }
+ button { font: inherit; font-size: .85em; padding: .2rem .7rem; border-radius: .3rem;
+          border: 1px solid #8886; background: #8881; cursor: pointer; }
+ button:hover { background: #8883; }
+ button.primary { border-color: #22c55e88; background: #22c55e22; }
+ .warn { border: 1px solid #f59e0b66; background: #f59e0b14; border-radius: .4rem;
+         padding: .1rem 1rem 1rem; margin-top: 1.5rem; }
+ .warn h2 { color: #f59e0b; }
+ .ev { font-size: .8em; color: #888; }
 </style></head>
 <body>
  <h1>Strux relay</h1>
  <p class="sub">Devices dial out to this server. Click one to open its own web UI.</p>
  <div id="out"><p class="empty">Loading…</p></div>
 <script>
-async function tick() {
-  let list = [];
-  try { list = await (await fetch('/api/devices')).json(); } catch (e) {}
-  const out = document.getElementById('out');
-  if (!list.length) {
-    out.innerHTML = '<p class="empty">No devices connected. Set <code>relay.enabled</code> and '
-                  + '<code>relay.url</code> in a device\\'s settings.</p>';
-    return;
+// The device chooses its own name, and an UNAPPROVED device can put one in the
+// pending list — so these strings are attacker-controlled and reach an admin page.
+// Escaped, always.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function ago(t) {
+  if (!t) return '—';
+  const s = Math.max(0, Math.round(Date.now() / 1000 - t));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || ('HTTP ' + r.status));
+  tick();
+}
+
+function approve(id, token) { post('/api/approve', { deviceId: id, token: token }); }
+
+function forget(id) {
+  if (confirm('Forget ' + id + '? It will be refused until you approve it again.'))
+    post('/api/forget', { deviceId: id });
+}
+
+// Name first, id second: the name is what a human recognises, the id is the
+// technical handle the URL and the token are about.
+function nameCell(d) {
+  return '<div>' + esc(d.name || d.deviceId) + '</div>'
+       + '<div class="id">' + esc(d.deviceId) + '</div>';
+}
+
+function pendingBlock(pending) {
+  if (!pending.length) return '';
+  const byId = {};
+  pending.forEach(p => { byId[p.device_id] = (byId[p.device_id] || 0) + 1; });
+  return '<div class="warn"><h2>Waiting for approval</h2>'
+    + '<table><thead><tr><th>Device</th><th>Firmware</th><th>Token</th>'
+    + '<th>Tries</th><th>Last seen</th><th></th></tr></thead><tbody>'
+    + pending.map(p => '<tr>'
+        + '<td>' + nameCell({ name: p.name, deviceId: p.device_id })
+        + (byId[p.device_id] > 1
+            ? '<div class="id" style="color:#f59e0b">two tokens claim this id</div>' : '')
+        + '</td>'
+        + '<td><code>' + esc(p.project || '?') + ' ' + esc(p.firmware || '?') + '</code></td>'
+        + '<td><code>' + esc((p.token || '').slice(0, 8) || 'none') + '…</code></td>'
+        + '<td>' + p.attempts + '</td>'
+        + '<td>' + ago(p.last_seen) + '</td>'
+        + '<td><button class="primary" onclick="approve(' + JSON.stringify(p.device_id)
+        + ',' + JSON.stringify(p.token) + ')">Approve</button></td>'
+        + '</tr>').join('')
+    + '</tbody></table></div>';
+}
+
+function deviceBlock(live, approved) {
+  const online = {};
+  live.forEach(d => { online[d.deviceId] = d; });
+  const rows = approved.map(a => {
+    const d = online[a.device_id];
+    const shown = d || { deviceId: a.device_id, name: a.name, project: a.project,
+                         firmware: a.firmware };
+    return '<tr>'
+      + '<td><span class="dot' + (d ? '' : ' off') + '"></span></td>'
+      + '<td>' + (d ? '<a href="/devices/' + encodeURIComponent(a.device_id) + '/">'
+                      + nameCell(shown) + '</a>'
+                    : nameCell(shown)) + '</td>'
+      + '<td><code>' + esc(shown.project || '?') + ' ' + esc(shown.firmware || '?')
+      + '</code></td>'
+      + '<td>' + (d ? d.uptimeSeconds + 's' : 'last seen ' + ago(a.last_seen)) + '</td>'
+      + '<td>' + (d ? d.browsers : '—') + '</td>'
+      + '<td><button onclick="forget(' + JSON.stringify(a.device_id)
+      + ')">Forget</button></td>'
+      + '</tr>';
+  }).join('');
+
+  if (!rows) {
+    return '<p class="empty">No devices paired yet. Set <code>relay.enabled</code> and '
+         + '<code>relay.url</code> on a device; it will appear above for approval.</p>';
   }
-  out.innerHTML = '<table><thead><tr><th></th><th>Device</th><th>Firmware</th>'
-    + '<th>Connected</th><th>Viewers</th></tr></thead><tbody>'
-    + list.map(d => '<tr><td><span class="dot"></span></td>'
-        + '<td><a href="/devices/' + encodeURIComponent(d.deviceId) + '/">' + d.deviceId + '</a></td>'
-        + '<td><code>' + d.firmware + '</code></td>'
-        + '<td>' + d.uptimeSeconds + 's</td>'
-        + '<td>' + d.browsers + '</td></tr>').join('')
-    + '</tbody></table>';
+  return '<h2>Devices</h2><table><thead><tr><th></th><th>Device</th>'
+    + '<th>Firmware</th><th>Connected</th><th>Viewers</th><th></th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+function eventBlock(events) {
+  if (!events.length) return '';
+  return '<h2>Recent</h2><div class="ev">'
+    + events.map(e => ago(e.at) + ' — ' + esc(e.kind) + ' ' + esc(e.device_id || '')
+        + (e.detail ? ' (' + esc(e.detail) + ')' : '')).join('<br>')
+    + '</div>';
+}
+
+async function tick() {
+  let live = [], pair = { pending: [], approved: [], events: [] };
+  try {
+    [live, pair] = await Promise.all([
+      (await fetch('/api/devices')).json(),
+      (await fetch('/api/pairing')).json(),
+    ]);
+  } catch (e) { return; }
+  document.getElementById('out').innerHTML =
+      pendingBlock(pair.pending) + deviceBlock(live, pair.approved)
+    + eventBlock(pair.events);
 }
 tick(); setInterval(tick, 2000);
 </script>
@@ -497,6 +875,9 @@ def build_app() -> web.Application:
     app.router.add_get("/", dashboard)
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/api/devices", api_devices)
+    app.router.add_get("/api/pairing", api_pairing)
+    app.router.add_post("/api/approve", api_approve)
+    app.router.add_post("/api/forget", api_forget)
     app.router.add_get("/device", device_ws)
     app.router.add_get("/devices/{deviceId}/ws", browser_ws)
     app.router.add_get("/devices/{deviceId}", device_redirect)
@@ -509,6 +890,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Minimal Strux relay server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
+    # In the container this is the bind-mounted runtime volume, so approvals survive
+    # a restart or an image update. Defaults to the cwd for running it off a checkout.
+    parser.add_argument("--db", default="relay.db")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -517,6 +901,10 @@ def main() -> None:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    global store
+    store = Store(args.db)
+
     log.info("relay listening on http://%s:%d  (device endpoint: /device)",
              args.host, args.port)
     web.run_app(build_app(), host=args.host, port=args.port, print=None)

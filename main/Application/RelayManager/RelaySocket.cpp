@@ -62,7 +62,7 @@ bool RelaySocket::ParseUri(const char* uri)
     return true;
 }
 
-bool RelaySocket::Connect(const char* uri, int timeoutMs)
+bool RelaySocket::Connect(const char* uri, int timeoutMs, const char* extraHeaders)
 {
     Close();
 
@@ -82,6 +82,9 @@ bool RelaySocket::Connect(const char* uri, int timeoutMs)
 
     esp_transport_ws_config_t cfg = {};
     cfg.ws_path = path_;
+    // Not copied by the transport either, which is the other half of why the caller
+    // has to own this string.
+    cfg.headers = extraHeaders;
     // False = the transport answers pings and completes closes itself, inside
     // whatever read is in progress. Those frames never reach the session layer,
     // which is the only reason this class stays as short as it is.

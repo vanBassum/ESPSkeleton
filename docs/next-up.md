@@ -10,10 +10,12 @@ Last updated 2026-08-05.
 ## Now
 
 **Putting the relay in production** — live at `https://strux.vanbassum.com`, behind
-Traefik and Authentik. Steps 1–3 done; next is step 4, pointing a real device at
-`wss://strux.vanbassum.com/device` and watching the relay task's stack high-water mark
-now that TLS shares its 10 K. Production-safe after step 9.
+Traefik and Authentik. Steps 1–8 done: a device must be approved and must present its own
+token, or the upgrade is refused with a 403, and pairing is one click in the dashboard.
+Step 9 — secrets out of `settings list` — is the last one before the plan calls it
+production-ready.
 → [`backlog/2026-08-05-relay-in-production.md`](backlog/2026-08-05-relay-in-production.md)
 
-**`/device` is unauthenticated and publicly reachable right now.** Accepted as a test
-window. Do not leave a device pointed at the public URL until step 7 lands.
+**An approved relay pipe still hands out the WiFi PSK** via `settings list`. That is
+step 9, and it is the reason "production-ready" is not ticked yet.
+→ [`backlog/2026-08-05-secret-settings-over-the-wire.md`](backlog/2026-08-05-secret-settings-over-the-wire.md)

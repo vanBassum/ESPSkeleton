@@ -6,9 +6,14 @@
 #include "AuthGate.h"
 #include "Authenticator.h"
 
+#include "SystemManager.h"
+
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_app_desc.h>
+#include <esp_random.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -27,7 +32,8 @@ void RelayManager::Init()
         return;
     }
 
-    serviceProvider_.getSettingsManager().Register({ &enabled_, &url_, &deviceId_setting_ });
+    serviceProvider_.getSettingsManager().Register(
+        { &enabled_, &url_, &deviceId_setting_, &token_setting_ });
 
     auth_ = &serviceProvider_.getWebServerManager().GetAuthenticator();
 
@@ -48,7 +54,12 @@ void RelayManager::Init()
     }
 
     ResolveDeviceId();
+    ResolveToken();
     BuildUri();
+
+    // Built once: RelaySocket keeps the pointer and re-sends these on every
+    // reconnect, so a stack buffer here would be a dangling one.
+    snprintf(headers_, sizeof(headers_), "X-Strux-Token: %s\r\n", token_);
 
     // One task connects, reads the socket, and runs the commands it reads. That is
     // the whole transport: there is no second task and no queue between them, because
@@ -84,6 +95,61 @@ void RelayManager::ResolveDeviceId()
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+void RelayManager::ResolveToken()
+{
+    char stored[sizeof(token_)] = {};
+    token_setting_.Get(stored, sizeof(stored));
+    if (stored[0] != '\0')
+    {
+        strlcpy(token_, stored, sizeof(token_));
+        return;
+    }
+
+    // First boot with the relay enabled: mint one and keep it. esp_fill_random is
+    // the hardware RNG, seeded well enough for this once WiFi/BT is up — and it is,
+    // because Init runs after NetworkManager.
+    uint8_t raw[TOKEN_BYTES] = {};
+    esp_fill_random(raw, sizeof(raw));
+    for (size_t i = 0; i < TOKEN_BYTES; ++i)
+        snprintf(token_ + i * 2, 3, "%02x", raw[i]);
+
+    if (!token_setting_.Set(token_))
+    {
+        // Not fatal, but say so plainly: a token that is not stored is a new identity
+        // on every boot, which means re-approving the device after every reboot.
+        ESP_LOGE(TAG, "failed to store relay.token — it will change on reboot");
+        return;
+    }
+    ESP_LOGI(TAG, "generated a relay token for this device");
+}
+
+// Percent-encodes everything that is not unreserved, which is the safe side of the
+// line for a value going into a query string: device.name is set by a human and may
+// hold spaces, '&' or '='.
+static void AppendEncoded(char* out, size_t cap, const char* in)
+{
+    static const char* HEX = "0123456789abcdef";
+    size_t n = strlen(out);
+    for (; *in && n + 4 < cap; ++in)
+    {
+        const unsigned char c = static_cast<unsigned char>(*in);
+        const bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                          (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+                          c == '.' || c == '~';
+        if (safe)
+        {
+            out[n++] = static_cast<char>(c);
+        }
+        else
+        {
+            out[n++] = '%';
+            out[n++] = HEX[c >> 4];
+            out[n++] = HEX[c & 0x0f];
+        }
+    }
+    out[n] = '\0';
+}
+
 void RelayManager::BuildUri()
 {
     char url[128] = {};
@@ -93,10 +159,23 @@ void RelayManager::BuildUri()
     // message: the server knows who connected before the first chunk, and the
     // session protocol gains no relay-specific verb. Firmware version travels with
     // it so the server can key a file cache on it later.
+    //
+    // Two identities go up here, and they are not the same thing. `id` is technical
+    // and is what the token proves — it addresses the device in every URL. `name` and
+    // `project` are for a human reading the relay's device list, and are display-only:
+    // nothing is ever keyed on them, so a rename cannot cost a device its approval.
     const esp_app_desc_t* app = esp_app_get_description();
     const char* sep = strchr(url, '?') ? "&" : "?";
     snprintf(uri_, sizeof(uri_), "%s%sid=%s&fw=%s",
              url, sep, deviceId_, app ? app->version : "unknown");
+
+    char name[48] = {};
+    serviceProvider_.getSystemManager().GetDeviceName(name, sizeof(name));
+    strlcat(uri_, "&name=", sizeof(uri_));
+    AppendEncoded(uri_, sizeof(uri_), name);
+
+    strlcat(uri_, "&project=", sizeof(uri_));
+    AppendEncoded(uri_, sizeof(uri_), app ? app->project_name : "unknown");
 }
 
 // ──────────────────────────────────────────────────────────
@@ -121,12 +200,15 @@ void RelayManager::TaskLoop()
                 continue;
             }
 
-            if (!socket_.Connect(uri_, CONNECT_TIMEOUT_MS))
+            if (!socket_.Connect(uri_, CONNECT_TIMEOUT_MS, headers_))
             {
                 vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
                 continue;
             }
             OnConnected();
+            // Right after connect, because on a wss:// pipe the TLS handshake just
+            // ran on this stack and is one of the two things it has to fit.
+            CheckStackHeadroom();
             idlePolls = 0;
         }
 
@@ -235,6 +317,26 @@ void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
         skipSid_  = sid;
         skipping_ = true;
     }
+
+    // The handler just ran on this stack; if it was the deepest one yet, say so.
+    CheckStackHeadroom();
+}
+
+void RelayManager::CheckStackHeadroom()
+{
+    // ESP-IDF returns bytes here, not words as vanilla FreeRTOS does.
+    const size_t free = uxTaskGetStackHighWaterMark(nullptr);
+    if (free >= stackLow_) return;
+    stackLow_ = free;
+
+    // A quarter left is the point where the next slightly deeper handler, or a TLS
+    // handshake against a server with a longer certificate chain, stops fitting.
+    if (free < TASK_STACK / 4)
+        ESP_LOGW(TAG, "stack headroom down to %u of %d bytes",
+                 static_cast<unsigned>(free), TASK_STACK);
+    else
+        ESP_LOGI(TAG, "stack headroom %u of %d bytes",
+                 static_cast<unsigned>(free), TASK_STACK);
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -42,6 +42,11 @@ class RelayManager
     // time, so it is the larger of the two rather than the sum.
     static constexpr int TASK_STACK = 10240;
 
+    // 16 random bytes as hex. Long enough that guessing is not a strategy, short
+    // enough to read off a screen when pairing a board by hand.
+    static constexpr size_t TOKEN_BYTES   = 16;
+    static constexpr size_t TOKEN_HEX_LEN = TOKEN_BYTES * 2;
+
     static constexpr int CONNECT_TIMEOUT_MS  = 10000;
     static constexpr int RECONNECT_DELAY_MS  = 5000;
 
@@ -94,9 +99,17 @@ private:
     // identity alongside the session id.
     WsConnection conn_;
 
-    // Sized for the worst case BuildUri() can produce: url + id + fw version.
-    char uri_[256] = {};
+    // Sized for the worst case BuildUri() can produce: url + id + fw version +
+    // percent-encoded name and project name.
+    char uri_[384] = {};
     char deviceId_[48] = {};
+
+    // 32 hex + NUL. Proves to the server that this device is the id it claims.
+    char token_[TOKEN_HEX_LEN + 1] = {};
+
+    // The upgrade request's extra headers, built once in Init and pointed at by
+    // RelaySocket on every reconnect — so it must outlive Connect().
+    char headers_[96] = {};
 
     // Framing buffers, members rather than stack: this task's stack is sized for
     // the heaviest command handler and must not also carry these.
@@ -118,8 +131,15 @@ private:
 
     void BuildUri();
     void ResolveDeviceId();
+    void ResolveToken();
     void TaskLoop();
     void HandleFrame(const uint8_t* frame, size_t len);
+
+    /// Log this task's stack headroom when it reaches a new low. Called after every
+    /// command, because a command handler runs on this task and is the deepest thing
+    /// that ever will — as is, on a wss:// pipe, the TLS handshake.
+    void CheckStackHeadroom();
+    size_t stackLow_ = SIZE_MAX;
 
     void OnConnected();
     void OnDisconnected();
@@ -127,7 +147,14 @@ private:
     // ── Settings (registered with SettingsManager in Init) ──
     inline static BoolSetting   enabled_  { "relay.enabled",  "Relay Enabled",   false };
     inline static StringSetting url_      { "relay.url",      "Relay Server URL", "" };
-    // Empty → derived from the WiFi MAC, so a fresh device registers without
-    // being told who it is.
+    // Empty → derived from the WiFi MAC, so a fresh device registers without being
+    // told who it is. The MAC is the *technical* identity; what a human reads in the
+    // relay's device list is device.name, which travels alongside it for display only.
+    // Set this only to pin an id that should outlive the board it started on.
     inline static StringSetting deviceId_setting_{ "relay.deviceId", "Relay Device ID", "" };
+
+    // The device's proof that it is the id it claims. Empty → generated on first
+    // Init and stored, so the secret is created here and never travels except
+    // inside TLS. There is no server→device message that can set it.
+    inline static StringSetting token_setting_{ "relay.token", "Relay Device Token", "" };
 };

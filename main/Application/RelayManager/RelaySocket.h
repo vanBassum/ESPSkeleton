@@ -34,7 +34,13 @@ public:
     RelaySocket& operator=(const RelaySocket&) = delete;
 
     /// Open `ws://…` or `wss://…` and complete the upgrade. False leaves us closed.
-    bool Connect(const char* uri, int timeoutMs);
+    ///
+    /// `extraHeaders` is raw `Key: Value\r\n` lines added to the upgrade request, or
+    /// nullptr. It is NOT copied — the caller keeps it alive, because a reconnect
+    /// re-sends it. This is how the relay presents its token: a header goes up with
+    /// the handshake, so the server can refuse the upgrade outright and the session
+    /// protocol above learns nothing about authentication.
+    bool Connect(const char* uri, int timeoutMs, const char* extraHeaders = nullptr);
     void Close();
 
     bool IsConnected() const { return connected_; }

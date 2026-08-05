@@ -12,15 +12,24 @@ copy, not a refactor.
 Related: [what the relay still owes](2026-07-03-remote-access.md) ·
 [why the transport reads its own socket](../reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md)
 
-## Decisions still needed
+## Decisions
 
-- [ ] **Who may approve a device** — `authentik Admins` only, or any logged-in user?
+All settled. SQLite for state. `web.password` stays empty — Authentik guards remote
+access; a password only matters on the LAN. Domain is `strux.vanbassum.com`, and
+`*.vanbassum.com` already resolves to the host, so no DNS record was needed. The GHCR
+package is **public** — the source is in a public repo already, so a private image would
+only add a PAT to keep alive on the server.
 
-Settled: SQLite for state. `relay.deviceId` becomes something random. `web.password`
-stays empty — Authentik guards remote access; a password only matters on the LAN.
-Domain is `strux.vanbassum.com`, and `*.vanbassum.com` already resolves to the host, so
-no DNS record was needed. The GHCR package is **public** — the source is in a public repo
-already, so a private image would only add a PAT to keep alive on the server.
+**Who may approve a device**: whoever can load the dashboard, and the blueprint binds
+that to `authentik Admins`. The pairing API carries no check of its own, because a
+second one would only be able to disagree with the proxy.
+
+**`relay.deviceId` stays MAC-derived** — the plan used to say "becomes something
+random", which was right while the id was the only identity. Once the token proves the
+device, the id carries no secrecy, and MAC-derived buys something random cannot: the MAC
+is in efuse, so a wiped board comes back as the *same* id with a fresh token and pairing
+is one re-approve. A random id in NVS would return as a stranger and orphan its old
+approval. The id is technical; `device.name` is what a human reads.
 
 ## Plumbing
 
@@ -35,38 +44,33 @@ already, so a private image would only add a PAT to keep alive on the server.
       from outside: dashboard 302s to the login flow, `/device` reaches the relay
       unauthenticated, `/devices/<id>/ws` still 302s (so the `Path`-not-`PathPrefix`
       rule does what it was written for), and a WS client gets a 101 over TLS.
-- [ ] **4. Point the device at `wss://<domain>/device`** → TLS proven on hardware. The
-      *server* end is already proven — an aiohttp client got a 101 through Traefik — so
-      what is left is genuinely the ESP32 side.
-      Check `uxTaskGetStackHighWaterMark` on the relay task while connected: the TLS
-      handshake now shares its 10 K with the command handlers. **Then put the device back
-      on the LAN URL until step 7.**
-
-> **The test window is open as of 2026-08-05.** Step 3 went up with `/device`
-> unauthenticated — Bas's call, accepted as a test window. While it is open, anyone can
-> register a device, and a device the relay serves gets to run its own HTML on the
-> relay's origin inside an authenticated session. So: test, then take the device off the
-> public URL, and do not leave a device pointed at it until step 7 closes the hole.
+- [x] **4. Point the device at `wss://<domain>/device`** → TLS proven on hardware. The
+      relay task's stack came out at **6412 of 10240 bytes free** immediately after the
+      handshake — so TLS costs it under 4 K and the 10 K is not close to tight. The
+      number is no longer a one-off measurement: `CheckStackHeadroom()` logs every new
+      low, and WARNs under a quarter left.
 
 ## Security — the actual gates
 
-- [ ] **5. SQLite on the `runtime` volume** → state survives a restart. stdlib
-      `sqlite3`, WAL. Tables: approved devices, and a refusals/approvals log for step 11.
+- [x] **5. SQLite on the `runtime` volume** → state survives a restart. stdlib
+      `sqlite3`, WAL. Tables: `approved`, `pending`, and an `events` log for step 11.
       Keep per-connect queries tiny; blob-sized work (the future file cache) goes through
       `asyncio.to_thread`.
-- [ ] **6. Device `relay.token`** → the device can prove who it is. New `StringSetting`,
+- [x] **6. Device `relay.token`** → the device can prove who it is. New `StringSetting`,
       empty by default; on `Init`, if empty, generate 32 hex from `esp_fill_random` and
-      store it. Sent as an upgrade header, so the session protocol does not change.
-- [ ] **7. Server refuses unknown id or wrong token with HTTP 403** → strangers cannot
+      store it. Sent as an `X-Strux-Token` upgrade header, so the session protocol does
+      not change.
+- [x] **7. Server refuses unknown id or wrong token with HTTP 403** → strangers cannot
       register and nobody can take a device's slot. **This is the step that makes public
       exposure safe.** Refuse *before* accepting the upgrade: the device already logs
       `upgrade refused with HTTP 403`, so there is a clear reason on both ends. An
       authenticated reconnect still replaces the old pipe — it proved itself, and
       refusing it would lock a rebooted device out until the dead socket times out.
-- [ ] **8. Dashboard: pending list, approve, forget** → pair a new device in one click,
+- [x] **8. Dashboard: pending list, approve, forget** → pair a new device in one click,
       and recover a board whose NVS was wiped. Pending records hold the token that was
       presented; two different tokens for one id means somebody is guessing, so show
-      both rather than collapsing them.
+      both rather than collapsing them. Built with 7 rather than after it: without an
+      approve button, 7 locks every device out until somebody edits SQLite by hand.
 - [ ] **9. Secrets out of `settings list`** → an approved pipe stops handing out the
       WiFi PSK. Write-only is the recommended shape; detail in
       [secret-settings-over-the-wire](2026-08-05-secret-settings-over-the-wire.md).
@@ -75,8 +79,11 @@ already, so a private image would only add a PAT to keep alive on the server.
 
 ## Hardening
 
-- [ ] **10. Rate-limit `/device`, cap the pending list** → no brute-forcing ids, no junk
-      accumulating.
+- [ ] **10. Rate-limit `/device`** → no brute-forcing ids. The *cap* half of this landed
+      early with step 7: a public endpoint that INSERTs is a disk-filling machine, so
+      `pending` stops at `MAX_PENDING` (50). Past the cap a known pair still counts its
+      attempts, so the signal keeps rising while no new row is created. What is left is
+      the rate limit itself.
 - [ ] **11. Log refusals and approvals** → the attack signal is visible when it fires.
 
 ## Later, only if this ever hosts hardware Bas did not install
@@ -125,3 +132,19 @@ already, so a private image would only add a PAT to keep alive on the server.
   message and no network-triggered NVS write; the secret only travels inside TLS.
 - **Device settings involved:** `relay.enabled`, `relay.url`, `relay.deviceId`,
   and `relay.token` (new in step 6).
+- **Approval needs no push.** The device is already retrying every 5 s, so the reconnect
+  after an approve is the one that succeeds — that *is* the handshake. Which also means an
+  unapproved device logs `upgrade refused with HTTP 403` twelve times a minute until
+  somebody deals with it. Noisy on purpose.
+- **`forget` drops the live pipe too.** The token is only checked when a connection is
+  made, so revoking without closing the socket would leave a forgotten device connected
+  until it happened to reconnect.
+- **The device name is attacker-controlled before approval.** An unapproved stranger's
+  `name` lands in the pending list, which renders on an admin page — so the dashboard
+  escapes it. Escaping is not decoration here.
+- **Two IDF installs, and the tools are not where the docs assume.** `C:\esp\v6.0\esp-idf`
+  is the framework; the toolchain is an ESP-IDF Installation Manager layout under
+  `C:\Espressif\tools`, activated with
+  `. C:\Espressif\tools\Microsoft.v6.0.PowerShell_profile.ps1` (`export.ps1`/`export.sh`
+  both fail — they look for a python env that install never created there). The board is
+  on **COM8**; `.vscode/settings.json` still says COM10.
