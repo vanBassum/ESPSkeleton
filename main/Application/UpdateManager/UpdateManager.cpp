@@ -1,7 +1,6 @@
 #include "UpdateManager.h"
 #include "PartitionWriter.h"
 #include "CommandManager.h"
-#include <cstdlib>
 #include "JsonScope.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -28,26 +27,17 @@ void UpdateManager::Init()
     ESP_LOGI(TAG, "Initialized");
 }
 
-namespace {
-
-// Command handlers run on whichever transport task dispatched them, and those
-// stacks are a few KB — so a multi-KB *local* buffer eats most of one and can
-// scribble on whatever memory follows. In the KC1245 fork that surfaced as a NULL
-// semaphore inside lwIP's select teardown, with no clue in the backtrace pointing
-// at the real culprit. Anything of that size belongs on the heap, freed on every
-// exit path.
-struct HeapBuf
-{
-    uint8_t* p;
-    explicit HeapBuf(size_t n) : p(static_cast<uint8_t*>(malloc(n))) {}
-    ~HeapBuf() { free(p); }
-    HeapBuf(const HeapBuf&) = delete;
-    HeapBuf& operator=(const HeapBuf&) = delete;
-};
-
-constexpr size_t kIoBufSize = 4096;
-
-} // namespace
+// The 4 KB I/O buffer these two commands used to carry is gone rather than moved.
+// It could not live on the stack — handlers run on whichever transport task
+// dispatched them, and 4 KB of a few-KB stack scribbles on whatever follows (in the
+// KC1245 fork that surfaced as a NULL semaphore inside lwIP's select teardown, with
+// nothing in the backtrace pointing at the culprit). The heap fixed that overrun and
+// bought a fragmentation problem plus an allocation that can fail mid-write.
+//
+// Neither is needed: the bytes are already in a buffer at both ends. An upload sits
+// in the transport's inbound buffer, a download is assembled in its framing buffer,
+// and Session lends both out (Stream::canLend), so these handlers move bytes between
+// flash and a buffer they do not own.
 
 const char* UpdateManager::GetRunningPartition() const
 {
@@ -224,19 +214,23 @@ RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
         return RequestError::Ok;
     }
 
-    HeapBuf io(kIoBufSize);
-    if (!io.p)
+    // Asked before the loop, not inside it: past this point 0 means end of image,
+    // and a stream that lends nothing would look exactly like an empty one — an
+    // upload that "succeeded" having written nothing.
+    if (!ctx.in.canLend())
     {
-        int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"out of memory\"}");
+        int len = snprintf(msg, sizeof(msg),
+                           "{\"ok\":false,\"error\":\"transport cannot stream\"}");
         ctx.out.write(msg, len);
         return RequestError::Ok;
     }
 
+    const uint8_t* chunk = nullptr;
     size_t n;
     size_t reported = 0;
-    while ((n = ctx.in.read(io.p, kIoBufSize)) > 0)   // 0 == end of stream == full image
+    while ((n = ctx.in.lendInput(chunk)) > 0)   // 0 == end of stream == full image
     {
-        if (!w.write(io.p, n))
+        if (!w.write(chunk, n))
         {
             int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"write failed\"}");
             ctx.out.write(msg, len);
@@ -346,29 +340,35 @@ RequestError UpdateManager::Cmd_DownloadPartition(CommandContext& ctx)
 
     ESP_LOGI(TAG, "Download partition '%s' (%lu bytes)", label, (unsigned long)p->size);
 
-    HeapBuf io(kIoBufSize);
-    if (!io.p)
+    if (!ctx.out.canLend())
     {
         JsonObject resp(ctx.out);
         resp.field("ok", false);
-        resp.field("error", "out of memory");
+        resp.field("error", "transport cannot stream");
         return RequestError::Ok;
     }
 
+    // Read flash straight into the reply frame the transport is about to send. The
+    // run is one chunk's worth of payload, not a size of ours — which is why there
+    // is no buffer here to pick a size for.
     size_t offset = 0;
     while (offset < p->size)
     {
-        size_t n = (p->size - offset < kIoBufSize) ? (p->size - offset) : kIoBufSize;
-        if (esp_partition_read(p, offset, io.p, n) != ESP_OK)
-        {
-            ESP_LOGE(TAG, "esp_partition_read failed at offset %lu", (unsigned long)offset);
-            return RequestError::Ok;
-        }
-        if (ctx.out.write(io.p, n) != n)
+        size_t avail = 0;
+        uint8_t* dst = ctx.out.lendOutput(avail);
+        if (dst == nullptr)
         {
             ESP_LOGW(TAG, "Client disconnected during download");
             return RequestError::Ok;
         }
+
+        size_t n = (p->size - offset < avail) ? (p->size - offset) : avail;
+        if (esp_partition_read(p, offset, dst, n) != ESP_OK)
+        {
+            ESP_LOGE(TAG, "esp_partition_read failed at offset %lu", (unsigned long)offset);
+            return RequestError::Ok;
+        }
+        ctx.out.commitOutput(n);
         offset += n;
     }
     return RequestError::Ok;

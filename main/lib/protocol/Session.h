@@ -26,6 +26,9 @@
 // the link (RecvChunk) until a chunk carries FLAG_FINAL. A small no-body command
 // is a single FLAG_FINAL chunk, so read() never blocks; a streamed upload is many
 // chunks ending in FLAG_FINAL.
+//
+// Both buffers are also lent out as-is (Stream::canLend and friends), which is what
+// lets a handler stream a firmware image to flash holding no buffer of its own.
 class Session : public Stream
 {
     uint16_t id_;
@@ -53,6 +56,36 @@ class Session : public Stream
         outLen_ = 0;
     }
 
+    // Leave req_ holding at least one unread byte, pulling the next chunk off the
+    // link when the current one is drained. False = end of the request, either
+    // because it ended (reqFinal_) or because the transport broke (failed_).
+    bool ensureInput()
+    {
+        while (reqPos_ >= reqLen_)                      // current chunk drained
+        {
+            if (reqFinal_ || failed_) return false;    // EOF
+            uint16_t sid = 0; uint8_t flags = 0;
+            int n = link_.RecvChunk(inBuf_, inCap_, &sid, &flags);
+            if (n < 0 || sid != id_)
+            {
+                // Logged because the caller sees 0, the same as a clean end of
+                // stream: without a line here a transport failure is silent, and a
+                // reader that trusts 0 to mean "complete" acts on a truncated
+                // request.
+                ESP_LOGE("Session", "read failed after %u bytes: n=%d sid=%u (want %u)",
+                         static_cast<unsigned>(consumed_), n,
+                         static_cast<unsigned>(sid), static_cast<unsigned>(id_));
+                failed_ = true;
+                return false;
+            }
+            req_ = inBuf_ + session::HEADER_LEN;
+            reqLen_ = static_cast<size_t>(n);
+            reqPos_ = 0;
+            reqFinal_ = (flags & session::FLAG_FINAL) != 0;
+        }
+        return true;
+    }
+
 public:
     Session(uint16_t id, SessionLink& link, uint8_t* buf, size_t payloadCap,
             uint8_t* inBuf, size_t inCap)
@@ -70,30 +103,41 @@ public:
     size_t read(void* dst, size_t size, TickType_t timeout = portMAX_DELAY) override
     {
         (void)timeout;
-        while (reqPos_ >= reqLen_)                      // current chunk drained
-        {
-            if (reqFinal_ || failed_) return 0;        // EOF
-            uint16_t sid = 0; uint8_t flags = 0;
-            int n = link_.RecvChunk(inBuf_, inCap_, &sid, &flags);
-            if (n < 0 || sid != id_)
-            {
-                // Logged because this returns 0, the same as a clean end of stream:
-                // without a line here a transport failure is silent, and a reader
-                // that trusts 0 to mean "complete" acts on a truncated request.
-                ESP_LOGE("Session", "read failed after %u bytes: n=%d sid=%u (want %u)",
-                         static_cast<unsigned>(consumed_), n,
-                         static_cast<unsigned>(sid), static_cast<unsigned>(id_));
-                failed_ = true;
-                return 0;
-            }
-            req_ = inBuf_ + session::HEADER_LEN;
-            reqLen_ = static_cast<size_t>(n);
-            reqPos_ = 0;
-            reqFinal_ = (flags & session::FLAG_FINAL) != 0;
-        }
+        if (!ensureInput()) return 0;
         size_t n = std::min(size, reqLen_ - reqPos_);
         if (n) { memcpy(dst, req_ + reqPos_, n); reqPos_ += n; consumed_ += n; }
         return n;
+    }
+
+    // ── Zero-copy handoff (Stream) ────────────────────────────────────────────
+    // The request already sits in the transport's inbound buffer and the reply is
+    // already assembled in its framing buffer, so a handler moving kilobytes can
+    // work in both directly and hold no buffer at all. See Stream.h.
+
+    bool canLend() const override { return true; }
+
+    size_t lendInput(const uint8_t*& data) override
+    {
+        if (!ensureInput()) { data = nullptr; return 0; }
+        const size_t n = reqLen_ - reqPos_;
+        data = req_ + reqPos_;
+        reqPos_ = reqLen_;
+        consumed_ += n;
+        return n;
+    }
+
+    uint8_t* lendOutput(size_t& avail) override
+    {
+        if (outLen_ == cap_) emitChunk(0);   // full buffer → send it, then lend it
+        if (failed_) { avail = 0; return nullptr; }
+        avail = cap_ - outLen_;
+        return buf_ + session::HEADER_LEN + outLen_;
+    }
+
+    void commitOutput(size_t n) override
+    {
+        outLen_ += n;
+        if (outLen_ == cap_) emitChunk(0);   // full buffer → non-final DATA chunk
     }
 
     size_t write(const void* data, size_t size, TickType_t timeout = portMAX_DELAY) override

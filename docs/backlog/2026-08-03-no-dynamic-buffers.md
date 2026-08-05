@@ -8,6 +8,10 @@ buffer simply does not have.
 Nothing here is broken today. This is a direction, with the sites ranked by how much
 they actually matter.
 
+**2026-08-05: sites 2 and 3 are done. Site 1 is the only one left, and it is the one
+waiting on a decision.** What follows is the original plan; the outcome is recorded
+under each site.
+
 ## The pattern to replace them with
 
 It already exists in the transports: `sessionFrame_` and `sessionInbound_` are
@@ -24,6 +28,13 @@ permanent property rather than a current accident.
 
 Mechanically that means the scratch buffer wants to arrive with the session, so a
 handler can reach it without knowing which transport it is serving.
+
+**What actually landed is the shorter version of that.** No scratch buffer had to be
+lent, because a scratch buffer is only there to copy *through*: the bytes are already
+in the transport's buffers at both ends. `Session` lends those out directly
+(`Stream::canLend` / `lendInput` / `lendOutput` / `commitOutput`), and the handlers
+move bytes between flash and a buffer they do not own. The buffer that had to be
+sized, owned, and handed around never needed to exist.
 
 ## Sites, worst first
 
@@ -51,11 +62,27 @@ Runtime-sized, allocated and freed on every scan. Easy fix: a fixed maximum numb
 results, which the caller already bounds anyway (`maxResults`) — so the allocation is
 sized by something we have already decided to cap.
 
+> **Done 2026-08-05, without the fixed array either.** `esp_wifi_scan_get_ap_record`
+> (singular) hands over one record at a time and frees it as it goes, where
+> `esp_wifi_scan_get_ap_records` wants an array as long as the result set — which was
+> the whole reason for the allocation. `Scan` now holds one record and copies straight
+> into the caller's results, plus an `esp_wifi_clear_ap_list` to release whatever the
+> `maxResults` cap left behind in the driver.
+
 **3. `UpdateManager`'s `HeapBuf` — 4 KB per write/download command.**
 Added 2026-08-03 to get the buffer off a transport task stack, where 4 KB of an 8 KB
 stack was too much. The heap was the quick way to fix a real overrun; the borrowed
 per-transport scratch buffer above is the intended answer, and this is the site that
 motivates building it.
+
+> **Done 2026-08-05, zero-copy instead.** `partition write` writes to flash straight
+> out of the run of bytes the session lends it; `partition read` reads flash straight
+> into the reply frame the transport is about to send. Both ask `canLend()` once up
+> front, because past that point "cannot lend" and "nothing left" both come back as
+> zero — and an upload that wrote nothing must not report success. One consequence
+> worth knowing: a download's flash reads are now one reply-payload each (512 B on the
+> browser socket, 1 KB on the relay) rather than 4 KB, which changes nothing about the
+> frame count because those payloads were always the unit that went out.
 
 **4. `ConsoleManager`'s log ring — one allocation at Init, never freed.**
 Effectively static already: allocated once at startup, sized from constants, PSRAM
@@ -68,3 +95,6 @@ Do **2** first — it is small and self-contained. Then **3** together with buil
 borrowed-scratch mechanism, since 3 is the reason to build it. Leave **1** until the
 RAM trade above has actually been decided; changing it without that decision just
 moves the problem. Leave **4** alone unless the rule is literal.
+
+**2026-08-05: 2 and 3 done as above, and the mechanism 3 was supposed to motivate was
+never needed. 1 still waits on the RAM trade, 4 still left alone.**
