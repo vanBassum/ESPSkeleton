@@ -16,10 +16,15 @@
 // Implementations, each owned by the manager that owns its transport:
 //   WsSessionLink    — the local browser socket. One chunk = one WS binary frame;
 //                      inbound frames are read synchronously on the httpd task.
-//   RelaySessionLink — the outbound socket to the relay server.
-//                      esp_websocket_client is event-callback driven, so its
-//                      RecvChunk blocks on a queue the callback fills. See
+//   RelaySessionLink — the outbound socket to the relay server. Also a synchronous
+//                      read, on the task that runs the command. See
 //                      docs/superpowers/specs/2026-08-02-remote-access-relay-design.md.
+//
+// Both are now the same shape, and that is worth stating because it was not always
+// true: the relay used to receive frames on a WebSocket library's own task and hand
+// them across on a queue, which cost a heap allocation per frame and silently
+// dropped chunks when the queue filled. RecvChunk being an actual read on the
+// calling task is what a streaming handler needs, and now both have it.
 //
 // SendRaw takes a WHOLE pre-framed chunk rather than (session, flags, payload):
 // Session assembles the 3-byte header and the payload into one external buffer,

@@ -11,6 +11,7 @@ set(SOURCE_FILES_LIST
     "Application/WebServerManager/ConnectionRegistry.cpp"
     "Application/WebServerManager/SessionTable.cpp"
     "Application/RelayManager/RelayManager.cpp"
+    "Application/RelayManager/RelaySocket.cpp"
     "Application/CommandManager/CommandManager.cpp"
     "Application/UpdateManager/UpdateManager.cpp"
     "Application/UpdateManager/PartitionWriter.cpp"
@@ -60,6 +61,11 @@ set(COMPONENT_REQUIRES
     wear_levelling
     esp_driver_gpio
     mdns
+    # The relay drives a WebSocket at the transport layer instead of through
+    # esp_websocket_client — see RelaySocket.h for why. esp-tls comes with it for
+    # the certificate bundle a wss:// pipe verifies against.
+    tcp_transport
+    esp-tls
 )
 
 # ── Board selection ────────────────────────────────────────────

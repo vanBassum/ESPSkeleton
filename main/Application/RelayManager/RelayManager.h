@@ -7,9 +7,8 @@
 #include "CommandEnvelope.h"
 #include "SessionProtocol.h"
 #include "WsConnection.h"
+#include "RelaySocket.h"
 #include "RelaySessionLink.h"
-
-#include <esp_websocket_client.h>
 
 class Authenticator;
 
@@ -37,13 +36,25 @@ class RelayManager
     // chunks to the local transport's 4096).
     static constexpr size_t INBOUND_WINDOW = 4096;
 
-    // Deep enough that a firmware push keeps streaming while the consumer pauses to
-    // write flash (~32 ms per 4 KB sector). Depth 8 was sized for request/reply; the
-    // KC1245 fork measured chunk loss at that depth on a continuous upload, and a
-    // dropped chunk is invisible to the session layer — it silently corrupts the
-    // image rather than failing.
-    static constexpr int QUEUE_DEPTH = 16;
-    static constexpr int TASK_STACK  = 8192;
+    // This task reads the socket AND runs the command, so its stack has to cover the
+    // heaviest handler and, on a wss:// pipe, a TLS handshake — never at the same
+    // time, so it is the larger of the two rather than the sum.
+    static constexpr int TASK_STACK = 10240;
+
+    static constexpr int CONNECT_TIMEOUT_MS  = 10000;
+    static constexpr int RECONNECT_DELAY_MS  = 5000;
+
+    // How long a read waits between requests. Also the tick of the keepalive below.
+    static constexpr int IDLE_POLL_MS = 1000;
+
+    // Ping after this many idle polls. Nothing on the pipe means nothing to notice a
+    // dead TCP connection by, so we make traffic: a ping that cannot be sent is the
+    // signal to reconnect.
+    static constexpr int PING_EVERY_IDLE_POLLS = 30;
+    static constexpr int PING_TIMEOUT_MS = 2000;
+
+    // A log line is worth less than the task that emits it: never wait long.
+    static constexpr int BROADCAST_TIMEOUT_MS = 200;
 
 public:
     explicit RelayManager(ServiceProvider& serviceProvider);
@@ -66,8 +77,7 @@ private:
     ServiceProvider& serviceProvider_;
     InitState initState_;
 
-    esp_websocket_client_handle_t client_ = nullptr;
-    QueueHandle_t inbound_ = nullptr;
+    RelaySocket socket_;
     Task task_;
     volatile bool linkUp_ = false;
 
@@ -86,16 +96,21 @@ private:
 
     // Framing buffers, members rather than stack: this task's stack is sized for
     // the heaviest command handler and must not also carry these.
+    //
+    // sessionInbound_ is the ONLY inbound buffer. A frame is read straight into it
+    // and the session's first chunk is read out of it in place; further chunks of
+    // the same request refill it, which is safe because a session only ever refills
+    // once the current chunk is drained. It used to be one of three — a reassembly
+    // buffer, a heap copy per frame, and this — because a frame had to survive being
+    // handed between two tasks. One task, one buffer.
     uint8_t sessionFrame_[session::HEADER_LEN + SESSION_WINDOW];
     uint8_t sessionInbound_[session::HEADER_LEN + INBOUND_WINDOW];
 
-    // WebSocket frame reassembly. esp_websocket_client can deliver one frame as
-    // several DATA events; a chunk must be whole before it is queued or dispatch
-    // gets a truncated header.
-    uint8_t asmBuf_[session::HEADER_LEN + INBOUND_WINDOW];
-    size_t  asmLen_ = 0;
-    bool    asmActive_ = false;
-    bool    asmOverflow_ = false;
+    // A session whose handler returned before the request's FINAL chunk leaves body
+    // bytes on the wire. They are skipped by id rather than blindly discarded, which
+    // is only possible now that this task does the reading.
+    uint16_t skipSid_ = 0;
+    bool     skipping_ = false;
 
     void BuildUri();
     void ResolveDeviceId();
@@ -104,12 +119,6 @@ private:
 
     void OnConnected();
     void OnDisconnected();
-    void OnData(const void* eventData);
-    /// Discard everything queued; returns the number of real chunks dropped
-    /// (sentinels excluded) so a caller can report residue.
-    size_t DrainQueue();
-
-    static void EventHandler(void* ctx, esp_event_base_t base, int32_t id, void* data);
 
     // ── Settings (registered with SettingsManager in Init) ──
     inline static BoolSetting   enabled_  { "relay.enabled",  "Relay Enabled",   false };

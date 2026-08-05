@@ -72,6 +72,21 @@ nothing should differ.
 
 ### Why `RecvChunk()` must be queue-backed on the relay
 
+> **Superseded 2026-08-05 — it must not be.** Everything below is a correct
+> description of what `esp_websocket_client` forces, and the conclusion drawn from it
+> was that the relay is simply the transport that cannot read. It isn't: one layer
+> below that client, the same handshake and framing are an ordinary blocking read, so
+> the relay task now reads the socket *and* runs the command, like the browser socket
+> does. `RelaySocket` is that read; `RelaySessionLink::RecvChunk` is four lines on top
+> of it. The queue, the per-frame `malloc`, the reassembly buffer, and the disconnect
+> sentinel are all gone — with them went the dropped-chunk failure mode that made the
+> queue depth a correctness knob. See
+> `docs/reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md`.
+>
+> What survives from this section: a command handler still must not run on a task it
+> depends on for input — that is exactly why the reading moved to *our* task rather
+> than the handler moving to theirs.
+
 This is the one place the two transports genuinely differ, and it is easy to
 discover the hard way at the end of the project instead of the start.
 

@@ -8,9 +8,9 @@ buffer simply does not have.
 Nothing here is broken today. This is a direction, with the sites ranked by how much
 they actually matter.
 
-**2026-08-05: sites 2 and 3 are done. Site 1 is the only one left, and it is the one
-waiting on a decision.** What follows is the original plan; the outcome is recorded
-under each site.
+**2026-08-05: all of 1, 2 and 3 are done — and none of them the way this plan
+expected.** What follows is the original plan; the outcome is recorded under each
+site. Site 4 is left alone, as intended.
 
 ## The pattern to replace them with
 
@@ -57,6 +57,17 @@ decision rather than a patch:
 - a small fixed pool of slots plus explicit refusal when it is exhausted, which is at
   least a *bounded* failure instead of a heap-dependent one.
 
+> **Done 2026-08-05, and none of those four were the answer.** Every one of them
+> accepts the queue and argues about its size. The queue exists because frames arrived
+> on `esp_websocket_client`'s task and had to be handed to ours; drive the WebSocket at
+> the transport layer instead and the relay task reads the socket itself, so there is
+> no handoff to buffer. Gone: the queue, the allocation, the depth, the reassembly
+> buffer, the stale-chunk drain, the disconnect sentinel — and the dropped chunk, which
+> was the real defect all along (a full queue silently wrote a hole into a firmware
+> image). One 4 KB inbound buffer remains because a chunk must be whole to be routed,
+> and backpressure is the TCP window. Reasoning:
+> `docs/reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md`.
+
 **2. `WiFiInterface::ScanNetworks` — `new wifi_ap_record_t[count]` per scan.**
 Runtime-sized, allocated and freed on every scan. Easy fix: a fixed maximum number of
 results, which the caller already bounds anyway (`maxResults`) — so the allocation is
@@ -96,5 +107,10 @@ borrowed-scratch mechanism, since 3 is the reason to build it. Leave **1** until
 RAM trade above has actually been decided; changing it without that decision just
 moves the problem. Leave **4** alone unless the rule is literal.
 
-**2026-08-05: 2 and 3 done as above, and the mechanism 3 was supposed to motivate was
-never needed. 1 still waits on the RAM trade, 4 still left alone.**
+**2026-08-05: 1, 2 and 3 all done, and in each case the buffer this plan set out to
+size correctly turned out not to be needed at all. The borrowed-scratch mechanism 3 was
+supposed to motivate was never built, and 1's RAM trade was never decided — it was
+removed. 4 left alone, as intended.**
+
+Worth keeping as the lesson: this plan was written as "these buffers are the wrong
+size, pick better sizes." All three answers came from asking why the buffer was there.

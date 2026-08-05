@@ -3,20 +3,25 @@
 Rewritten as work lands — this is the ordered view, not a log. The detail lives in
 `docs/backlog/`; this file only says what to do next and what is waiting on a decision.
 
-Last updated 2026-08-05, after the cheap half of the buffer plan and `help`.
+Last updated 2026-08-05, after the buffer plan, `help`, and the relay reading its own
+socket.
+
+## Needs hardware, not thought
+
+1. **Flash and exercise the relay rewrite.** The relay now drives its WebSocket at the
+   transport layer and reads on the task that runs the command, so the queue, the
+   per-frame `malloc` and the dropped-chunk failure mode are gone (and with them the
+   RAM trade this list used to lead with). It builds; nothing has run on a device.
+   Push a firmware update over the relay, watch a reconnect, and confirm the keepalive
+   holds an idle pipe up.
+   Detail: [`reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md`](reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md)
 
 ## Waiting on a decision, not on code
 
-1. **The relay's per-frame `malloc`** — now the only dynamic buffer left in the request
-   path. One allocate/free per inbound WebSocket frame, hundreds per upload, which is
-   the shape that fragments a heap. The obvious fixed-size
-   replacement is queue depth 16 × 4 KB ≈ 65 KB against 109 KB free heap, so it trades
-   against upload throughput, chunk size, or PSRAM. Changing it without deciding that
-   only moves the problem.
-   Detail: [`backlog/2026-08-03-no-dynamic-buffers.md`](backlog/2026-08-03-no-dynamic-buffers.md)
-
 2. **The relay gate watchdog** — measure idleness, not session length. Decide together
-   with the device's own `RECV_TIMEOUT_MS`, since the two interact.
+   with the device's own `RECV_TIMEOUT_MS`, since the two interact. The device half now
+   has an answer (ping after 30 idle seconds, reconnect when one will not send), so
+   what is left is the server's gate.
    Detail: [`backlog/2026-08-02-relay-gate-watchdog-upload.md`](backlog/2026-08-02-relay-gate-watchdog-upload.md)
 
 3. **Device→server credential.** The worst gap: anything that guesses the MAC-derived

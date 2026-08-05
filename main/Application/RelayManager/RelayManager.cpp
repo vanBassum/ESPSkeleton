@@ -49,32 +49,10 @@ void RelayManager::Init()
     ResolveDeviceId();
     BuildUri();
 
-    inbound_ = xQueueCreate(QUEUE_DEPTH, sizeof(RelayFrame));
-    if (!inbound_)
-    {
-        ESP_LOGE(TAG, "Failed to create inbound queue");
-        return;
-    }
-
-    esp_websocket_client_config_t cfg = {};
-    cfg.uri = uri_;
-    cfg.reconnect_timeout_ms = 5000;    // built-in auto-reconnect; no loop of ours
-    cfg.network_timeout_ms = 10000;
-    cfg.task_stack = 4096;              // the client's own task; ours is separate
-
-    client_ = esp_websocket_client_init(&cfg);
-    if (!client_)
-    {
-        ESP_LOGE(TAG, "Failed to init WebSocket client for %s", uri_);
-        return;
-    }
-
-    esp_websocket_register_events(client_, WEBSOCKET_EVENT_ANY, EventHandler, this);
-
-    // Command handlers must NOT run on the WebSocket client's task: a handler
-    // blocked in Session::read() waits on the queue that only that task fills,
-    // which would deadlock. So dispatch gets its own task, stack sized for the
-    // heaviest handler.
+    // One task connects, reads the socket, and runs the commands it reads. That is
+    // the whole transport: there is no second task and no queue between them, because
+    // the socket underneath is one this task reads rather than one that calls it back
+    // (see RelaySocket). Reconnecting is part of the same loop.
     task_.Init("relay", 5, TASK_STACK);
     task_.SetHandler([this] { TaskLoop(); });
     if (!task_.Run())
@@ -82,8 +60,6 @@ void RelayManager::Init()
         ESP_LOGE(TAG, "Failed to start relay task");
         return;
     }
-
-    esp_websocket_client_start(client_);
 
     ESP_LOGI(TAG, "Connecting to %s", uri_);
     initAttempt.SetReady();
@@ -122,40 +98,68 @@ void RelayManager::BuildUri()
              url, sep, deviceId_, app ? app->version : "unknown");
 }
 
-// ──────────────────────────────────────────────────────────────
-// WebSocket client events (run on the client's own task)
-// ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────
+// The pipe: connect, read, dispatch, repeat
+// ──────────────────────────────────────────────────────────
 
-void RelayManager::EventHandler(void* ctx, esp_event_base_t, int32_t id, void* data)
+void RelayManager::TaskLoop()
 {
-    auto* self = static_cast<RelayManager*>(ctx);
-    if (!self) return;
+    int idlePolls = 0;
 
-    switch (id)
+    for (;;)
     {
-        case WEBSOCKET_EVENT_CONNECTED:    self->OnConnected();    break;
-        case WEBSOCKET_EVENT_DISCONNECTED: self->OnDisconnected(); break;
-        case WEBSOCKET_EVENT_DATA:         self->OnData(data);     break;
-        case WEBSOCKET_EVENT_ERROR:
-            ESP_LOGW(TAG, "WebSocket error");
-            break;
-        default:
-            break;
+        if (!socket_.IsConnected())
+        {
+            if (!socket_.Connect(uri_, CONNECT_TIMEOUT_MS))
+            {
+                vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
+                continue;
+            }
+            OnConnected();
+            idlePolls = 0;
+        }
+
+        // Between requests this is where the task sits. Mid-request the same read
+        // happens under the session, one layer down (RelaySessionLink) — same socket,
+        // same task, which is the property that removed the queue.
+        const int n = socket_.ReadFrame(sessionInbound_, sizeof(sessionInbound_),
+                                       IDLE_POLL_MS);
+        if (n < 0)
+        {
+            OnDisconnected();
+            continue;
+        }
+
+        if (n == 0)
+        {
+            // Silence. Make some traffic occasionally: a ping that will not go out is
+            // how an otherwise idle pipe finds out its TCP connection is gone.
+            if (++idlePolls >= PING_EVERY_IDLE_POLLS)
+            {
+                idlePolls = 0;
+                if (!socket_.SendPing(PING_TIMEOUT_MS))
+                {
+                    ESP_LOGW(TAG, "keepalive ping failed");
+                    OnDisconnected();
+                }
+            }
+            continue;
+        }
+
+        idlePolls = 0;
+        HandleFrame(sessionInbound_, static_cast<size_t>(n));
     }
 }
 
 void RelayManager::OnConnected()
 {
-    DrainQueue();
-
     // A reconnect is a fresh pipe: drop the old auth state so a new remote user
     // must authenticate again.
     conn_.reset();
     conn_.fd = -1;   // "slot in use" — there is no socket fd on this transport
     conn_.authed = !(auth_ && auth_->AuthRequired());
 
-    asmLen_ = 0;
-    asmOverflow_ = false;
+    skipping_ = false;
     linkUp_ = true;
 
     ESP_LOGI(TAG, "Connected as '%s'%s", deviceId_,
@@ -165,105 +169,13 @@ void RelayManager::OnConnected()
 void RelayManager::OnDisconnected()
 {
     linkUp_ = false;
+    skipping_ = false;
+    socket_.Close();
 
-    // Unblock a handler waiting in Session::read() so its session EOFs instead of
-    // hanging until the recv timeout.
-    RelayFrame sentinel{ nullptr, 0 };
-    if (inbound_) xQueueSend(inbound_, &sentinel, 0);
-
+    // Nothing to unblock: a handler waiting for its next chunk is waiting on a read
+    // of this same socket, on this same task, so it has already returned by now.
     ESP_LOGW(TAG, "Disconnected — will retry");
-}
-
-void RelayManager::OnData(const void* eventData)
-{
-    auto* d = static_cast<const esp_websocket_event_data_t*>(eventData);
-
-    // op_code 0x02 = binary, 0x00 = continuation. Everything else (text, ping,
-    // pong, close) is not a session chunk — the pipe carries binary only, same as
-    // the local socket.
-    if (d->op_code != 0x02 && d->op_code != 0x00) return;
-
-    // A payload larger than the client's internal buffer arrives as several DATA
-    // events with advancing payload_offset; offset 0 starts a new message.
-    if (d->payload_offset == 0)
-    {
-        asmLen_ = 0;
-        asmOverflow_ = false;
-    }
-
-    size_t end = static_cast<size_t>(d->payload_offset) + static_cast<size_t>(d->data_len);
-    if (end > sizeof(asmBuf_))
-    {
-        if (!asmOverflow_)
-            ESP_LOGW(TAG, "Inbound frame too large (%d bytes > %u), dropping",
-                     d->payload_len, static_cast<unsigned>(sizeof(asmBuf_)));
-        asmOverflow_ = true;
-    }
-    else if (d->data_len > 0)
-    {
-        memcpy(asmBuf_ + d->payload_offset, d->data_ptr, d->data_len);
-    }
-    asmLen_ = end;
-
-    if (asmLen_ < static_cast<size_t>(d->payload_len)) return;   // more to come
-    if (asmOverflow_ || asmLen_ < session::HEADER_LEN) return;
-
-    // Hand the dispatch task its own copy — the event buffer is reused at once.
-    auto* copy = static_cast<uint8_t*>(malloc(asmLen_));
-    if (!copy)
-    {
-        ESP_LOGE(TAG, "Out of memory for a %u-byte chunk", static_cast<unsigned>(asmLen_));
-        return;
-    }
-    memcpy(copy, asmBuf_, asmLen_);
-
-    RelayFrame f{ copy, asmLen_ };
-    if (xQueueSend(inbound_, &f, pdMS_TO_TICKS(500)) != pdTRUE)
-    {
-        ESP_LOGW(TAG, "Inbound queue full, dropped session %u",
-                 session::readU16(copy));
-        free(copy);
-    }
-}
-
-size_t RelayManager::DrainQueue()
-{
-    if (!inbound_) return 0;
-    size_t n = 0;
-    RelayFrame f{};
-    while (xQueueReceive(inbound_, &f, 0) == pdTRUE)
-    {
-        if (f.data) ++n;   // sentinels are not chunks, so they do not count
-        free(f.data);      // free(nullptr) is a no-op, so sentinels are fine
-    }
-    return n;
-}
-
-// ──────────────────────────────────────────────────────────────
-// Dispatch task
-// ──────────────────────────────────────────────────────────────
-
-void RelayManager::TaskLoop()
-{
-    for (;;)
-    {
-        RelayFrame f{};
-        if (xQueueReceive(inbound_, &f, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
-        if (!f.data) continue;   // disconnect sentinel — nothing to dispatch
-
-        HandleFrame(f.data, f.len);
-        free(f.data);
-
-        // The server holds one request in flight per device (its per-device gate),
-        // so anything still queued once a request returns is residue from a session
-        // that ended early — a broken pipe, a reject, the server's watchdog. Left
-        // there, the next loop reads a leftover *body* chunk as a session header and
-        // invents a command out of firmware bytes, so one failed upload poisons the
-        // next. Discard it, and say how much.
-        if (size_t stale = DrainQueue())
-            ESP_LOGW(TAG, "discarded %u stale chunk(s) after the session ended",
-                     static_cast<unsigned>(stale));
-    }
+    vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
 }
 
 void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
@@ -274,17 +186,44 @@ void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
     uint8_t  flags = frame[2];
     const uint8_t* payload = frame + session::HEADER_LEN;
     size_t plen = len - session::HEADER_LEN;
+    const bool final = (flags & session::FLAG_FINAL) != 0;
+
+    // Residue: the tail of a request whose handler already returned. Read as a fresh
+    // chunk it would be taken for a request header, and a command invented out of
+    // firmware bytes. Skipped by id, so an unrelated session is never caught in it.
+    if (skipping_)
+    {
+        if (sid == skipSid_)
+        {
+            if (final)
+            {
+                skipping_ = false;
+                ESP_LOGW(TAG, "session %u: skipped to the end of an abandoned body",
+                         static_cast<unsigned>(sid));
+            }
+            return;
+        }
+        skipping_ = false;   // a different session: whatever was left is behind us
+    }
 
     // Identical to the local transport's frame path (WebSocketHandler::HandleBinary),
     // because everything above SessionLink is shared: the gate says what may run yet,
     // the chunk becomes a Session, and CommandManager runs the command.
-    RelaySessionLink link(client_, inbound_);
+    RelaySessionLink link(socket_);
     AuthGate gate(conn_, *auth_);
 
     Session s(sid, link, sessionFrame_, SESSION_WINDOW,
               sessionInbound_, sizeof(sessionInbound_));
-    s.feedRequest(payload, plen, (flags & session::FLAG_FINAL) != 0);
+    s.feedRequest(payload, plen, final);
     protocol::RunCommandSession(s, serviceProvider_.getCommandManager(), gate);
+
+    // Returned without reaching FINAL — a refusal, or a handler that read less than
+    // was sent. The rest is still coming down the socket.
+    if (!s.requestEnded() && socket_.IsConnected())
+    {
+        skipSid_  = sid;
+        skipping_ = true;
+    }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -293,11 +232,11 @@ void RelayManager::HandleFrame(const uint8_t* frame, size_t len)
 
 void RelayManager::BroadcastLog(const char* json, int len)
 {
-    if (!client_ || !linkUp_) return;
+    if (!linkUp_) return;
 
-    // Same session-0 chunk the local socket broadcasts. No send mutex needed:
-    // esp_websocket_client_send_bin holds the client's lock for a whole frame, so
-    // this cannot interleave with a session's chunks.
+    // Same session-0 chunk the local socket broadcasts. This runs on the console
+    // task, so it can collide with a session's reply on the relay task —
+    // RelaySocket's send lock is what keeps a frame from being split in half.
     uint8_t buf[session::HEADER_LEN + 256];
     int cap = static_cast<int>(sizeof(buf) - session::HEADER_LEN);
     if (len > cap) len = cap;
@@ -308,7 +247,6 @@ void RelayManager::BroadcastLog(const char* json, int len)
 
     // Short timeout and no logging on failure — this runs on the console
     // broadcast task, and a log line here would feed itself.
-    esp_websocket_client_send_bin(client_, reinterpret_cast<const char*>(buf),
-                                  static_cast<int>(session::HEADER_LEN) + len,
-                                  pdMS_TO_TICKS(200));
+    socket_.SendBinary(buf, session::HEADER_LEN + static_cast<size_t>(len),
+                       BROADCAST_TIMEOUT_MS);
 }

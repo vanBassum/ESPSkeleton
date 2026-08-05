@@ -183,4 +183,10 @@ public:
     /// `Stream&` can ask too.
     bool failed() const override { return failed_; }
     uint16_t id() const { return id_; }
+
+    /// Did the request reach its FINAL chunk? A handler can return before that —
+    /// a refusal, a short read — and then body chunks are still on their way. A
+    /// transport that reads its own wire has to swallow them, or the next read takes
+    /// a body chunk for a request header and invents a command out of firmware bytes.
+    bool requestEnded() const { return reqFinal_; }
 };
