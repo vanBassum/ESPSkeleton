@@ -39,10 +39,12 @@ import asyncio
 import hmac
 import json
 import logging
+import os
 import sqlite3
 import struct
 import time
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 log = logging.getLogger("relay")
@@ -57,12 +59,19 @@ FLAG_REJECT = 0x02
 # request/response and session 0 must be forwarded to every attached browser.
 BROADCAST_SESSION = 0
 
+# Also device-initiated, but consumed here instead of forwarded: Influx line protocol,
+# one or more lines per chunk. A separate id from 0 because the two channels have
+# different destinations — logs go to every browser, measurements go to a database —
+# and the header is the right place to say which, rather than sniffing the payload.
+TELEMETRY_SESSION = 0xFFFF
+
 # Session-id ownership. Both this server and a browser would otherwise allocate
 # from 1 on the same device socket and collide — which presents as "the device
 # replied to the wrong request". So the server owns the space: browser ids are
 # rewritten into the low half, our own web-read sessions come from the high half.
+# SERVER_ID_LIMIT stops one short of 0x10000 to keep TELEMETRY_SESSION unallocatable.
 BROWSER_ID_BASE, BROWSER_ID_LIMIT = 1, 0x8000
-SERVER_ID_BASE, SERVER_ID_LIMIT = 0x8000, 0x10000
+SERVER_ID_BASE, SERVER_ID_LIMIT = 0x8000, TELEMETRY_SESSION
 
 # How long a session may go SILENT before this server gives up on it — never how
 # long it may run. A 1 MB upload legitimately takes tens of seconds and used to have
@@ -82,6 +91,125 @@ SESSION_IDLE_TIMEOUT = 15.0
 
 class RelayError(Exception):
     """The device answered, but not usefully (reject, malformed, disconnected)."""
+
+
+# ── Telemetry forwarding ──────────────────────────────────────────────────────
+# Devices emit Influx LINE PROTOCOL, already formatted, so this server stays what it
+# is everywhere else: something that moves bytes without interpreting them. It batches
+# lines and POSTs them; it does not parse a measurement, a tag or a field.
+#
+# The one thing that costs: a device tags its own points with `device=<id>`, and this
+# server does not verify that. An approved device could therefore write points
+# attributed to another device. Injecting the tag here instead would mean finding the
+# first unescaped space in every line — parsing, and the fiddly end of it. Left as the
+# device's job while every device is one Bas installed; the note in the backlog says
+# what to do if that stops being true.
+
+class InfluxWriter:
+    """Batches line-protocol lines and POSTs them to InfluxDB.
+
+    Inert unless configured. A device that sends telemetry to a relay with no Influx
+    behind it is not an error — the points are dropped and said so once.
+    """
+
+    # A device sends a point every few seconds and there may be many devices, so
+    # batching keeps this from being one HTTP request per measurement. Either bound
+    # trips a flush.
+    MAX_BATCH = 500
+    MAX_AGE = 5.0
+
+    # Long enough to ride out a slow write, short enough that a wedged Influx does not
+    # hold the flush task forever.
+    TIMEOUT = 10.0
+
+    def __init__(self, url: str, token: str, org: str, bucket: str):
+        self.enabled = bool(url and token and bucket)
+        self.url = url.rstrip("/") if url else ""
+        self.token = token
+        self.org = org
+        self.bucket = bucket
+        self.lines: list[bytes] = []
+        self.dropped = 0
+        self.written = 0
+        self._oldest = 0.0
+        self._session: aiohttp.ClientSession | None = None
+        self._task: asyncio.Task | None = None
+        self._warned = False
+
+    async def start(self) -> None:
+        if not self.enabled:
+            log.info("telemetry: no Influx configured — device points will be dropped")
+            return
+        self._session = aiohttp.ClientSession()
+        self._task = asyncio.create_task(self._flusher())
+        log.info("telemetry: writing to %s bucket %r as org %r",
+                 self.url, self.bucket, self.org)
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+        if self.lines:
+            await self._flush()
+        if self._session:
+            await self._session.close()
+
+    def submit(self, payload: bytes) -> None:
+        """One telemetry chunk: one or more line-protocol lines, newline separated."""
+        if not self.enabled:
+            if not self._warned:
+                self._warned = True
+                log.warning("telemetry: dropping points, no Influx configured")
+            self.dropped += 1
+            return
+
+        fresh = [ln.strip() for ln in payload.split(b"\n") if ln.strip()]
+        if not fresh:
+            return
+        if not self.lines:
+            self._oldest = time.monotonic()
+        self.lines.extend(fresh)
+        # Size bound is checked here so a burst does not sit waiting for the timer.
+        if len(self.lines) >= self.MAX_BATCH:
+            asyncio.create_task(self._flush())
+
+    async def _flusher(self) -> None:
+        while True:
+            await asyncio.sleep(1.0)
+            if self.lines and time.monotonic() - self._oldest >= self.MAX_AGE:
+                await self._flush()
+
+    async def _flush(self) -> None:
+        if not self.lines or not self._session:
+            return
+        batch, self.lines = self.lines, []
+
+        # ns precision: the device sends nanoseconds when its clock is synced, and
+        # omits the timestamp entirely when it is not, letting Influx stamp arrival.
+        url = f"{self.url}/api/v2/write"
+        params = {"org": self.org, "bucket": self.bucket, "precision": "ns"}
+        headers = {"Authorization": f"Token {self.token}",
+                   "Content-Type": "text/plain; charset=utf-8"}
+        try:
+            async with self._session.post(
+                url, params=params, headers=headers, data=b"\n".join(batch),
+                timeout=aiohttp.ClientTimeout(total=self.TIMEOUT),
+            ) as r:
+                if r.status >= 300:
+                    body = (await r.text())[:300]
+                    self.dropped += len(batch)
+                    log.warning("telemetry: Influx refused %d lines (HTTP %d): %s",
+                                len(batch), r.status, body)
+                else:
+                    self.written += len(batch)
+                    log.debug("telemetry: wrote %d lines", len(batch))
+        except Exception as exc:
+            # Dropped, not retried: there is no buffer here yet and holding a growing
+            # list while Influx is down trades a gap in a graph for the relay's RAM.
+            self.dropped += len(batch)
+            log.warning("telemetry: write of %d lines failed (%s)", len(batch), exc)
+
+
+influx: InfluxWriter | None = None
 
 
 class DeviceConnection:
@@ -210,6 +338,14 @@ class DeviceConnection:
 
         if sid == BROADCAST_SESSION:
             await self.fanout(data)        # verbatim — the browser expects this shape
+            return
+
+        # Consumed here, not forwarded. Deliberately NOT fanned out to browsers: a
+        # measurement is not a log line, and the frontend would have to learn a second
+        # payload shape on a channel it treats as text.
+        if sid == TELEMETRY_SESSION:
+            if influx is not None:
+                influx.submit(payload)
             return
 
         # Device → us counts as progress: an upload's progress reports arrive this way,
@@ -684,6 +820,12 @@ async def api_pairing(request: web.Request) -> web.StreamResponse:
         "approved": store.approved(),
         "events": store.recent_events(20),
         "connected": sorted(devices.keys()),
+        "telemetry": {
+            "enabled": bool(influx and influx.enabled),
+            "written": influx.written if influx else 0,
+            "dropped": influx.dropped if influx else 0,
+            "queued": len(influx.lines) if influx else 0,
+        },
     })
 
 
@@ -870,6 +1012,16 @@ function eventBlock(events) {
     + '</div>';
 }
 
+function telemetryBlock(t) {
+  if (!t) return '';
+  if (!t.enabled) return '<h2>Telemetry</h2><div class="ev">No Influx configured — '
+                        + 'device points are dropped.</div>';
+  return '<h2>Telemetry</h2><div class="ev">' + t.written + ' points written'
+       + (t.queued ? ', ' + t.queued + ' queued' : '')
+       + (t.dropped ? ', <b>' + t.dropped + ' dropped</b>' : '')
+       + '</div>';
+}
+
 async function tick() {
   let live = [], pair = { pending: [], approved: [], events: [] };
   try {
@@ -880,7 +1032,7 @@ async function tick() {
   } catch (e) { return; }
   document.getElementById('out').innerHTML =
       pendingBlock(pair.pending) + deviceBlock(live, pair.approved)
-    + eventBlock(pair.events);
+    + telemetryBlock(pair.telemetry) + eventBlock(pair.events);
 }
 tick(); setInterval(tick, 2000);
 </script>
@@ -916,6 +1068,19 @@ def build_app() -> web.Application:
     app.router.add_get("/devices/{deviceId}", device_redirect)
     app.router.add_get("/devices/{deviceId}/", device_frontend)
     app.router.add_get("/devices/{deviceId}/{path:.*}", device_frontend)
+
+    # The Influx client needs a running loop, so it starts with the app rather than
+    # in main().
+    async def _start(_app):
+        assert influx is not None
+        await influx.start()
+
+    async def _stop(_app):
+        assert influx is not None
+        await influx.stop()
+
+    app.on_startup.append(_start)
+    app.on_cleanup.append(_stop)
     return app
 
 
@@ -935,8 +1100,17 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    global store
+    global store, influx
     store = Store(args.db)
+
+    # Env rather than flags: these are deployment facts and one of them is a secret,
+    # so they come from the compose file alongside every other secret on this host.
+    influx = InfluxWriter(
+        url=os.environ.get("INFLUX_URL", ""),
+        token=os.environ.get("INFLUX_TOKEN", ""),
+        org=os.environ.get("INFLUX_ORG", ""),
+        bucket=os.environ.get("INFLUX_BUCKET", ""),
+    )
 
     log.info("relay listening on http://%s:%d  (device endpoint: /device)",
              args.host, args.port)

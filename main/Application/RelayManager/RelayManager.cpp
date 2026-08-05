@@ -363,3 +363,26 @@ void RelayManager::BroadcastLog(const char* json, int len)
     socket_.SendBinary(buf, session::HEADER_LEN + static_cast<size_t>(len),
                        BROADCAST_TIMEOUT_MS);
 }
+
+bool RelayManager::BroadcastTelemetry(const char* line, int len)
+{
+    if (!linkUp_) return false;
+    if (len <= 0) return false;
+
+    // Sized for one line, which TelemetryManager already bounded. A point that does
+    // not fit here would be a formatting bug there, so it is refused rather than cut.
+    uint8_t buf[session::HEADER_LEN + 384];
+    if (static_cast<size_t>(len) > sizeof(buf) - session::HEADER_LEN)
+    {
+        ESP_LOGW(TAG, "telemetry line too long (%d) — dropped", len);
+        return false;
+    }
+
+    session::writeHeader(buf, session::TELEMETRY_SESSION, session::FLAG_FINAL);
+    memcpy(buf + session::HEADER_LEN, line, static_cast<size_t>(len));
+
+    // Same send lock as everything else on this socket: this is called from whichever
+    // task took the measurement, which is not the relay task.
+    return socket_.SendBinary(buf, session::HEADER_LEN + static_cast<size_t>(len),
+                              BROADCAST_TIMEOUT_MS);
+}

@@ -7,6 +7,7 @@ class NetworkManager;
 class RelayManager;
 class SettingsManager;
 class SystemManager;
+class TelemetryManager;
 class TimeManager;
 class UpdateManager;
 class WebServerManager;
@@ -21,6 +22,7 @@ public:
     virtual RelayManager& getRelayManager() = 0;
     virtual SettingsManager& getSettingsManager() = 0;
     virtual SystemManager& getSystemManager() = 0;
+    virtual TelemetryManager& getTelemetryManager() = 0;
     virtual TimeManager& getTimeManager() = 0;
     virtual UpdateManager& getUpdateManager() = 0;
     virtual WebServerManager& getWebServerManager() = 0;

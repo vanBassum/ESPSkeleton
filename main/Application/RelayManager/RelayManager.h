@@ -80,7 +80,17 @@ public:
     /// with no protocol difference. No-op while disconnected or disabled.
     void BroadcastLog(const char* json, int len);
 
+    /// Push one line of Influx line protocol on the telemetry session. Same mechanism
+    /// as BroadcastLog and the same lack of guarantees — fire and forget, no reply — but
+    /// a different reserved session, because the server sends these to a database
+    /// rather than to every attached browser. False when it could not go out.
+    bool BroadcastTelemetry(const char* line, int len);
+
     bool IsConnected() const { return linkUp_; }
+
+    /// The id this device registers under. Telemetry tags points with it so a
+    /// measurement says which board it came from.
+    const char* GetDeviceId() const { return deviceId_; }
 
 private:
     ServiceProvider& serviceProvider_;

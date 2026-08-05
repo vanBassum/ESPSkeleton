@@ -5,6 +5,7 @@
 #include "ConsoleManager/ConsoleManager.h"
 #include "NetworkManager/NetworkManager.h"
 #include "RelayManager/RelayManager.h"
+#include "TelemetryManager/TelemetryManager.h"
 #include "SettingsManager/SettingsManager.h"
 #include "SystemManager/SystemManager.h"
 #include "TimeManager/TimeManager.h"
@@ -24,6 +25,7 @@ public:
     ConsoleManager& getConsoleManager() override { return m_consoleManager; }
     NetworkManager& getNetworkManager() override { return m_networkManager; }
     RelayManager& getRelayManager() override { return m_relayManager; }
+    TelemetryManager& getTelemetryManager() override { return m_telemetryManager; }
     SettingsManager& getSettingsManager() override { return m_settingsManager; }
     SystemManager& getSystemManager() override { return m_systemManager; }
     TimeManager& getTimeManager() override { return m_timeManager; }
@@ -41,4 +43,5 @@ private:
     UpdateManager m_updateManager{*this};
     WebServerManager m_webServerManager{*this};
     RelayManager m_relayManager{*this};
+    TelemetryManager m_telemetryManager{*this};
 };
