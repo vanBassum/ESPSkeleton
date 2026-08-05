@@ -46,6 +46,12 @@ enum class RequestError : uint8_t
     MalformedNumber,
     ArgumentTooLong,
     MalformedRequest,
+
+    /// Not a failure, and the one value a wire reader never produces: `help` swaps in
+    /// a reader that prints the declarations instead of filling them, and this is how
+    /// it stops the handler at its own RETURN_IF_ERROR before the body runs. It never
+    /// escapes the help command, which turns it back into Ok.
+    Described,
 };
 
 enum class ArgType : uint8_t { String, UInt32, Bool };

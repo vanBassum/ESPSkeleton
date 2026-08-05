@@ -11,9 +11,11 @@
 
 class Stream;
 
-// Pure dispatcher — knows no commands and no other managers. Every
-// command lives in the manager that owns its domain and is registered
-// from that manager's Init().
+// Pure dispatcher — knows no other managers, and no commands but the
+// registry's own (`help`, which is the registry describing itself and
+// could not live anywhere else). Every other command lives in the
+// manager that owns its domain and is registered from that manager's
+// Init().
 //
 // Deliberately knows nothing about sessions, transports or the wire format: give
 // it a command name and two streams and it runs the handler. That is what keeps it
@@ -89,4 +91,27 @@ private:
     // lock). Handing the pointer out after unlock is safe because entries
     // are immortal and name/handler/ctx are written before linking.
     const CommandEntry* Find(const char* category, const char* name);
+
+    // ── help: the registry describing itself ──────────────────
+    //
+    // Nothing here is a second copy of anything. The categories and names come off
+    // the chain; a command's arguments come from the command, by re-dispatching it
+    // with a reader that prints the declarations instead of filling them (see
+    // DescribeArgReader). So help cannot go stale — there is nothing to update.
+    //
+    //     help list                                    → every category and its commands
+    //     help list -category partition                → one category's commands
+    //     help list -category partition -command write → that command's arguments
+    RequestError Cmd_Help(CommandContext& ctx);
+
+    static constexpr size_t MAX_ROUTE = 32;        // matches protocol::MAX_COMMAND_NAME
+    static constexpr size_t MAX_CATEGORIES = 24;
+
+    void ListCategories(Stream& out);
+    void ListCategory(const char* category, Stream& out);
+    RequestError DescribeCommand(const char* category, const char* command, Stream& out);
+
+    inline static CommandEntry commands_[] = {
+        { "help", "list", &InvokeCommand<&CommandManager::Cmd_Help> },
+    };
 };
