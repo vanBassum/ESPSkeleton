@@ -481,11 +481,21 @@ async def dashboard(request: web.Request) -> web.StreamResponse:
     return web.Response(text=DASHBOARD, content_type="text/html")
 
 
+async def healthz(request: web.Request) -> web.StreamResponse:
+    """Liveness only — a connected device is not a health condition.
+
+    The container healthcheck talks to this with Python's stdlib, because
+    python:*-slim ships neither curl nor wget.
+    """
+    return web.Response(text="ok\n", content_type="text/plain")
+
+
 def build_app() -> web.Application:
     app = web.Application()
     # Order matters: the device WS route and /devices/<id>/ws must both be
     # matched before the frontend catch-all.
     app.router.add_get("/", dashboard)
+    app.router.add_get("/healthz", healthz)
     app.router.add_get("/api/devices", api_devices)
     app.router.add_get("/device", device_ws)
     app.router.add_get("/devices/{deviceId}/ws", browser_ws)

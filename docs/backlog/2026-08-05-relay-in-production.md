@@ -14,14 +14,13 @@ Related: [what the relay still owes](2026-07-03-remote-access.md) ·
 
 ## Decisions still needed
 
-- [ ] **Domain** — `relay.` / `strux.` / `devices.`vanbassum.com, and is there wildcard
-      DNS or does it need a record?
-- [ ] **GHCR package** — public (no creds on the server) or private (needs a
-      `read:packages` PAT and a `docker login` on the host)?
 - [ ] **Who may approve a device** — `authentik Admins` only, or any logged-in user?
 
 Settled: SQLite for state. `relay.deviceId` becomes something random. `web.password`
 stays empty — Authentik guards remote access; a password only matters on the LAN.
+Domain is `strux.vanbassum.com`, and `*.vanbassum.com` already resolves to the host, so
+no DNS record was needed. The GHCR package is **public** — the source is in a public repo
+already, so a private image would only add a PAT to keep alive on the server.
 
 ## Plumbing
 
@@ -32,7 +31,12 @@ stays empty — Authentik guards remote access; a password only matters on the L
       and `:sha-<short>` on every push touching `relay-server/**`, plus manual dispatch.
       `permissions: packages: write`, `GITHUB_TOKEN`, amd64.
 - [ ] **3. `strato-stack/stacks/strux-relay/strux-relay-compose.yml`** + DNS + `.env`
-      → live at the domain, browser side behind Authentik.
+      → live at the domain, browser side behind Authentik. The compose file and
+      `STRUX_DOMAIN` are written; what is left is *in the Authentik UI* — a Proxy
+      Provider in **forward auth (single application)** mode with external host
+      `https://strux.vanbassum.com`, an Application bound to it, and the provider added
+      to the embedded outpost. `authentik@docker` refuses a host it has no provider for,
+      so the middleware is inert until that exists.
 - [ ] **4. Point the device at `wss://<domain>/device`** → TLS proven on hardware.
       Check `uxTaskGetStackHighWaterMark` on the relay task while connected: the TLS
       handshake now shares its 10 K with the command handlers. **Then put the device back
