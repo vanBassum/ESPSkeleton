@@ -9,10 +9,11 @@ Last updated 2026-08-05.
 
 ## Now
 
-**Putting the relay in production** — a Docker container on `vanbassum.com` behind
-Traefik and Authentik. Twelve steps, next one is the Dockerfile; production-safe after
-step 9.
+**Putting the relay in production** — live at `https://strux.vanbassum.com`, behind
+Traefik and Authentik. Steps 1–3 done; next is step 4, pointing a real device at
+`wss://strux.vanbassum.com/device` and watching the relay task's stack high-water mark
+now that TLS shares its 10 K. Production-safe after step 9.
 → [`backlog/2026-08-05-relay-in-production.md`](backlog/2026-08-05-relay-in-production.md)
 
-Blocking nothing, but wanted before step 3 goes public — three decisions listed at the
-top of that plan: domain, GHCR public or private, and who may approve a device.
+**`/device` is unauthenticated and publicly reachable right now.** Accepted as a test
+window. Do not leave a device pointed at the public URL until step 7 lands.

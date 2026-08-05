@@ -24,29 +24,29 @@ already, so a private image would only add a PAT to keep alive on the server.
 
 ## Plumbing
 
-- [ ] **1. `relay-server/Dockerfile` + `/healthz`** → the relay runs in a container.
+- [x] **1. `relay-server/Dockerfile` + `/healthz`** → the relay runs in a container.
       `python:3.13-slim`, non-root, `requirements.txt`. `/healthz` exists so the
       healthcheck has a target (slim has no curl).
-- [ ] **2. `.github/workflows/relay-image.yml`** → `ghcr.io/vanbassum/strux-relay:latest`
+- [x] **2. `.github/workflows/relay-image.yml`** → `ghcr.io/vanbassum/strux-relay:latest`
       and `:sha-<short>` on every push touching `relay-server/**`, plus manual dispatch.
       `permissions: packages: write`, `GITHUB_TOKEN`, amd64.
-- [ ] **3. `strato-stack/stacks/strux-relay/strux-relay-compose.yml`** + DNS + `.env`
-      → live at the domain, browser side behind Authentik. The compose file and
-      `STRUX_DOMAIN` are written; what is left is *in the Authentik UI* — a Proxy
-      Provider in **forward auth (single application)** mode with external host
-      `https://strux.vanbassum.com`, an Application bound to it, and the provider added
-      to the embedded outpost. `authentik@docker` refuses a host it has no provider for,
-      so the middleware is inert until that exists.
-- [ ] **4. Point the device at `wss://<domain>/device`** → TLS proven on hardware.
+- [x] **3. `strato-stack/stacks/strux-relay/strux-relay-compose.yml`** + DNS + `.env`
+      → live at `https://strux.vanbassum.com`, browser side behind Authentik. Verified
+      from outside: dashboard 302s to the login flow, `/device` reaches the relay
+      unauthenticated, `/devices/<id>/ws` still 302s (so the `Path`-not-`PathPrefix`
+      rule does what it was written for), and a WS client gets a 101 over TLS.
+- [ ] **4. Point the device at `wss://<domain>/device`** → TLS proven on hardware. The
+      *server* end is already proven — an aiohttp client got a 101 through Traefik — so
+      what is left is genuinely the ESP32 side.
       Check `uxTaskGetStackHighWaterMark` on the relay task while connected: the TLS
       handshake now shares its 10 K with the command handlers. **Then put the device back
       on the LAN URL until step 7.**
 
-> Step 3 goes up with `/device` unauthenticated — Bas's call, accepted as a test
-> window. While it is open, anyone can register a device, and a device the relay
-> serves gets to run its own HTML on the relay's origin inside an authenticated
-> session. So: test, then take the device off the public URL, and do not leave a
-> device pointed at it until step 7 closes the hole.
+> **The test window is open as of 2026-08-05.** Step 3 went up with `/device`
+> unauthenticated — Bas's call, accepted as a test window. While it is open, anyone can
+> register a device, and a device the relay serves gets to run its own HTML on the
+> relay's origin inside an authenticated session. So: test, then take the device off the
+> public URL, and do not leave a device pointed at it until step 7 closes the hole.
 
 ## Security — the actual gates
 
@@ -105,6 +105,22 @@ already, so a private image would only add a PAT to keep alive on the server.
   `ports`, external `ingress-network`, per-stack state in `./runtime` (what
   `make clean-runtime` looks for), `homepage.*` labels, domain from `${X_DOMAIN}` in the
   tracked `.env`.
+- **Authentik apps are declarative, and applying one costs no downtime.** No UI clicking:
+  the proxy provider, application and group binding are entries in
+  `stacks/authentik/blueprints/20-forward-auth.yaml`, and
+  `docker exec authentik-worker ak apply_blueprint /blueprints/custom/20-forward-auth.yaml`
+  applies them live — the outpost gets the new provider pushed to it, nothing restarts.
+  The one trap is in that file already: the outpost entry's `providers:` list *replaces*
+  what the outpost has, so a new proxy app must be added there as well as declared.
+- **`lablr` is the stack to copy from, not `dozzle`** — it has the same shape as this one,
+  an Authentik-gated UI beside an endpoint (`/agent`) that headless hardware reaches
+  unauthenticated because it cannot follow a login redirect.
+- **The `./runtime/data` bind mount is owned by root when Docker creates it**, and the
+  image runs as uid 10001. It is `chown`ed on the server; a fresh host needs that again
+  before step 5 writes SQLite there.
+- **Deploying only this stack** is `git reset --hard origin/main` then
+  `make up stack=strux-relay`. Plain `make deploy` would `up` every stack, including
+  whatever else happens to be mid-flight on `main`.
 - **The device generates its own token**, the server pins it on approval. No server→device
   message and no network-triggered NVS write; the secret only travels inside TLS.
 - **Device settings involved:** `relay.enabled`, `relay.url`, `relay.deviceId`,
