@@ -61,6 +61,16 @@ void RelayManager::Init()
     // reconnect, so a stack buffer here would be a dangling one.
     snprintf(headers_, sizeof(headers_), "X-Strux-Token: %s\r\n", token_);
 
+    // Two IDF components narrate every single connect attempt, and this task
+    // reconnects for the lifetime of the device. The certificate bundle announces each
+    // successful validation at INFO, which is only news the first time. transport_ws
+    // reports a refused upgrade as an ERROR about a missing handshake header, which
+    // describes the symptom one layer below the cause — ReportConnectFailure() says
+    // the same thing as "the relay refused this device", with the status and the id
+    // needed to act on it. Raise either one when debugging the transport itself.
+    esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
+    esp_log_level_set("transport_ws", ESP_LOG_NONE);
+
     // One task connects, reads the socket, and runs the commands it reads. That is
     // the whole transport: there is no second task and no queue between them, because
     // the socket underneath is one this task reads rather than one that calls it back
@@ -200,11 +210,31 @@ void RelayManager::TaskLoop()
                 continue;
             }
 
-            if (!socket_.Connect(uri_, CONNECT_TIMEOUT_MS, headers_))
+            const auto result = socket_.Connect(uri_, CONNECT_TIMEOUT_MS, headers_);
+            if (result == RelaySocket::ConnectResult::BadUri)
             {
-                vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
+                // uri_ is built once in Init and cannot change without a reboot, so
+                // retrying a URL the parser already rejected would only reprint its
+                // complaint forever. Stop the task instead; the settings UI is where
+                // this gets fixed, and the fix takes effect on the next boot.
+                ESP_LOGE(TAG, "relay.url is not usable — not retrying until reboot");
+                return;
+            }
+            if (result != RelaySocket::ConnectResult::Ok)
+            {
+                vTaskDelay(pdMS_TO_TICKS(ReportConnectFailure(result)));
                 continue;
             }
+
+            if (suppressedFailures_ > 0)
+                ESP_LOGI(TAG, "connected after %u further failed attempt%s",
+                         static_cast<unsigned>(suppressedFailures_),
+                         suppressedFailures_ == 1 ? "" : "s");
+            lastFailure_        = RelaySocket::ConnectResult::Ok;
+            lastFailureStatus_  = 0;
+            suppressedFailures_ = 0;
+            reconnectDelayMs_   = RECONNECT_DELAY_MS;
+
             OnConnected();
             // Right after connect, because on a wss:// pipe the TLS handshake just
             // ran on this stack and is one of the two things it has to fit.
@@ -257,6 +287,47 @@ void RelayManager::OnConnected()
 
     ESP_LOGI(TAG, "Connected as '%s'%s", deviceId_,
              conn_.authed ? " (no device password set — pipe is open)" : "");
+}
+
+int RelayManager::ReportConnectFailure(RelaySocket::ConnectResult result)
+{
+    // Log a REASON, not an attempt. This loop retries forever, so a line per attempt
+    // is a line per attempt forever: a device left un-approved used to emit three of
+    // them every five seconds — one here plus two from the TLS and websocket layers —
+    // and a console that scrolls that is a console nobody reads. What is worth saying
+    // is said once, when it changes, and the count of what went unsaid is reported by
+    // the connect that eventually succeeds.
+    const int status = socket_.LastHttpStatus();
+    if (result == lastFailure_ && status == lastFailureStatus_)
+    {
+        suppressedFailures_++;
+    }
+    else
+    {
+        lastFailure_        = result;
+        lastFailureStatus_  = status;
+        suppressedFailures_ = 0;
+
+        if (result == RelaySocket::ConnectResult::Refused && status == 403)
+            ESP_LOGW(TAG, "relay refused this device — approve '%s' on the relay "
+                          "server; retrying every %ds",
+                     deviceId_, REFUSED_DELAY_MS / 1000);
+        else if (result == RelaySocket::ConnectResult::Refused)
+            ESP_LOGW(TAG, "relay refused the upgrade with HTTP %d", status);
+        else
+            ESP_LOGW(TAG, "cannot reach the relay at %s — retrying, backing off to %ds",
+                     uri_, RECONNECT_DELAY_MAX_MS / 1000);
+    }
+
+    if (result != RelaySocket::ConnectResult::Unreachable)
+        return REFUSED_DELAY_MS;
+
+    // Double up to the cap, and hand back the delay this attempt earned.
+    const int delay = reconnectDelayMs_;
+    reconnectDelayMs_ = (reconnectDelayMs_ >= RECONNECT_DELAY_MAX_MS / 2)
+                          ? RECONNECT_DELAY_MAX_MS
+                          : reconnectDelayMs_ * 2;
+    return delay;
 }
 
 void RelayManager::OnDisconnected()

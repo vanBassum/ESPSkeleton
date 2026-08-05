@@ -62,23 +62,25 @@ bool RelaySocket::ParseUri(const char* uri)
     return true;
 }
 
-bool RelaySocket::Connect(const char* uri, int timeoutMs, const char* extraHeaders)
+RelaySocket::ConnectResult RelaySocket::Connect(const char* uri, int timeoutMs,
+                                               const char* extraHeaders)
 {
     Close();
+    httpStatus_ = 0;
 
-    if (!ParseUri(uri)) return false;
+    if (!ParseUri(uri)) return ConnectResult::BadUri;
 
     parent_ = tls_ ? esp_transport_ssl_init() : esp_transport_tcp_init();
     if (!parent_)
     {
         ESP_LOGE(TAG, "no %s transport", tls_ ? "TLS" : "TCP");
-        return false;
+        return ConnectResult::Unreachable;
     }
     if (tls_)
         esp_transport_ssl_crt_bundle_attach(parent_, esp_crt_bundle_attach);
 
     ws_ = esp_transport_ws_init(parent_);
-    if (!ws_) { Destroy(); return false; }
+    if (!ws_) { Destroy(); return ConnectResult::Unreachable; }
 
     esp_transport_ws_config_t cfg = {};
     cfg.ws_path = path_;
@@ -89,29 +91,43 @@ bool RelaySocket::Connect(const char* uri, int timeoutMs, const char* extraHeade
     // whatever read is in progress. Those frames never reach the session layer,
     // which is the only reason this class stays as short as it is.
     cfg.propagate_control_frames = false;
-    if (esp_transport_ws_set_config(ws_, &cfg) != ESP_OK) { Destroy(); return false; }
-
-    if (esp_transport_connect(ws_, host_, port_, timeoutMs) < 0)
+    if (esp_transport_ws_set_config(ws_, &cfg) != ESP_OK)
     {
-        ESP_LOGW(TAG, "connect to %s:%d failed", host_, port_);
         Destroy();
-        return false;
+        return ConnectResult::Unreachable;
     }
 
-    // The upgrade is part of connect, so a server that answered with an ordinary
-    // HTTP status left us a TCP connection that is not a WebSocket.
-    const int status = esp_transport_ws_get_upgrade_request_status(ws_);
-    if (status != 101)
+    const int rc = esp_transport_connect(ws_, host_, port_, timeoutMs);
+
+    // Read the status whether connect succeeded or not, because a refusal reports
+    // FAILURE here: the transport records the response's status line and only then
+    // looks for Sec-WebSocket-Accept, which a refusal has no reason to carry — so it
+    // returns -1 having already parsed the very number that explains why. Asking only
+    // on the success path is what made a device the relay had refused, in as many
+    // words, look to its owner like a host that could not be reached.
+    // 0 = no response at all; -1 = a response whose status line did not parse.
+    httpStatus_ = esp_transport_ws_get_upgrade_request_status(ws_);
+    const bool answered = (httpStatus_ > 0 && httpStatus_ != 101);
+    if (httpStatus_ < 0) httpStatus_ = 0;
+
+    if (rc < 0)
     {
-        ESP_LOGE(TAG, "upgrade refused with HTTP %d", status);
+        // An answered upgrade means TCP/TLS did come up, so there is a socket to close.
+        if (answered) esp_transport_close(ws_);
+        Destroy();
+        return answered ? ConnectResult::Refused : ConnectResult::Unreachable;
+    }
+
+    if (httpStatus_ != 101)
+    {
         esp_transport_close(ws_);
         Destroy();
-        return false;
+        return ConnectResult::Refused;
     }
 
     connected_ = true;
     ESP_LOGI(TAG, "connected to %s:%d%s", host_, port_, tls_ ? " (TLS)" : "");
-    return true;
+    return ConnectResult::Ok;
 }
 
 void RelaySocket::Close()

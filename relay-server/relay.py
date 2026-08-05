@@ -526,6 +526,11 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at DESC);
 # keeps rising) but no new row is created.
 MAX_PENDING = 50
 
+# The event log is a record of state changes — approvals, first sightings, removals —
+# so it grows with operator actions and new devices, not with traffic. A few hundred
+# is far more than the dashboard shows and still bounded.
+MAX_EVENTS = 500
+
 
 class Store:
     def __init__(self, path: str):
@@ -545,6 +550,13 @@ class Store:
         self.db.execute(
             "INSERT INTO events (at, kind, device_id, detail) VALUES (?,?,?,?)",
             (time.time(), kind, device_id, detail))
+        # Trimmed on insert, because the dashboard only ever reads the newest handful
+        # and an unbounded table on a public endpoint's path is the disk-filling
+        # machine MAX_PENDING was written to avoid — reached through another table.
+        # Cheap now that events are state changes rather than one per connect attempt.
+        self.db.execute(
+            "DELETE FROM events WHERE id <= (SELECT max(id) - ? FROM events)",
+            (MAX_EVENTS,))
         self.db.commit()
 
     # ── the connect decision ──────────────────────────────────────────────────
@@ -576,16 +588,24 @@ class Store:
             # same board after an NVS wipe — the MAC-derived id survives that, the
             # token does not. Both look identical from here, so record and refuse:
             # the human decides which it was, in the dashboard.
-            self._remember_pending(device_id, token, name, project, firmware, now)
-            self.log_event("refused", device_id, "token mismatch")
+            if self._remember_pending(device_id, token, name, project, firmware, now):
+                self.log_event("refused", device_id, "token mismatch")
             return False, "token mismatch"
 
-        self._remember_pending(device_id, token, name, project, firmware, now)
-        self.log_event("refused", device_id, "not approved")
+        if self._remember_pending(device_id, token, name, project, firmware, now):
+            self.log_event("refused", device_id, "not approved")
         return False, "device not approved"
 
     def _remember_pending(self, device_id: str, token: str, name: str,
-                          project: str, firmware: str, now: float) -> None:
+                          project: str, firmware: str, now: float) -> bool:
+        """Record this attempt. True only the FIRST time this pair is seen.
+
+        The return value is what keeps the event log readable. A device retries until
+        somebody approves it, so logging an event per refusal filled the dashboard with
+        one line repeated forty times and pushed the approval that mattered off the
+        top. The repeat signal already has a better home: `attempts` on the pending
+        row, which is one row that counts rather than N rows that each say the same.
+        """
         cur = self.db.execute(
             "UPDATE pending SET last_seen = ?, attempts = attempts + 1, name = ?, "
             "project = ?, firmware = ? WHERE device_id = ? AND token = ?",
@@ -596,12 +616,15 @@ class Store:
                 self.db.commit()
                 log.warning("pending list is full (%d) — not recording %s",
                             MAX_PENDING, device_id)
-                return
+                return False
             self.db.execute(
                 "INSERT INTO pending (device_id, token, name, project, firmware, "
                 "first_seen, last_seen) VALUES (?,?,?,?,?,?,?)",
                 (device_id, token, name, project, firmware, now, now))
+            self.db.commit()
+            return True
         self.db.commit()
+        return False
 
     # ── what the dashboard drives ─────────────────────────────────────────────
 

@@ -61,7 +61,11 @@ void TelemetryManager::TaskLoop()
 
 void TelemetryManager::SampleVitals()
 {
-    auto p = Measure("device");
+    // "vitals", not "device": a measurement names what was measured, and `device` is
+    // already the tag every point carries (Send() adds it). Naming both the same made
+    // the Influx UI offer `_measurement: device` next to `device: esp32-…` — two
+    // unrelated meanings of one word, in adjacent dropdowns.
+    auto p = Measure("vitals");
     p.Field("heapFree", static_cast<int32_t>(esp_get_free_heap_size()));
     p.Field("heapMin", static_cast<int32_t>(esp_get_minimum_free_heap_size()));
     // esp_timer counts microseconds since boot; seconds is the useful unit and keeps

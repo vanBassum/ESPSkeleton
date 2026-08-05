@@ -33,17 +33,35 @@ public:
     RelaySocket(const RelaySocket&) = delete;
     RelaySocket& operator=(const RelaySocket&) = delete;
 
-    /// Open `ws://…` or `wss://…` and complete the upgrade. False leaves us closed.
+    /// Why a Connect() attempt ended. The caller needs the distinction to decide how
+    /// hard to retry: a refused upgrade waits on a decision somebody has to make
+    /// (approving this device), so hammering it achieves nothing, while an unreachable
+    /// server is worth trying again soon.
+    enum class ConnectResult
+    {
+        Ok,
+        BadUri,        ///< relay.url is not a ws:// or wss:// URL — retrying cannot fix it
+        Unreachable,   ///< no TCP/TLS, or no HTTP response at all
+        Refused,       ///< the server answered the upgrade — see LastHttpStatus()
+    };
+
+    /// Open `ws://…` or `wss://…` and complete the upgrade. Anything but Ok leaves us
+    /// closed. Failures are reported, not logged: how loudly a failed connect is worth
+    /// mentioning depends on how often the caller retries, which is the caller's policy.
     ///
     /// `extraHeaders` is raw `Key: Value\r\n` lines added to the upgrade request, or
     /// nullptr. It is NOT copied — the caller keeps it alive, because a reconnect
     /// re-sends it. This is how the relay presents its token: a header goes up with
     /// the handshake, so the server can refuse the upgrade outright and the session
     /// protocol above learns nothing about authentication.
-    bool Connect(const char* uri, int timeoutMs, const char* extraHeaders = nullptr);
+    ConnectResult Connect(const char* uri, int timeoutMs, const char* extraHeaders = nullptr);
     void Close();
 
     bool IsConnected() const { return connected_; }
+
+    /// The HTTP status the last refused upgrade carried, or 0 when the last attempt
+    /// never got an HTTP response at all. Only meaningful next to `Refused`.
+    int LastHttpStatus() const { return httpStatus_; }
 
     /// The next data message, whole, into `buf`. Returns its length; 0 when nothing
     /// arrived within `timeoutMs`; -1 when the link is dead and wants reconnecting.
@@ -65,6 +83,7 @@ private:
     esp_transport_handle_t ws_     = nullptr;   // the layer we read and write
     esp_transport_handle_t parent_ = nullptr;   // tcp or ssl underneath it
     bool connected_ = false;
+    int  httpStatus_ = 0;                       // of the last upgrade response, if any
 
     Mutex sendMutex_;
 

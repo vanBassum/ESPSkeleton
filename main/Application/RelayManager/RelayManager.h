@@ -48,7 +48,16 @@ class RelayManager
     static constexpr size_t TOKEN_HEX_LEN = TOKEN_BYTES * 2;
 
     static constexpr int CONNECT_TIMEOUT_MS  = 10000;
-    static constexpr int RECONNECT_DELAY_MS  = 5000;
+
+    // Retry pacing, and two different kinds of waiting. An unreachable server is
+    // usually transient — WiFi, DNS, a restart — so the first retry is quick and then
+    // doubles, because the tenth attempt is no more likely than the ninth and costs a
+    // TLS handshake. A refused upgrade is not transient at all: it waits on a person
+    // approving this device, so it retries slowly, which is still often enough to keep
+    // the device in the server's pending list and to pick up an approval promptly.
+    static constexpr int RECONNECT_DELAY_MS     = 5000;
+    static constexpr int RECONNECT_DELAY_MAX_MS = 60000;
+    static constexpr int REFUSED_DELAY_MS       = 30000;
 
     // Short, because this is just waiting for WiFi to finish coming up.
     static constexpr int NO_NETWORK_DELAY_MS = 1000;
@@ -153,6 +162,18 @@ private:
 
     void OnConnected();
     void OnDisconnected();
+
+    /// Report a failed connect attempt and return how long to wait before the next
+    /// one. Logs at most once per distinct reason — see the definition for why that
+    /// matters more here than the usual "log every failure" instinct.
+    int ReportConnectFailure(RelaySocket::ConnectResult result);
+
+    // Connect-failure bookkeeping for the above: what went wrong last time, and how
+    // many identical failures have gone unmentioned since.
+    RelaySocket::ConnectResult lastFailure_ = RelaySocket::ConnectResult::Ok;
+    int      lastFailureStatus_  = 0;
+    uint32_t suppressedFailures_ = 0;
+    int      reconnectDelayMs_   = RECONNECT_DELAY_MS;
 
     // ── Settings (registered with SettingsManager in Init) ──
     inline static BoolSetting   enabled_  { "relay.enabled",  "Relay Enabled",   false };
