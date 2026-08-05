@@ -114,25 +114,29 @@ int WiFiInterface::Scan(ScanResult* out, int maxResults)
         return 0;
     }
 
-    uint16_t count = 0;
-    esp_wifi_scan_get_ap_num(&count);
-    ESP_LOGI(TAG, "Scan found %d networks", count);
+    uint16_t found = 0;
+    esp_wifi_scan_get_ap_num(&found);
+    ESP_LOGI(TAG, "Scan found %d networks", found);
 
-    if (count > static_cast<uint16_t>(maxResults)) count = maxResults;
-
-    wifi_ap_record_t* records = new wifi_ap_record_t[count]();
-    esp_wifi_scan_get_ap_records(&count, records);
-
-    for (uint16_t i = 0; i < count; i++)
+    // One record at a time, so nothing here is sized by how many networks happen to
+    // be in the air: esp_wifi_scan_get_ap_record hands over the next record and frees
+    // it, where esp_wifi_scan_get_ap_records wants an array as long as the result set
+    // — which is why this used to allocate one per scan.
+    int count = 0;
+    wifi_ap_record_t record;
+    while (count < maxResults && esp_wifi_scan_get_ap_record(&record) == ESP_OK)
     {
-        snprintf(out[i].ssid, sizeof(out[i].ssid), "%s",
-                 reinterpret_cast<const char*>(records[i].ssid));
-        out[i].rssi = records[i].rssi;
-        out[i].channel = records[i].primary;
-        out[i].secure = records[i].authmode != WIFI_AUTH_OPEN;
+        snprintf(out[count].ssid, sizeof(out[count].ssid), "%s",
+                 reinterpret_cast<const char*>(record.ssid));
+        out[count].rssi = record.rssi;
+        out[count].channel = record.primary;
+        out[count].secure = record.authmode != WIFI_AUTH_OPEN;
+        count++;
     }
 
-    delete[] records;
+    // Stopping at maxResults leaves the rest of the driver's list allocated; this is
+    // what releases it. Harmless when the loop already drained the list.
+    esp_wifi_clear_ap_list();
 
     if (prevMode == WIFI_MODE_AP)
     {
