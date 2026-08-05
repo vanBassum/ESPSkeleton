@@ -84,7 +84,11 @@ approval. The id is technical; `device.name` is what a human reads.
       `pending` stops at `MAX_PENDING` (50). Past the cap a known pair still counts its
       attempts, so the signal keeps rising while no new row is created. What is left is
       the rate limit itself.
-- [ ] **11. Log refusals and approvals** → the attack signal is visible when it fires.
+- [x] **11. Log refusals and approvals** → the attack signal is visible when it fires.
+      Came along with 5 and 8 rather than as its own step: refusals carry a reason
+      (`not approved` / `token mismatch`), approvals and forgets are recorded, and the
+      dashboard renders the last 20. Verified in production — the eight events from the
+      device's first pairing are in there.
 
 ## Later, only if this ever hosts hardware Bas did not install
 
