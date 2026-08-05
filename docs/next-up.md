@@ -11,12 +11,11 @@ Last updated 2026-08-05, after the relay transport rewrite and its hardware run.
 The first two are a question away from being ordinary work; the rest can be picked up
 as they are.
 
-1. **DECISION — does the relay ever face a public network?** Everything
-   security-shaped about remote access hangs off that answer: the device→server
-   credential (today, guessing the MAC-derived device id **evicts** the real device),
-   TLS, server-side login, a persistent registry. Until it is answered the relay must
-   not face a public IP.
-   → [`backlog/2026-07-03-remote-access.md`](backlog/2026-07-03-remote-access.md)
+1. **Put the relay in production.** The question this list used to lead with — does the
+   relay ever face a public network — is answered: yes, a Docker container on
+   `vanbassum.com` behind Traefik and Authentik. So the credential, TLS and the
+   browser-side gate are requirements now, being worked step by step.
+   → [`superpowers/plans/2026-08-05-relay-in-production.md`](superpowers/plans/2026-08-05-relay-in-production.md)
 
 2. **DECISION — are secret settings write-only over the wire, masked, or gated?**
    `settings list` returns `wifi.password` and `web.password` in plaintext, to anyone

@@ -16,6 +16,11 @@ before writing an ASP.NET one.
 [`2026-08-02-remote-access-relay-design.md`](../superpowers/specs/2026-08-02-remote-access-relay-design.md).
 Read that first; this file is only the open work.
 
+**Being executed step by step in
+[`plans/2026-08-05-relay-in-production.md`](../superpowers/plans/2026-08-05-relay-in-production.md)**
+— that plan covers items 1, 2 and 3 below (credential, TLS, and the browser side, the
+last of which Authentik answers), so work from it rather than from this list.
+
 ## Open, in the order that will probably matter
 
 1. **The device→server credential.** The worst gap by far: anything that guesses the
