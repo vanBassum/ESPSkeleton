@@ -65,7 +65,22 @@ timeout keeps it and frees it once traffic stops; log broadcasts do not re-arm a
 session's gate; and a second browser opening a page during a long upload waits its turn
 instead of interleaving — the case that lost *both* requests above. Patching the old
 fixed-length watchdog back in fails that third check, so the harness was testing
-something real. Not on hardware yet.
+something real.
+
+**Then on hardware, 2026-08-05.** 1,120,064 bytes to `ota_1` in one-shot mode, paced to
+27 KB/s so the session spanned **40.1 s** — twice the old fixed budget — with a page load
+started at t=24.5 s. Everything the failing case lost, this run kept: the write returned
+`{"ok":true,"offset":0,"size":1120064}`, the page load returned 200 after waiting 20.1 s
+for its turn, `activate` accepted the image (so all 1.12 MB landed byte-correct), and the
+device booted the new slot. No watchdog warning in the server log. Unpaced, the same
+image takes 5.5 s at 199 KB/s.
+
+**One case this does not cover, worth knowing.** `partition clear` is legitimately
+*silent* while it erases — no chunks in either direction — so it is the one command the
+idle timer can misjudge. Measured 4.1–4.5 s to erase a 1.5 MB slot, against the 15 s
+window. Fine today, but the margin is the erase time of the largest partition, not
+something we chose; a much larger slot would need the handler to report progress the way
+`write` does.
 
 Option 2 (make the web UI use chunked mode) is now unnecessary rather than pending.
 One-shot mode over the relay is safe again.

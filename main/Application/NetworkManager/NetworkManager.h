@@ -35,6 +35,11 @@ public:
 
     bool IsAccessPoint() const { return wifi_interface_.IsAP(); }
 
+    /// Is there an address to reach the world with yet? Asked by anything that dials
+    /// OUT (the relay), because attempting it before an address exists produces
+    /// nothing but a failed connection and the log noise of one.
+    bool HasIpv4() const { return wifi_interface_.getStatus().has_ipv4; }
+
 private:
     ServiceProvider& serviceProvider_;
 

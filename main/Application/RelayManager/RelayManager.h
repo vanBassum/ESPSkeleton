@@ -44,6 +44,9 @@ class RelayManager
     static constexpr int CONNECT_TIMEOUT_MS  = 10000;
     static constexpr int RECONNECT_DELAY_MS  = 5000;
 
+    // Short, because this is just waiting for WiFi to finish coming up.
+    static constexpr int NO_NETWORK_DELAY_MS = 1000;
+
     // How long a read waits between requests. Also the tick of the keepalive below.
     static constexpr int IDLE_POLL_MS = 1000;
 

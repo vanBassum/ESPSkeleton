@@ -1,5 +1,6 @@
 #include "RelayManager.h"
 #include "SettingsManager.h"
+#include "NetworkManager.h"
 #include "WebServerManager.h"
 #include "CommandManager.h"
 #include "AuthGate.h"
@@ -110,6 +111,16 @@ void RelayManager::TaskLoop()
     {
         if (!socket_.IsConnected())
         {
+            // Nothing to dial with yet. This task starts during Init, while WiFi is
+            // still associating, so without this every boot spends a connect attempt
+            // it cannot win and logs three ERROR lines from the TLS and transport
+            // layers on the way out. Same check covers WiFi dropping later.
+            if (!serviceProvider_.getNetworkManager().HasIpv4())
+            {
+                vTaskDelay(pdMS_TO_TICKS(NO_NETWORK_DELAY_MS));
+                continue;
+            }
+
             if (!socket_.Connect(uri_, CONNECT_TIMEOUT_MS))
             {
                 vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
