@@ -786,12 +786,22 @@ async function post(url, body) {
   tick();
 }
 
-function approve(id, token) { post('/api/approve', { deviceId: id, token: token }); }
-
-function forget(id) {
-  if (confirm('Forget ' + id + '? It will be refused until you approve it again.'))
-    post('/api/forget', { deviceId: id });
-}
+// Delegated once, on a node that outlives every re-render — rather than inline onclick
+// attributes built by concatenation. The first version of this page did the latter with
+// JSON.stringify(), whose DOUBLE quotes closed the attribute early and left every button
+// inert. Values ride in data-* and are read back as properties, so quoting never enters
+// into it.
+document.addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-act]');
+  if (!b) return;
+  const id = b.dataset.id;
+  if (b.dataset.act === 'approve') {
+    post('/api/approve', { deviceId: id, token: b.dataset.token });
+  } else if (b.dataset.act === 'forget') {
+    if (confirm('Forget ' + id + '? It will be refused until you approve it again.'))
+      post('/api/forget', { deviceId: id });
+  }
+});
 
 // Name first, id second: the name is what a human recognises, the id is the
 // technical handle the URL and the token are about.
@@ -816,8 +826,8 @@ function pendingBlock(pending) {
         + '<td><code>' + esc((p.token || '').slice(0, 8) || 'none') + '…</code></td>'
         + '<td>' + p.attempts + '</td>'
         + '<td>' + ago(p.last_seen) + '</td>'
-        + '<td><button class="primary" onclick="approve(' + JSON.stringify(p.device_id)
-        + ',' + JSON.stringify(p.token) + ')">Approve</button></td>'
+        + '<td><button class="primary" data-act="approve" data-id="' + esc(p.device_id)
+        + '" data-token="' + esc(p.token) + '">Approve</button></td>'
         + '</tr>').join('')
     + '</tbody></table></div>';
 }
@@ -838,8 +848,8 @@ function deviceBlock(live, approved) {
       + '</code></td>'
       + '<td>' + (d ? d.uptimeSeconds + 's' : 'last seen ' + ago(a.last_seen)) + '</td>'
       + '<td>' + (d ? d.browsers : '—') + '</td>'
-      + '<td><button onclick="forget(' + JSON.stringify(a.device_id)
-      + ')">Forget</button></td>'
+      + '<td><button data-act="forget" data-id="' + esc(a.device_id)
+      + '">Forget</button></td>'
       + '</tr>';
   }).join('');
 
