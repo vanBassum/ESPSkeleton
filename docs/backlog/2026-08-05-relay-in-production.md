@@ -142,6 +142,11 @@ approval. The id is technical; `device.name` is what a human reads.
 - **The device name is attacker-controlled before approval.** An unapproved stranger's
   `name` lands in the pending list, which renders on an admin page — so the dashboard
   escapes it. Escaping is not decoration here.
+- **GHCR has a secondary push rate limit, and it presents as an auth error.** Three
+  pushes in quick succession got `denied: denied` on `docker login` once and
+  `permission_denied … exceeded a secondary rate limit` on push once. Neither is a
+  permissions problem — the workflow's token log says `Packages: write` both times. Wait
+  a few minutes and `gh run rerun <id> --failed`; nothing needs changing.
 - **Two IDF installs, and the tools are not where the docs assume.** `C:\esp\v6.0\esp-idf`
   is the framework; the toolchain is an ESP-IDF Installation Manager layout under
   `C:\Espressif\tools`, activated with
