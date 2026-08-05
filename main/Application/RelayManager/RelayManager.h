@@ -21,7 +21,8 @@ class Authenticator;
 // for frontend files with the ordinary `getWebFile` command and relays browser
 // traffic as opaque session chunks.
 //
-// Design: docs/superpowers/specs/2026-08-02-remote-access-relay-design.md
+// Open work: docs/backlog/2026-07-03-remote-access.md
+// Why it reads its own socket: docs/reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md
 class RelayManager
 {
     static constexpr const char* TAG = "RelayManager";

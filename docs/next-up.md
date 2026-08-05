@@ -15,7 +15,7 @@ as they are.
    relay ever face a public network — is answered: yes, a Docker container on
    `vanbassum.com` behind Traefik and Authentik. So the credential, TLS and the
    browser-side gate are requirements now, being worked step by step.
-   → [`superpowers/plans/2026-08-05-relay-in-production.md`](superpowers/plans/2026-08-05-relay-in-production.md)
+   → [`backlog/2026-08-05-relay-in-production.md`](backlog/2026-08-05-relay-in-production.md)
 
 2. **DECISION — are secret settings write-only over the wire, masked, or gated?**
    `settings list` returns `wifi.password` and `web.password` in plaintext, to anyone

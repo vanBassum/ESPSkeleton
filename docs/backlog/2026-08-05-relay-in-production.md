@@ -9,9 +9,8 @@ service, `make up stack=<name>`). The relay stays in this repo under `relay-serv
 now; nothing in it imports from the firmware, so moving it to its own repo later is a
 copy, not a refactor.
 
-Related: [remote-access backlog](../../backlog/2026-07-03-remote-access.md) ·
-[relay design + status](../specs/2026-08-02-remote-access-relay-design.md) ·
-[why the transport reads its own socket](../../reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md)
+Related: [what the relay still owes](2026-07-03-remote-access.md) ·
+[why the transport reads its own socket](../reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md)
 
 ## Decisions still needed
 
@@ -66,7 +65,7 @@ stays empty — Authentik guards remote access; a password only matters on the L
       both rather than collapsing them.
 - [ ] **9. Secrets out of `settings list`** → an approved pipe stops handing out the
       WiFi PSK. Write-only is the recommended shape; detail in
-      [secret-settings-over-the-wire](../../backlog/2026-08-05-secret-settings-over-the-wire.md).
+      [secret-settings-over-the-wire](2026-08-05-secret-settings-over-the-wire.md).
 
 **Production-ready after 9.**
 

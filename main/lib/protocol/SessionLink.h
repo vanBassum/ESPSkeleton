@@ -18,7 +18,7 @@
 //                      inbound frames are read synchronously on the httpd task.
 //   RelaySessionLink — the outbound socket to the relay server. Also a synchronous
 //                      read, on the task that runs the command. See
-//                      docs/superpowers/specs/2026-08-02-remote-access-relay-design.md.
+//                      docs/reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md.
 //
 // Both are now the same shape, and that is worth stating because it was not always
 // true: the relay used to receive frames on a WebSocket library's own task and hand

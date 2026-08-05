@@ -10,7 +10,8 @@ browser ──ws──►  /devices/<id>/ws             → relayed onto the dev
 ```
 
 This is the proof-of-concept transport for
-[`docs/superpowers/specs/2026-08-02-remote-access-relay-design.md`](../docs/superpowers/specs/2026-08-02-remote-access-relay-design.md).
+[`docs/backlog/2026-07-03-remote-access.md`](../docs/backlog/2026-07-03-remote-access.md), and the
+deployment plan in [`docs/backlog/2026-08-05-relay-in-production.md`](../docs/backlog/2026-08-05-relay-in-production.md).
 It is not production software — see *Not implemented* below.
 
 ## Run it

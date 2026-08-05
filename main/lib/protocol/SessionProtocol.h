@@ -4,7 +4,7 @@
 #include <cstddef>
 
 // On-wire session chunk: [ session:u16 LE ][ flags:u8 ][ payload ]. See
-// docs/superpowers/specs/2026-07-09-session-mux-transport-design.md.
+// docs/reasoning/2026-08-03-11h59-3-naming-a-request-is-protocol-work-so-the-dispatcher-never-sees-a-session.md.
 namespace session
 {
     inline constexpr uint8_t FLAG_FINAL  = 0x01;   // last chunk this direction (EOF)

@@ -5,21 +5,33 @@ remotely. The relay is just another dumb-pipe transport into `CommandManager`, w
 is why every command — including firmware update — works remotely for free. That is
 the driving reason `CommandManager` is the star point of the architecture.
 
-**Working and hardware-verified**: the device dials out, the dashboard lists it,
-clicking it opens the device's *own* web UI served through the command pipe, commands
-and live logs work remotely, and a firmware update over the relay has been pushed end
-to end (including one pushed with no serial cable attached). Demo server:
-[`relay-server/`](../../relay-server/) — Python, deliberately, to prove the path
-before writing an ASP.NET one.
+Demo server: [`relay-server/`](../../relay-server/) — Python, deliberately, to prove
+the path before writing an ASP.NET one, and the device side assumes nothing about the
+server's language.
 
-**Design, decision record and verified status all live in the spec:**
-[`2026-08-02-remote-access-relay-design.md`](../superpowers/specs/2026-08-02-remote-access-relay-design.md).
-Read that first; this file is only the open work.
+**Being deployed step by step in
+[`2026-08-05-relay-in-production.md`](2026-08-05-relay-in-production.md)** — that plan
+covers items 1, 2 and 3 below (credential, TLS, and the browser side, the last of which
+Authentik answers), so work from it rather than from this list.
 
-**Being executed step by step in
-[`plans/2026-08-05-relay-in-production.md`](../superpowers/plans/2026-08-05-relay-in-production.md)**
-— that plan covers items 1, 2 and 3 below (credential, TLS, and the browser side, the
-last of which Authentik answers), so work from it rather than from this list.
+## What is already proven on hardware
+
+esp32_devkit against `relay.py` on a LAN host, 2026-08-02 and 2026-08-05:
+
+- The device dials out, the dashboard lists it, clicking it opens the device's *own* web
+  UI through the command pipe, and commands plus live log broadcasts work remotely.
+- A 413 KB frontend bundle arrives byte-identical to the device-served copy, gzip
+  `Content-Encoding` passed straight through. A missing asset 404s; an unknown route
+  falls back to `index.html`.
+- **Firmware update end to end**: 1,120,064 bytes to the idle OTA slot, `activate`
+  validating the image, and boot into the new slot. 5.5 s unpaced (199 KB/s); a run
+  paced to 40 s — twice the old watchdog budget — survived a page load cutting in at
+  t=24.5 s, which used to kill both requests.
+- One later build was pushed over the relay with no serial cable attached.
+- Liveness: recovery from failed connects, and 100 s fully idle without losing the pipe.
+
+Not proven: `wss://` (item 2 below), and anything with more than one browser or one
+operator.
 
 ## Open, in the order that will probably matter
 

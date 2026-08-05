@@ -15,10 +15,11 @@ What this server understands and does not:
   * It never parses a session payload. Commands, auth, uploads and log lines are
     opaque bytes it moves between two sockets.
 
-Deliberately out of scope (see the design doc): TLS, authentication of devices to
-this server, user accounts, persistence, and file caching.
+Deliberately out of scope for now, and all of it on the way in: TLS, authentication
+of devices to this server, user accounts, persistence, and file caching.
 
-Design: docs/superpowers/specs/2026-08-02-remote-access-relay-design.md
+Open work: docs/backlog/2026-07-03-remote-access.md
+Deployment: docs/backlog/2026-08-05-relay-in-production.md
 """
 
 from __future__ import annotations

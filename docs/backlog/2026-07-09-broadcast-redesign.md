@@ -17,11 +17,10 @@ the reserved session 0** (`session::BROADCAST_SESSION`) to every tracked client.
 This is the one path that is *not* yet a real session: session 0 is a magic id, the
 device never "opens" it, the client never replies, and it never goes through the
 name-dispatch-close sequence every request does (`protocol::RunCommandSession` — what
-`SessionMux` became on 2026-08-03). The session-mux design already
-flags this as a later unification (design doc, *Concurrency → Frontend impact*:
-"Folding broadcasts into device-opened sessions is a later unification; when it
-happens they're initiator=device sessions, still exempt from the client command
-gate").
+`SessionMux` became on 2026-08-03). This was flagged as a later unification from the
+start: broadcasts become initiator=device sessions when it happens, and stay exempt
+from the client command gate because they are device-initiated rather than a reply to
+anything.
 
 ## The concrete bug: broadcast warning storm
 
@@ -95,8 +94,3 @@ Not the real fix, but each would break the amplification without the full redesi
 - Don't feed httpd's own `httpd_ws`/`httpd_txrx` `W` lines back into the broadcast
   (filter by tag in `ConsoleManager`), removing the feedback entirely.
 - Unify the dead-client policy between `Broadcast` and `BroadcastBinary`.
-
-## Related
-
-- Design: [session-mux transport](../superpowers/specs/2026-07-09-session-mux-transport-design.md)
-- Roadmap: [session-transport-roadmap](../session-transport-roadmap.md)
