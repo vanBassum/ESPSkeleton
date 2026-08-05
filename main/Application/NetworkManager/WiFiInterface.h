@@ -16,6 +16,12 @@ public:
 
     bool IsAP() const { return isAP_; }
 
+    /// Signal strength of the AP this station is associated with, in dBm (negative;
+    /// around -50 is strong, -80 is marginal). False in AP mode or while not
+    /// associated — there is no number then, and reporting 0 would read as a perfect
+    /// signal rather than as "unknown".
+    bool GetRssi(int8_t& out) const;
+
     struct ScanResult {
         char ssid[33];
         int8_t rssi;

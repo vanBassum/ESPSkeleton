@@ -88,6 +88,19 @@ void WiFiInterface::Stop()
     esp_wifi_stop();
 }
 
+bool WiFiInterface::GetRssi(int8_t& out) const
+{
+    if (isAP_) return false;
+
+    // Fails when the station is not associated, which is exactly when there is no
+    // signal strength to report — so the error is the answer, not a problem.
+    wifi_ap_record_t ap = {};
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return false;
+
+    out = ap.rssi;
+    return true;
+}
+
 int WiFiInterface::Scan(ScanResult* out, int maxResults)
 {
     // Switch to APSTA if needed so STA scan works while AP is running

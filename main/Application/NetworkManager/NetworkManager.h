@@ -40,6 +40,10 @@ public:
     /// nothing but a failed connection and the log noise of one.
     bool HasIpv4() const { return wifi_interface_.getStatus().has_ipv4; }
 
+    /// Associated AP's signal strength in dBm. False when there is none to report
+    /// (AP mode, or not associated).
+    bool GetRssi(int8_t& out) const { return wifi_interface_.GetRssi(out); }
+
 private:
     ServiceProvider& serviceProvider_;
 

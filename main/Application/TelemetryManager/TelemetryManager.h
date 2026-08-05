@@ -125,7 +125,11 @@ private:
 
     // Off by default: a template should not start shipping measurements off the device
     // because someone flashed it.
-    inline static BoolSetting enabled_{ "telemetry.enabled", "Telemetry Enabled", false };
-    inline static UInt32Setting intervalSec_{ "telemetry.intervalSec",
+    //
+    // Keys are `telem.` and not `telemetry.` because an NVS key is at most 15 chars,
+    // and Register() asserts on that at RUNTIME — `telemetry.enabled` is 17 and boots
+    // straight into a reset loop. Nothing catches it at compile time.
+    inline static BoolSetting enabled_{ "telem.enabled", "Telemetry Enabled", false };
+    inline static UInt32Setting intervalSec_{ "telem.interval",
                                              "Telemetry Interval (s)", 60 };
 };

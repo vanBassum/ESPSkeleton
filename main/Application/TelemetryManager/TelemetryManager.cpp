@@ -1,6 +1,7 @@
 #include "TelemetryManager.h"
 #include "SettingsManager.h"
 #include "RelayManager.h"
+#include "NetworkManager.h"
 #include "DateTime.h"
 
 #include <esp_log.h>
@@ -30,7 +31,7 @@ void TelemetryManager::Init()
 
     if (!enabled_.Get())
     {
-        ESP_LOGI(TAG, "Disabled (set telemetry.enabled to record)");
+        ESP_LOGI(TAG, "Disabled (set telem.enabled to record)");
         initAttempt.SetReady();
         return;
     }
@@ -66,6 +67,13 @@ void TelemetryManager::SampleVitals()
     // esp_timer counts microseconds since boot; seconds is the useful unit and keeps
     // the value inside an int32 for over 60 years.
     p.Field("uptime", static_cast<int32_t>(esp_timer_get_time() / 1000000));
+
+    // Only when there is one. Writing 0 for "unknown" would graph as the strongest
+    // possible signal, which is the opposite of the truth and worse than a gap.
+    int8_t rssi = 0;
+    if (serviceProvider_.getNetworkManager().GetRssi(rssi))
+        p.Field("rssi", static_cast<int32_t>(rssi));
+
     p.Commit();
 }
 
@@ -118,7 +126,10 @@ TelemetryManager::Point& TelemetryManager::Point::Tag(const char* key, const cha
 TelemetryManager::Point& TelemetryManager::Point::Field(const char* key, double value)
 {
     if (!key || !*key) return *this;
-    if (fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
+    // Separator only BETWEEN fields. The field section is written straight after the
+    // space that ends the tags, so a leading comma there is a parse error at the
+    // server — unlike the tag buffer, which is appended to a tag and does start with one.
+    if (fieldLen_ > 0 && fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
     AppendEscaped(fields_, sizeof(fields_), fieldLen_, key, true);
 
     // %.6g rather than %f: a temperature is 21.5, not 21.500000, and the shorter line
@@ -133,7 +144,10 @@ TelemetryManager::Point& TelemetryManager::Point::Field(const char* key, double 
 TelemetryManager::Point& TelemetryManager::Point::Field(const char* key, int32_t value)
 {
     if (!key || !*key) return *this;
-    if (fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
+    // Separator only BETWEEN fields. The field section is written straight after the
+    // space that ends the tags, so a leading comma there is a parse error at the
+    // server — unlike the tag buffer, which is appended to a tag and does start with one.
+    if (fieldLen_ > 0 && fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
     AppendEscaped(fields_, sizeof(fields_), fieldLen_, key, true);
 
     // The trailing `i` is what makes Influx store this as an integer instead of a
@@ -149,7 +163,10 @@ TelemetryManager::Point& TelemetryManager::Point::Field(const char* key, int32_t
 TelemetryManager::Point& TelemetryManager::Point::Field(const char* key, bool value)
 {
     if (!key || !*key) return *this;
-    if (fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
+    // Separator only BETWEEN fields. The field section is written straight after the
+    // space that ends the tags, so a leading comma there is a parse error at the
+    // server — unlike the tag buffer, which is appended to a tag and does start with one.
+    if (fieldLen_ > 0 && fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
     AppendEscaped(fields_, sizeof(fields_), fieldLen_, key, true);
 
     const int n = snprintf(fields_ + fieldLen_, sizeof(fields_) - fieldLen_,
@@ -162,7 +179,10 @@ TelemetryManager::Point& TelemetryManager::Point::Field(const char* key, bool va
 TelemetryManager::Point& TelemetryManager::Point::Field(const char* key, const char* value)
 {
     if (!key || !*key || !value) return *this;
-    if (fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
+    // Separator only BETWEEN fields. The field section is written straight after the
+    // space that ends the tags, so a leading comma there is a parse error at the
+    // server — unlike the tag buffer, which is appended to a tag and does start with one.
+    if (fieldLen_ > 0 && fieldLen_ + 1 < sizeof(fields_)) fields_[fieldLen_++] = ',';
     AppendEscaped(fields_, sizeof(fields_), fieldLen_, key, true);
 
     // A string field is quoted, and inside the quotes only `"` and `\` are escaped —
