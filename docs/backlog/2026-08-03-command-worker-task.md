@@ -1,8 +1,9 @@
 # Command worker task (the part of multiplexed-channels that survived)
 
 Multiplexed channels were **rejected 2026-08-03** — see
-`docs/reasoning/` for why, and `2026-08-02-relay-gate-watchdog-upload.md` for what
-replaced them (addressed writes, so a long upload is many short sessions). That
+`docs/reasoning/2026-08-03-12h30-addressing-replaces-concurrency.md` for why, and the
+relay spec's *Request serialization* for what replaced them (addressed writes, so a
+long upload can be many short sessions). That
 deleted `2026-07-03-multiplexed-channels.md`, which had two things bundled into it
 that are **not** multiplexing and are still worth doing. They are recorded here so
 they did not die with it.
@@ -29,6 +30,13 @@ which lives in ESP-IDF's private `esp_httpd_priv.h`. It is needed to read frames
 beyond the first within one handler invocation — the public WS API gives one frame
 per invocation, which is not enough to drain a streamed request body on the httpd
 task.
+
+**Now the only private symbol in the codebase (2026-08-05).** The relay used to be
+the transport that could not read, and it has stopped being that: it drives a
+WebSocket at the public `esp_transport` layer and reads on its own task. So this wart
+is specific to httpd, not a general property of "streaming on a transport task" —
+which slightly weakens the case for the worker task, because there is now exactly one
+place that wants it.
 
 The worker task removes the need for it: the httpd task goes back to one frame per
 invocation, feeding a queue that the worker drains. So this wart's fix rides on

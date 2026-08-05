@@ -60,7 +60,8 @@ Today CommandManager implements commands *about* four other managers' domains
 be ripped out. It becomes a pure dispatcher; each manager registers its own
 commands in `Init()`.
 
-The normative sketch is [`ideas/command-registry-example.h`](../../../ideas/command-registry-example.h).
+The normative sketch was `ideas/command-registry-example.h`, deleted since; the
+shipped shape is `CommandEntry.h` plus the `commands_[]` tables in each manager.
 Summary of the mechanism:
 
 - `CommandEntry { name, handler, ctx, next, registered }` — the entries

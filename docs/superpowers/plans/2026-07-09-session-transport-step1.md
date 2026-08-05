@@ -12,7 +12,7 @@
 
 - Build env: dot-source `C:\Espressif\tools\Microsoft.v6.0.PowerShell_profile.ps1`, set `$env:PYTHONUTF8=1`, then `idf.py build`. Flash: `idf.py -p COM3 flash`.
 - C++17, no exceptions; `snprintf` with `sizeof` bounds, no `strcpy`/`strcat`.
-- Sources are listed explicitly in [main/CMakeLists.txt](main/CMakeLists.txt) `SOURCE_FILES_LIST` (no globbing); new `.cpp` files must be added there.
+- Sources are listed explicitly in [main/CMakeLists.txt](../../../main/CMakeLists.txt) `SOURCE_FILES_LIST` (no globbing); new `.cpp` files must be added there.
 - JSON via `lib/json` (`JsonWriter`/`JsonReader`/`JsonScope`); no external JSON lib.
 - Commit after every task. Commit messages end with the `Co-Authored-By` trailer used in this repo.
 - Test device is on **COM3**, reachable on the LAN (IP from boot log); web password default `admin`.
@@ -258,7 +258,7 @@ void SessionMux::OnChunk(uint16_t id, uint8_t flags, const uint8_t* payload, siz
 
 - [ ] **Step 4: Add `SessionMux.cpp` to the build**
 
-Modify [main/CMakeLists.txt](main/CMakeLists.txt): add to `SOURCE_FILES_LIST`, next to the other `Application/WebServerManager/*.cpp` entries:
+Modify [main/CMakeLists.txt](../../../main/CMakeLists.txt): add to `SOURCE_FILES_LIST`, next to the other `Application/WebServerManager/*.cpp` entries:
 
 ```cmake
     "Application/WebServerManager/SessionMux.cpp"

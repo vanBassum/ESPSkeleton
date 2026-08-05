@@ -9,8 +9,7 @@ If the dark LED starts to bother: a **StatusManager** (~70 lines) — a
 `Timer` polling a couple of states (network AP-fallback / connecting /
 connected) and mapping them to blink patterns on
 `getBoard().GetLed()`. No registries; trivially replaced later by
-something richer (see the monitor/signal/alarm sketches in
-`docs/ideas/manager-ideas.md`).
+something richer.
 
 Explicitly not SystemManager's job (its charter forbids timers) and not
 NetworkManager's (would bind the LED to network vocabulary).

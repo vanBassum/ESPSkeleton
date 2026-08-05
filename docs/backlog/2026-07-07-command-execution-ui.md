@@ -24,6 +24,15 @@ Enabler worth doing with either: CommandManager has no introspection —
 a `listCommands` command (walk the registration chain, return names)
 would give the UI autocomplete/discovery.
 
+**That enabler shipped 2026-08-05 and went further than this note asked.** `help list`
+walks the registry for categories and command names, *and* `help list -category X
+-command Y` returns that command's declared arguments — name, type, required, max
+length — by re-dispatching the handler with a reader that prints its declarations
+instead of filling them. So the "per-command schemas don't exist" objection to the
+Scalar/Swagger shape below is no longer true: they do exist, they are generated from
+the handler itself, and they cannot go stale. Step 3 of the sketch is now the cheapest
+part of this feature rather than the wildest.
+
 ## Direction sketch (Bas, 2026-07-07 — thoughts incomplete, parked)
 
 Start minimal and grow:

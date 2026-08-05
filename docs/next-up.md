@@ -2,76 +2,75 @@
 
 Rewritten as work lands — this is the ordered view, not a log. The detail lives in
 `docs/backlog/`; this file only says what to do next and what is waiting on a decision.
+Nothing here should be the only place a fact is written down.
 
-Last updated 2026-08-05, after the buffer plan, `help`, and the relay reading its own
-socket.
+Last updated 2026-08-05, after the relay transport rewrite and its hardware run.
 
-## Verified on hardware 2026-08-05
+## In order
 
-Nothing to do here — kept because it says what has actually been exercised, on an
-esp32_devkit against the demo relay server. Everything below the horizontal rule has not.
+The first two are a question away from being ordinary work; the rest can be picked up
+as they are.
 
-- The relay reading its own socket: connect, reconnect after failed attempts, a full
-  one-shot OTA (1.12 MB, 199 KB/s unpaced), `activate` validating the image, boot into
-  the new slot, and 100 s idle without losing the pipe (which also proves the pongs the
-  transport owes the server's 30 s heartbeat).
-- The gate watchdog measuring silence: a 40 s paced upload with a page load cutting in,
-  where both requests used to die.
-- `help`, including describe-mode re-dispatch — `help list -category partition -command
-  write` returns that handler's declared arguments off the device.
-- The zero-copy `partition write`: an image written straight out of the transport's
-  inbound buffer passes `esp_ota_set_boot_partition`'s validation and boots.
+1. **DECISION — does the relay ever face a public network?** Everything
+   security-shaped about remote access hangs off that answer: the device→server
+   credential (today, guessing the MAC-derived device id **evicts** the real device),
+   TLS, server-side login, a persistent registry. Until it is answered the relay must
+   not face a public IP.
+   → [`backlog/2026-07-03-remote-access.md`](backlog/2026-07-03-remote-access.md)
 
-Detail: [`backlog/2026-08-02-relay-gate-watchdog-upload.md`](backlog/2026-08-02-relay-gate-watchdog-upload.md),
-[`reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md`](reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md)
+2. **DECISION — are secret settings write-only over the wire, masked, or gated?**
+   `settings list` returns `wifi.password` and `web.password` in plaintext, to anyone
+   who reaches the socket while no web password is set — which is the default. The
+   recommendation is write-only, and the work is small once the shape is chosen.
+   → [`backlog/2026-08-05-secret-settings-over-the-wire.md`](backlog/2026-08-05-secret-settings-over-the-wire.md)
 
-Not exercised: `wss://` (the TLS handshake now runs on the relay task's stack, sized at
-10 K by reasoning rather than measurement), and a firmware push large enough to need a
-partition whose erase outlasts the server's 15 s idle window.
+3. **Server-side file caching**, keyed on `(deviceId, firmware, path)`. The fix for
+   relay page-load latency, now that one-request-in-flight is permanent.
+   → [`backlog/2026-07-03-remote-access.md`](backlog/2026-07-03-remote-access.md)
 
----
+4. **The command workbench page.** Shape decided (a dedicated page, not a console
+   input); the introspection it was waiting for now exists, since `help` returns each
+   command's declared arguments off the device.
+   → [`backlog/2026-07-07-command-execution-ui.md`](backlog/2026-07-07-command-execution-ui.md)
 
-## Waiting on a decision, not on code
+5. **Structural tidy-ups** — small, independent, each a paragraph: `UpdateManager`'s
+   name, the `RelayManager` → `WebServerManager` edge, the `help`/`readArgs`
+   dependency.
+   → [`backlog/2026-08-05-structural-tidy-ups.md`](backlog/2026-08-05-structural-tidy-ups.md)
 
-1. **Device→server credential.** The worst gap: anything that guesses the MAC-derived
-   device id does not impersonate the device, it **evicts** it. TLS, server-side login
-   and persistence sit behind the same question — does this ever face a public network?
+## Deliberately waiting for a reason to happen
 
-## Security, independent of all the above
+- [`broadcast-redesign`](backlog/2026-07-09-broadcast-redesign.md) — log broadcasts as
+  device-initiated sessions, the last non-session path. Deferred by choice, and now
+  wanted by two transports rather than one. Carries a live cosmetic bug (the
+  disconnect warning storm) with cheap interim fixes listed.
+- [`command-worker-task`](backlog/2026-08-03-command-worker-task.md) — pays the
+  worst-case handler stack once instead of per transport, and removes the last private
+  IDF symbol. Cost, not correctness; weaker now that only httpd wants it.
+- [`std-cpp-review`](backlog/2026-07-03-std-cpp-review.md) — what in `lib/` should be
+  standard C++ instead.
+- [`flash-circular-logging`](backlog/2026-07-06-flash-circular-logging.md) — blocked on
+  its own project (`FlashLoggerV2`), and on flash map space we do not have.
 
-2. **`settings list` returns passwords in plaintext.** Both `wifi.password` and
-   `web.password`, to anyone who reaches the socket while no web password is set — which
-   is the default. The relay widens that past the LAN. Needs a decision on whether
-   secret-ish settings are write-only over the wire, masked, or gated.
+## Parked, with the reasoning written down
 
-## Open smaller items
-
-- `ConsoleManager` holds a single broadcast callback, which is what forces the
-  `WebServerManager` → `RelayManager` edge. Bas wanted to think about what "central"
-  should mean before changing it.
-- `RelayManager` includes `WebServerManager.h` to borrow the `Authenticator` — the last
-  sideways edge between two transports.
-- `UpdateManager` now owns only the `partition` category; the name has drifted from the
-  contents.
-- `help` makes `ctx.readArgs()` load-bearing: it is what stops a described handler
-  before its body. A handler that skips it runs for real under `help` — against streams
-  that go nowhere, so nothing reaches the client, but a flash write would still happen.
-  Logged as an error when it occurs; enforcing it at compile time would need the
-  argument declarations to sit outside the handler, which is exactly what makes them
-  impossible to get out of sync today.
-- [`backlog/2026-08-03-command-worker-task.md`](backlog/2026-08-03-command-worker-task.md)
-  — the stack-tax and private-API halves that survived the multiplexing rejection. Cost,
-  not correctness.
-
-## Parked
-
-The console request format. Motivation reduced to hand-typability, which the frontend
-covers; the pull contract keeps the flip cheap whenever it is wanted. Unknown-argument
-enforcement is parked with it, deliberately.
-See `docs/reasoning/2026-08-03-16h30-the-console-format-is-parked.md`.
+- **The console request format.** Motivation reduced to hand-typability, which the
+  frontend covers; the pull contract keeps the flip cheap whenever it is wanted.
+  Unknown-argument enforcement is parked with it, deliberately.
+  → `docs/reasoning/2026-08-03-16h30-the-console-format-is-parked.md`
+- **Multiplexed channels / concurrency on the device.** Rejected 2026-08-03, not
+  deferred. Addressed writes achieve the same coexistence with no new machinery.
+  → `docs/reasoning/2026-08-03-12h30-addressing-replaces-concurrency.md`
+- **Dynamic buffers in the request path.** All four sites resolved 2026-08-05, three of
+  them by removing the need for the buffer rather than sizing it better. The one
+  deliberate non-change (`ConsoleManager`'s log ring) is recorded in structural
+  tidy-ups so it is not re-litigated.
+  → `docs/reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md`
+- **MQTT / Home Assistant.** Removed 2026-07-06 and out of scope for the template; see
+  CLAUDE.md.
 
 ## Not for here
 
-Today's structural work flows one way to the KC1245 fork (`lib/protocol`, the pull
-contract, two-word routes, auth-as-commands). Nothing needs backporting *from* it —
-every shared commit was walked on 2026-08-03.
+Structural work flows one way to the KC1245 fork (`lib/protocol`, the pull contract,
+two-word routes, auth-as-commands, and now the relay transport). Nothing needs
+backporting *from* it — every shared commit was walked on 2026-08-03.

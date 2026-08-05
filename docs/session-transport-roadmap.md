@@ -1,7 +1,19 @@
-# Session Transport — Migration Roadmap
+# Session Transport — Migration Roadmap (COMPLETE — historical record)
 
-Living index for resuming the WebSocket → session-mux migration across sessions.
-Update the status column as steps land.
+**Finished. Do not plan from this file.** Steps 1–5 shipped, step 6 was rejected, and
+the migration's north star is reached: every device interaction is a session. It is
+kept because the *as-built* sections below are the only written record of several
+decisions, and because the numbered steps are referenced from commit messages.
+
+Where the live information is now:
+- current architecture → [CLAUDE.md](../CLAUDE.md)
+- what to do next → [next-up.md](next-up.md)
+- why things are the way they are → [reasoning/](reasoning/)
+
+Names used below that the code no longer has: `SessionMux` and `CommandSink` became
+`protocol::RunCommandSession` (2026-08-03), `WsRequestStream` became
+`WsSessionLink::RecvChunk` (step 2). The designs they describe are intact; only the
+filing changed.
 
 - **Design (read first):** [specs/2026-07-09-session-mux-transport-design.md](superpowers/specs/2026-07-09-session-mux-transport-design.md)
 - **Step-1 plan:** [plans/2026-07-09-session-transport-step1.md](superpowers/plans/2026-07-09-session-transport-step1.md)
@@ -48,11 +60,31 @@ designed properly at a later stage.
 - **Files:** `main/Application/WebServerManager/`: `SessionProtocol.h`, `SessionMux.{h,cpp}`, `WsSessionLink.h`, `WebSocketHandler.{h,cpp}`; frontend `frontend/src/lib/backend.ts`.
 - **Result:** commands, replies, and broadcasts all binary chunks — **zero TEXT on the socket**; commands no longer touch `/api/command`.
 
-## Key facts a fresh session must know
+## How to verify on hardware (still current)
 
-- **Single-in-flight is synchronous today:** a step-1 session lives only within one `OnChunk` call on the httpd task, so there is **no busy-gate, no `REJECT` for concurrency, and no client serialization** yet. Both the gate and the frontend open-queue arrive in **step 2**, when a streamed upload holds the socket across frames.
-- **Inbound-drain primitive:** `WsRequestStream` + the forward-declared **private `httpd_ws_get_frame_type`** (in `WebSocketHandler.cpp`) drain multi-frame bodies on the httpd task. Dormant now; first exercised in step 2; the private call is removed only if the worker task ever lands (see [command-worker-task](backlog/2026-08-03-command-worker-task.md)) — step 6 as a concurrency step is rejected.
-- **Verification (no unit tests):** build + flash, then drive over the socket. Build env per [memory] (dot-source `C:\Espressif` v6.0 profile + `PYTHONUTF8=1`, `idf.py build`), flash `idf.py -p COM3 flash`. Probe pattern: `POST /api/login {"password":"admin"}` → token → WS `?token=` → send binary `[sid|FLAG_FINAL|{"type":...}\n]`, read binary chunks (skip session 0 broadcasts) until `FLAG_FINAL`, reassemble → JSON. Device typically at `192.168.50.111`.
+There are no unit tests: verification is build, flash, and drive the device over its
+own wire. The recipe, which survived every step above and the relay rewrite:
+
+1. Build and flash — `idf.py build`, `idf.py -p <PORT> flash`. Find the port rather
+   than trusting a number written in a doc.
+2. Open a WebSocket: `ws://<device>/ws` locally, or
+   `ws://<relay>/devices/<deviceId>/ws` through the relay. **No login step** — auth is
+   three ordinary commands (`auth hello|login|resume`) and is disabled entirely while
+   `web.password` is empty, which is the default.
+3. Send a session chunk: `[sid u16 LE][flags u8][payload]`, where the payload starts
+   with the envelope line `{"type":"<category> <command>", …args}\n` and any body
+   follows it — in the same chunk or in further chunks sharing the sid. `FLAG_FINAL`
+   (0x01) on the last one.
+4. Read chunks with your sid until one carries `FLAG_FINAL` (or `FLAG_REJECT` = 0x02,
+   whose payload is the reason). **Skip session 0** — those are log broadcasts, not
+   your reply. Non-final chunks are reply data, or progress reports on a long write.
+5. Body-carrying commands: keep each chunk's payload within the transport's inbound
+   window (4096 on both transports today) — a larger frame is refused rather than
+   split.
+
+`help list` enumerates every category and command off the device, and
+`help list -category X -command Y` gives that command's declared arguments, so a probe
+script does not need this repo open to know what to send.
 
 ## Step 2 — as built
 

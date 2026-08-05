@@ -364,17 +364,73 @@ the device reconnects by itself in ~3 s via `esp_websocket_client`'s auto-reconn
 after which the relay serves and dispatches again. The local path is unaffected
 throughout — the same commands work directly against the device.
 
+> **Names, as of 2026-08-05.** Two components named above no longer exist:
+> `CommandSink` and `SessionMux` were folded into `protocol::RunCommandSession`
+> (`lib/protocol/CommandEnvelope.h`) when the dispatcher stopped knowing about
+> sessions. The design they describe is intact; only the filing changed. See
+> `docs/reasoning/2026-08-03-11h59-*`.
+
+## Milestone 2 — 2026-08-05: the transport, and firmware update proven
+
+Two changes, both hardware-verified the same day, which together close the "do not
+rely on remote firmware update" warning this section used to carry.
+
+**The device reads its own socket.** `RelayManager` no longer uses
+`esp_websocket_client`; it drives a WebSocket at the `esp_transport` layer
+(`RelaySocket`), so the relay task connects, reads a frame, and runs the command it
+read — the same shape as the browser socket. The queue this design specified, the
+per-frame `malloc` that fed it, the reassembly buffer, the stale-chunk drain and the
+disconnect sentinel are all gone, and with them the dropped-chunk failure mode: a
+full queue used to write a hole into a firmware image, silently. Backpressure is now
+the TCP window. Reasoning:
+`docs/reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md`. Reconnect,
+keepalive and URL parsing moved to us with it; control frames did not (the transport
+answers a ping and completes a close inside the read).
+
+**The gate watchdog measures silence, not session length.** `SESSION_IDLE_TIMEOUT`
+(15 s), re-armed by any chunk for the holder's session in either direction. There is
+no cap on how long a healthy session may run; a dead one still frees the pipe.
+
+> **Invariant, if either timeout is ever touched:** the server's idle timeout must
+> stay LONGER than the device's `RECV_TIMEOUT_MS` (10 s, `RelaySessionLink`).
+> Whichever fires first decides how a stalled session ends, and it has to be the
+> device: it EOFs its own request, the handler writes a reply, and that reply
+> releases the gate normally. Server first releases the pipe while the device still
+> believes the session is open — the interleaving the gate exists to prevent.
+
+### Verified on hardware 2026-08-05
+
+esp32_devkit, fw 0.0.5, `relay.py` on a LAN host, driven by a script speaking the
+session protocol in place of a browser.
+
+- **One-shot firmware update, the case that used to lose two requests at once.**
+  1,120,064 bytes to `ota_1`, paced to 27 KB/s so the session spanned **40.1 s**
+  (twice the old fixed budget), with a page load starting at t=24.5 s. Write returned
+  `{"ok":true,...,"size":1120064}`; the page load returned 200 after waiting 20.1 s
+  for its turn; `activate` accepted the image — so all 1.12 MB landed byte-correct
+  through the new transport and the zero-copy write — and the device booted the new
+  slot (`Loaded app from partition at offset 0x1a0000`). No watchdog warning.
+- **Unpaced: 5.5 s, 199 KB/s.** Run in both directions (`ota_0` ↔ `ota_1`), and a
+  later build was pushed over the relay with no serial cable attached — the path
+  updating itself.
+- **Liveness:** three failed connects before the server existed, then self-recovery;
+  100 s fully idle without losing the pipe, which also proves the pongs the transport
+  owes aiohttp's 30 s heartbeat.
+- **`help` over the relay**, including describe-mode re-dispatch:
+  `help list -category partition -command write` returns that handler's declared
+  arguments off the device.
+
 ### Still owed
 
-Caching (the next thing to do if page loads annoy), TLS/WSS, the device→server
-credential, and per-browser auth on a shared pipe. The one-request-in-flight
-serialization is **not** on this list any more: concurrency was rejected 2026-08-03,
-and long uploads instead split into many short sessions via an addressed
-`writePartition`.
+- **Caching**, keyed on `(deviceId, firmware, path)` — the next thing to do if page
+  loads annoy. Concurrency is not the fix; it was rejected 2026-08-03.
+- **TLS / `wss://`** — never exercised. `RelaySocket` attaches the certificate
+  bundle for `wss://`, and the build has it enabled, but no run has used it. The TLS
+  handshake now shares the relay task's stack (10 K, sized by reasoning rather than
+  measurement), so this is the one change most likely to want a headroom check.
+- **The device→server credential**, and **per-browser auth on a shared pipe**.
+- **A silent command longer than the idle window.** `partition clear` says nothing
+  while it erases — 4.1–4.5 s for a 1.5 MB slot against 15 s. Fine today, but that
+  margin is the erase time of the partition rather than a number anyone chose.
 
-**Known bug, found by inspection 2026-08-02:** the in-flight gate's watchdog is
-per-session but sized for one small round trip, so it fires mid-upload and lets a
-file fetch interleave into a streamed request body. Firmware update over the relay
-is also the one command path never exercised end to end. Both in
-`docs/backlog/2026-08-02-relay-gate-watchdog-upload.md` — do not rely on remote
-firmware update until it is closed.
+Backlog: `docs/backlog/2026-07-03-remote-access.md`.
