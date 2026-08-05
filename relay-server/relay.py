@@ -87,8 +87,15 @@ class RelayError(Exception):
 class DeviceConnection:
     """One ESP32's outbound socket: id space, session maps, and the in-flight gate."""
 
+    # Per-pipe serial number, only for logs. One device id can have two pipes alive at
+    # once for a moment during a reconnect, and a line that does not say which one it
+    # is about is worse than no line.
+    _seq = 0
+
     def __init__(self, device_id: str, firmware: str, ws: web.WebSocketResponse,
                  name: str = "", project: str = ""):
+        DeviceConnection._seq += 1
+        self.pipe = DeviceConnection._seq
         self.device_id = device_id
         self.firmware = firmware
         # Display only. device_id is the technical identity and the thing the token
@@ -320,6 +327,16 @@ class DeviceConnection:
                 pass
         self.browsers.clear()
 
+        # And the device socket itself. Without this a pipe that has already been
+        # REPLACED stays open until aiohttp's heartbeat notices, ~30 s later — so its
+        # teardown gets logged long after the new pipe is serving, which reads exactly
+        # like the live device dropping. It cost an afternoon of chasing a phantom
+        # reconnect loop; the device was fine the whole time.
+        try:
+            await self.ws.close()
+        except Exception:
+            pass
+
 
 # ── Pairing store ─────────────────────────────────────────────────────────────
 # What survives a restart: which device ids are approved and what token each one
@@ -535,24 +552,30 @@ async def device_ws(request: web.Request) -> web.StreamResponse:
     conn = DeviceConnection(device_id, firmware, ws, name, project)
     previous = devices.get(device_id)
     if previous is not None:
-        log.info("device %s reconnected, dropping the previous pipe", device_id)
+        log.info("device %s reconnected on pipe #%d, dropping pipe #%d",
+                 device_id, conn.pipe, previous.pipe)
         await previous.close()
     devices[device_id] = conn
-    log.info("device %s connected (fw %s) from %s", device_id, firmware,
-             request.remote)
+    log.info("device %s connected on pipe #%d (%s fw %s) from %s",
+             device_id, conn.pipe, name or "unnamed", firmware, request.remote)
 
     try:
         async for msg in ws:
             if msg.type == WSMsgType.BINARY:
                 await conn.on_device_chunk(msg.data)
             elif msg.type == WSMsgType.ERROR:
-                log.warning("device %s socket error: %s", device_id, ws.exception())
+                log.warning("device %s pipe #%d socket error: %s",
+                            device_id, conn.pipe, ws.exception())
                 break
     finally:
-        if devices.get(device_id) is conn:
+        # Whether this pipe is still THE pipe decides what this teardown means: the
+        # device going away, or a pipe that was already replaced finally closing.
+        current = devices.get(device_id) is conn
+        if current:
             devices.pop(device_id, None)
         await conn.close()
-        log.info("device %s disconnected", device_id)
+        log.info("device %s pipe #%d closed%s", device_id, conn.pipe,
+                 "" if current else " (already replaced — device is still connected)")
 
     return ws
 
