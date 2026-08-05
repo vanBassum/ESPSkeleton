@@ -36,7 +36,13 @@ There are no automated tests; verification is building, flashing, and driving th
 
 `help list` enumerates every category and command off the device, and `help list -category X -command Y` returns that command's declared arguments, so a probe script needs no source to know what to send.
 
-Where docs go — only these four, nothing else: [docs/next-up.md](docs/next-up.md) is the ordered index and the thing to read first; `docs/backlog/` holds things actually planned to be done, one file per topic, and a resolved one is **deleted** rather than left with a DONE banner; `docs/reasoning/` is an append-only log of understanding changes, immutable once written, and is where the *why* of a decision lives; `docs/ideas/` holds set-aside sketches of how something could be solved someday, suggestions rather than commitments. Design documents and implementation plans as separate artifacts were removed 2026-08-05 — they went stale faster than they were read. A plan goes in the backlog; the reasoning behind it goes in a note.
+### Where docs go — three places, nothing else
+
+- **[docs/next-up.md](docs/next-up.md) — what is being worked on *right now*.** Read it first. It is rewritten constantly and deliberately kept tiny: an item is **removed** the moment it lands or is dropped, never annotated, never ticked off in place. Only active work belongs here. If something wants to persist, it does not go in this file — it goes to the backlog (if it is work) or to a note (if it is understanding).
+- **`docs/backlog/` — work for later.** One file per topic. A resolved item is **deleted**, not left with a DONE banner; what mattered about it lives in a note by then.
+- **`docs/reasoning/` — why things are the way they are.** Append-only, immutable once written, one understanding-delta per note, dated. Never edited: a new understanding is a new note, related to the old one via `builds-on` or `supersedes`. This is the durable record — prefer it over prose documentation anywhere.
+
+Design documents, implementation plans and an ideas folder were all removed on 2026-08-05: they asserted the present tense, so they rotted faster than they were read (see `docs/reasoning/2026-08-05-15h29-a-document-asserts-the-present-tense-so-it-rots.md`). A plan goes in the backlog; the reasoning behind it goes in a note; how to operate something goes in this file. Deleting a doc is not losing it — git has it.
 
 ## Architecture
 
