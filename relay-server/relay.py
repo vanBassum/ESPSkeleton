@@ -51,7 +51,20 @@ BROADCAST_SESSION = 0
 BROWSER_ID_BASE, BROWSER_ID_LIMIT = 1, 0x8000
 SERVER_ID_BASE, SERVER_ID_LIMIT = 0x8000, 0x10000
 
-REQUEST_TIMEOUT = 20.0   # seconds to wait for a device reply
+# How long a session may go SILENT before this server gives up on it — never how
+# long it may run. A 1 MB upload legitimately takes tens of seconds and used to have
+# the pipe taken away mid-image, letting a concurrent request interleave into its
+# request body; both requests then died. Measuring silence instead means a healthy
+# upload re-arms the timer with every chunk, while a device that died still frees the
+# pipe within this window.
+#
+# It is deliberately LONGER than the device's own RECV_TIMEOUT_MS (10 s, in
+# RelaySessionLink): the two have to be decided together, because whichever fires
+# first decides how the session ends. Device first is what we want — it EOFs its own
+# request, its handler writes a reply, and that reply releases the gate in the normal
+# way. Server first would mean releasing the pipe while the device still believes the
+# session is open, which is precisely the interleaving the gate exists to prevent.
+SESSION_IDLE_TIMEOUT = 15.0
 
 
 class RelayError(Exception):
@@ -74,6 +87,7 @@ class DeviceConnection:
         self.gate = asyncio.Lock()
         self._gate_holder: int | None = None
         self._gate_watchdog: asyncio.Task | None = None
+        self._gate_touched = 0.0     # monotonic time of the holder's last chunk
 
         # aiohttp writes a frame per call, but two tasks interleaving awaits on
         # the same socket is not worth risking.
@@ -109,17 +123,39 @@ class DeviceConnection:
     async def acquire_gate(self, holder: int) -> None:
         await self.gate.acquire()
         self._gate_holder = holder
+        self._gate_touched = time.monotonic()
         # A device that never FINALs must not wedge the pipe for good.
         self._gate_watchdog = asyncio.create_task(self._gate_timeout(holder))
 
+    def touch_gate(self, sid: int) -> None:
+        """A chunk moved for this session, in either direction — it is alive.
+
+        Only the holder's own traffic counts. Session 0 carries the device's log
+        broadcasts continuously, so re-arming on any chunk at all would mean the
+        watchdog never fires for anything.
+        """
+        if sid == self._gate_holder:
+            self._gate_touched = time.monotonic()
+
     async def _gate_timeout(self, holder: int) -> None:
+        """Release the pipe after SESSION_IDLE_TIMEOUT of silence for this session.
+
+        Sleeps to the deadline as it stands, then re-checks: every chunk pushes
+        _gate_touched forward, so a long healthy transfer keeps extending the sleep
+        and never trips, without waking this task per chunk.
+        """
         try:
-            await asyncio.sleep(REQUEST_TIMEOUT)
+            while True:
+                remaining = SESSION_IDLE_TIMEOUT - (time.monotonic() - self._gate_touched)
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(remaining)
         except asyncio.CancelledError:
             return
+
         if self._gate_holder == holder:
-            log.warning("device %s: session %d never finished, releasing the pipe",
-                        self.device_id, holder)
+            log.warning("device %s: session %d silent for %.0fs, releasing the pipe",
+                        self.device_id, holder, SESSION_IDLE_TIMEOUT)
             self.release_gate(holder)
 
     def release_gate(self, holder: int) -> None:
@@ -149,6 +185,10 @@ class DeviceConnection:
         if sid == BROADCAST_SESSION:
             await self.fanout(data)        # verbatim — the browser expects this shape
             return
+
+        # Device → us counts as progress: an upload's progress reports arrive this way,
+        # and so does every chunk of a long file being read out of the device.
+        self.touch_gate(sid)
 
         queue = self.server_sessions.get(sid)
         if queue is not None:
@@ -199,6 +239,11 @@ class DeviceConnection:
 
         await self.send_chunk(device_sid, flags, payload)
 
+        # Browser → device counts too, and this is the direction that matters most: a
+        # one-shot firmware upload is minutes of body chunks with the device saying
+        # almost nothing back.
+        self.touch_gate(device_sid)
+
     def drop_browser(self, browser) -> None:
         self.browsers.discard(browser)
         for key in [k for k in self.browser_map if k[0] == id(browser)]:
@@ -221,7 +266,9 @@ class DeviceConnection:
 
             body = bytearray()
             while True:
-                flags, payload = await asyncio.wait_for(queue.get(), REQUEST_TIMEOUT)
+                # Per chunk, not per reply: a large file arrives as many chunks, and
+                # the same idleness rule applies to each wait.
+                flags, payload = await asyncio.wait_for(queue.get(), SESSION_IDLE_TIMEOUT)
                 if flags & FLAG_REJECT:
                     raise RelayError(f"device rejected web read: "
                                      f"{payload.decode('utf-8', 'replace')}")

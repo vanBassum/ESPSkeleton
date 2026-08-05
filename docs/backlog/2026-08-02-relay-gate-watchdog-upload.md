@@ -36,7 +36,41 @@ Verified on hardware over the relay: 1,067,456 bytes in 17 pieces of 64 KB with
 activated, **and a browser page load succeeded in one of the gaps at t=25 s**, the
 exact request that got a 504 in the failing case above.
 
-## What remains
+## Resolved 2026-08-05 — the watchdog measures silence
+
+Option 1. `SESSION_IDLE_TIMEOUT` (15 s) replaces `REQUEST_TIMEOUT` (20 s), and the
+watchdog sleeps to the deadline *as it currently stands* and re-checks, so every chunk
+in either direction pushes the deadline out without waking the task per chunk.
+`touch_gate()` is called from `on_device_chunk` (device → us: progress reports, reply
+chunks) and from `relay_from_browser` (browser → device: the body of a one-shot
+upload, which is the direction that matters, since the device says almost nothing
+while it is being fed). Only the holder's own session id counts — session 0 carries
+log broadcasts continuously, and re-arming on those would mean the watchdog never
+fires for anything.
+
+There is now no cap on how long a healthy session may run. A dead one still frees the
+pipe within 15 s.
+
+**The two timeouts, decided together as this item asked.** The device's
+`RECV_TIMEOUT_MS` stays 10 s and the server's idle timeout is deliberately longer,
+because whichever fires first decides how a stalled session ends. Device first is what
+we want: it EOFs its own request, the handler writes a reply, and that reply releases
+the gate the ordinary way. Server first would release the pipe while the device still
+believes the session is open — the exact interleaving the gate exists to prevent. Both
+sides carry a comment pointing at the other.
+
+Verified in a scratch harness against `DeviceConnection` directly, with the timeout
+scaled to 0.6 s: an idle session frees the pipe; a transfer three times longer than the
+timeout keeps it and frees it once traffic stops; log broadcasts do not re-arm another
+session's gate; and a second browser opening a page during a long upload waits its turn
+instead of interleaving — the case that lost *both* requests above. Patching the old
+fixed-length watchdog back in fails that third check, so the harness was testing
+something real. Not on hardware yet.
+
+Option 2 (make the web UI use chunked mode) is now unnecessary rather than pending.
+One-shot mode over the relay is safe again.
+
+## What remained until then
 
 One-shot mode (`writePartition` with no `offset`) still holds the pipe for a whole
 image, so it still trips the watchdog on a link slow enough to push it past 20 s. It

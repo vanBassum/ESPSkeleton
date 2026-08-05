@@ -18,6 +18,15 @@ class RelaySessionLink : public SessionLink
 
     // A body chunk that never arrives must not wedge the task forever; EOF the
     // session instead and let the server retry.
+    //
+    // Paired with the server's gate idle timeout (SESSION_IDLE_TIMEOUT in
+    // relay-server/relay.py), which is deliberately longer. Whichever fires first
+    // decides how a stalled session ends, and it has to be this one: the device EOFs
+    // its own request, the handler writes a reply, and that reply releases the
+    // server's gate in the ordinary way. The other order releases the pipe while this
+    // side still believes the session is open — which is the interleaving the gate is
+    // there to prevent. Neither timeout limits how LONG a healthy session may run;
+    // both measure silence.
     static constexpr int RECV_TIMEOUT_MS = 10000;
 
     RelaySocket& socket_;

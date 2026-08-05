@@ -61,7 +61,12 @@ and rewrite the 3-byte session header, because it must own the session-id space:
 * One request is in flight per device (`DeviceConnection.gate`), held for a whole
   session. The device dispatches a chunk synchronously with no slot table, so
   overlapping sessions would let a file fetch's chunk land inside a streamed
-  request body. A watchdog releases the gate if a device never sends FINAL.
+  request body. A watchdog releases the gate after `SESSION_IDLE_TIMEOUT` of
+  **silence** for that session — not after a fixed session length, which used to take
+  the pipe away from a healthy multi-second upload and let a page load interleave into
+  its body, killing both. Every chunk in either direction re-arms it, so a transfer of
+  any duration is fine while a dead device still frees the pipe. It is longer than the
+  device's own receive timeout on purpose; see the note next to the constant.
 
 The device owns its frontend storage: the server asks for `/index.html` and never
 learns it lives gzipped on a FAT partition called `www`. `Content-Encoding` comes
