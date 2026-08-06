@@ -1,3 +1,13 @@
+# ── The substrate every layer stands on: RTOS wrappers, streams, JSON, the
+# request/reply seam, date and time. NOT part of the framework — the board layer uses
+# InitState and the application uses Timer, and both would be reaching inside strux/ to
+# get them if this lived there. Nothing in here knows about a layer; that is the test
+# for whether a thing belongs.
+set(LIB_SOURCES
+    "lib/system/DateTime.cpp"
+    "lib/system/TimeSpan.cpp"
+)
+
 # ── The framework. Pulled from the Strux template; a fork should not need to touch
 # this list, which is why it is kept apart from the application's.
 set(STRUX_SOURCES
@@ -22,8 +32,6 @@ set(STRUX_SOURCES
     "strux/SystemManager/SystemManager.cpp"
     "strux/ConsoleManager/ConsoleManager.cpp"
     "strux/TimeManager/TimeManager.cpp"
-    "strux/lib/system/DateTime.cpp"
-    "strux/lib/system/TimeSpan.cpp"
 )
 
 # ── The application. This is the list a fork owns.
@@ -33,6 +41,7 @@ set(APP_SOURCES
 
 set(SOURCE_FILES_LIST
     "main.cpp"
+    ${LIB_SOURCES}
     ${STRUX_SOURCES}
     ${APP_SOURCES}
 )
@@ -41,6 +50,12 @@ set(SOURCE_FILES_LIST
 # (`#include "Stream.h"`) and moving one between layers does not touch its callers.
 set(INCLUDE_DIRS_LIST
     .
+    "lib"
+    "lib/common"
+    "lib/rtos"
+    "lib/json"
+    "lib/protocol"
+    "lib/system"
     "strux"
     "strux/NetworkManager"
     "strux/WebServerManager"
@@ -52,12 +67,6 @@ set(INCLUDE_DIRS_LIST
     "strux/SystemManager"
     "strux/ConsoleManager"
     "strux/TimeManager"
-    "strux/lib"
-    "strux/lib/common"
-    "strux/lib/rtos"
-    "strux/lib/json"
-    "strux/lib/protocol"
-    "strux/lib/system"
     "hardware"
     "app"
     "app/LedManager"

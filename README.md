@@ -88,7 +88,7 @@ Strux/
 | `hardware/drivers/` | Board-independent chip/peripheral drivers implementing the roles | Add a peripheral |
 | `strux/` | The framework: managers, dispatch, transports, settings, OTA | The template improves — pull it into a fork |
 | `app/` | Your product: managers, business logic, commands | Add features or change behavior |
-| `strux/lib/` | RTOS wrappers, JSON, protocol, time utilities | Rarely — these are stable building blocks |
+| `lib/` | RTOS wrappers, JSON, protocol, time utilities — the substrate all three layers use, part of none of them | Rarely — these are stable building blocks |
 
 **Rule of thumb:** if the code changes when you swap the board, it belongs in `hardware/boards/<name>/`. If it's a chip driver several boards could use, it belongs in `hardware/drivers/`. If it changes when you add a feature to this product, it belongs in `app/`. If every fork would want it, it belongs in `strux/`.
 
