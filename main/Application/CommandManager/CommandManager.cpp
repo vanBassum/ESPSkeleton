@@ -2,7 +2,6 @@
 #include "JsonArgReader.h"
 #include "JsonReplyWriter.h"
 #include "DescribeArgReader.h"
-#include "JsonScope.h"
 #include "Stream.h"
 #include "esp_log.h"
 #include <cstdio>
@@ -103,17 +102,17 @@ RequestError CommandManager::Cmd_Help(CommandContext& ctx)
     ));
 
     if (command[0] != '\0')
-        return DescribeCommand(category, command, ctx.out);
+        return DescribeCommand(category, command, ctx.reply);
 
     if (category[0] != '\0')
-        ListCategory(category, ctx.out);
+        ListCategory(category, ctx.reply);
     else
-        ListCategories(ctx.out);
+        ListCategories(ctx.reply);
 
     return RequestError::Ok;
 }
 
-void CommandManager::ListCategories(Stream& out)
+void CommandManager::ListCategories(ReplyWriter& reply)
 {
     // Held across the JSON, so a manager registering from another task cannot relink
     // the chain half way through the answer. Safe to write to `out` from under it:
@@ -139,15 +138,15 @@ void CommandManager::ListCategories(Stream& out)
         seen[count++] = e->category;
     }
 
-    JsonObject resp(out);
+    auto resp = reply.object();
     resp.field("ok", true);
     {
-        JsonArray cats = resp.array("categories");
+        auto cats = resp.array("categories");
         for (size_t i = 0; i < count; ++i)
         {
-            JsonObject cat = cats.object();
+            auto cat = cats.object();
             cat.field("category", seen[i]);
-            JsonArray names = cat.array("commands");
+            auto names = cat.array("commands");
             for (const CommandEntry* e = head_; e != nullptr; e = e->next)
                 if (strcmp(seen[i], e->category) == 0)
                     names.value(e->name);
@@ -157,11 +156,11 @@ void CommandManager::ListCategories(Stream& out)
         resp.field("truncated", true);
 }
 
-void CommandManager::ListCategory(const char* category, Stream& out)
+void CommandManager::ListCategory(const char* category, ReplyWriter& reply)
 {
     LOCK(mutex_);   // see ListCategories
 
-    JsonObject resp(out);
+    auto resp = reply.object();
 
     bool found = false;
     for (const CommandEntry* e = head_; e != nullptr && !found; e = e->next)
@@ -176,16 +175,16 @@ void CommandManager::ListCategory(const char* category, Stream& out)
 
     resp.field("ok", true);
     resp.field("category", category);
-    JsonArray names = resp.array("commands");
+    auto names = resp.array("commands");
     for (const CommandEntry* e = head_; e != nullptr; e = e->next)
         if (strcmp(category, e->category) == 0)
             names.value(e->name);
 }
 
 RequestError CommandManager::DescribeCommand(const char* category, const char* command,
-                                             Stream& out)
+                                             ReplyWriter& reply)
 {
-    JsonObject resp(out);
+    auto resp = reply.object();
 
     if (category[0] == '\0')
     {
@@ -211,7 +210,7 @@ RequestError CommandManager::DescribeCommand(const char* category, const char* c
     // Not through Execute(): that one is the wire path — it builds the reader for
     // today's format and reports which argument a parse tripped over. Here the reader
     // IS the point, and there is no request to parse.
-    JsonArray args = resp.array("arguments");
+    auto args = resp.array("arguments");
     DescribeArgReader reader(args);
     NullStream sink;
     JsonReplyWriter nowhere(sink);   // the described handler is stopped before it replies

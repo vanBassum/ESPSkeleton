@@ -9,7 +9,7 @@
 #include <cstdint>
 
 class Stream;
-class JsonObject;
+class ReplyObject;
 
 class ConsoleManager {
     static constexpr const char* TAG = "ConsoleManager";
@@ -30,7 +30,7 @@ public:
     using BroadcastFunc = void (*)(const char* json, int32_t len, void* ctx);
     void SetBroadcastCallback(BroadcastFunc func, void* ctx);
 
-    void WriteHistory(JsonObject& resp) const;
+    void WriteHistory(ReplyObject& resp) const;
 
 private:
     ServiceProvider& serviceProvider_;

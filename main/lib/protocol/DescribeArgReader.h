@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CommandContext.h"
-#include "JsonScope.h"
+#include "ReplyWriter.h"
 
 // The ArgReader that answers `help` instead of a request.
 //
@@ -18,14 +18,14 @@ class DescribeArgReader final : public ArgReader
 {
 public:
     /// `args` is the array the declarations are appended to, one object each.
-    explicit DescribeArgReader(JsonArray& args) : args_(args) {}
+    explicit DescribeArgReader(ReplyArray& args) : args_(args) {}
 
     RequestError read(const ArgSpec* specs, size_t count) override
     {
         for (size_t i = 0; i < count; ++i)
         {
             const ArgSpec& s = specs[i];
-            JsonObject arg = args_.object();
+            auto arg = args_.object();
             arg.field("name", s.name);
             arg.field("type", TypeName(s.type));
             arg.field("required", s.required);
@@ -38,7 +38,7 @@ public:
     }
 
 private:
-    JsonArray& args_;
+    ReplyArray& args_;
 
     static const char* TypeName(ArgType t)
     {

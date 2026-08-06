@@ -1,7 +1,6 @@
 #include "SystemManager.h"
 #include "SettingsManager.h"
 #include "CommandManager.h"
-#include "JsonScope.h"
 #include "DateTime.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -47,7 +46,7 @@ RequestError SystemManager::Cmd_Ping(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
     resp.field("pong", true);
     return RequestError::Ok;
 }
@@ -56,7 +55,7 @@ RequestError SystemManager::Cmd_Info(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
 
     const esp_app_desc_t* app = esp_app_get_description();
 
@@ -86,7 +85,7 @@ RequestError SystemManager::Cmd_Reboot(CommandContext& ctx)
     RETURN_IF_ERROR(ctx.readArgs());
 
     {
-        JsonObject resp(ctx.out);
+        auto resp = ctx.reply.object();
         resp.field("ok", true);
     }   // close the scope BEFORE restarting so the reply is complete
 

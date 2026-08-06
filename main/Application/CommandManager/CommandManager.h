@@ -107,9 +107,10 @@ private:
     static constexpr size_t MAX_ROUTE = 32;        // matches protocol::MAX_COMMAND_NAME
     static constexpr size_t MAX_CATEGORIES = 24;
 
-    void ListCategories(Stream& out);
-    void ListCategory(const char* category, Stream& out);
-    RequestError DescribeCommand(const char* category, const char* command, Stream& out);
+    void ListCategories(ReplyWriter& reply);
+    void ListCategory(const char* category, ReplyWriter& reply);
+    RequestError DescribeCommand(const char* category, const char* command,
+                                 ReplyWriter& reply);
 
     inline static CommandEntry commands_[] = {
         { "help", "list", &InvokeCommand<&CommandManager::Cmd_Help> },

@@ -2,7 +2,6 @@
 #include "SettingsManager.h"
 #include "SystemManager.h"
 #include "CommandManager.h"
-#include "JsonScope.h"
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
@@ -195,13 +194,13 @@ RequestError NetworkManager::Cmd_WifiScan(CommandContext& ctx)
 
     int count = wifi().Scan(results, 20);
 
-    JsonObject root(ctx.out);
+    auto root = ctx.reply.object();
     root.field("ok", true);
-    JsonArray networks = root.array("networks");
+    auto networks = root.array("networks");
 
     for (int i = 0; i < count; i++)
     {
-        JsonObject n = networks.object();
+        auto n = networks.object();
         n.field("ssid", results[i].ssid);
         n.field("rssi", static_cast<int32_t>(results[i].rssi));
         n.field("channel", static_cast<int32_t>(results[i].channel));

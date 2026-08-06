@@ -1,7 +1,6 @@
 #include "UpdateManager.h"
 #include "PartitionWriter.h"
 #include "CommandManager.h"
-#include "JsonScope.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
 #include <cstring>
@@ -138,7 +137,7 @@ RequestError UpdateManager::Cmd_UpdateStatus(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
 
     const esp_app_desc_t* app = esp_app_get_description();
 
@@ -156,13 +155,13 @@ RequestError UpdateManager::Cmd_Partitions(CommandContext& ctx)
 
     int count = GetPartitions(parts, MAX_PARTITIONS);
 
-    JsonObject root(ctx.out);
-    JsonArray arr = root.array("partitions");
+    auto root = ctx.reply.object();
+    auto arr  = root.array("partitions");
 
     for (int i = 0; i < count; i++)
     {
         const auto& p = parts[i];
-        JsonObject o = arr.object();
+        auto o = arr.object();
         o.field("label",      p.label);
         o.field("type",       p.type);
         o.field("subtype",    p.subtype);
@@ -203,14 +202,13 @@ RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
     ));
 
     // `in` is now positioned at the body, past the envelope.
-    char msg[96];
-
     const char* err = nullptr;
     PartitionWriter w(label, offset, &err);
     if (!w.ok())
     {
-        int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}", err);
-        ctx.out.write(msg, len);
+        auto resp = ctx.reply.object();
+        resp.field("ok", false);
+        resp.field("error", err);
         return RequestError::Ok;
     }
 
@@ -219,9 +217,9 @@ RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
     // upload that "succeeded" having written nothing.
     if (!ctx.in.canLend())
     {
-        int len = snprintf(msg, sizeof(msg),
-                           "{\"ok\":false,\"error\":\"transport cannot stream\"}");
-        ctx.out.write(msg, len);
+        auto resp = ctx.reply.object();
+        resp.field("ok", false);
+        resp.field("error", "transport cannot stream");
         return RequestError::Ok;
     }
 
@@ -232,14 +230,17 @@ RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
     {
         if (!w.write(chunk, n))
         {
-            int len = snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"write failed\"}");
-            ctx.out.write(msg, len);
+            auto resp = ctx.reply.object();
+            resp.field("ok", false);
+            resp.field("error", "write failed");
             return RequestError::Ok;
         }
         if (w.written() - reported >= REPORT_EVERY)
         {
-            int len = snprintf(msg, sizeof(msg), "{\"p\":%lu}", (unsigned long)w.written());
-            ctx.out.write(msg, len);
+            {
+                auto progress = ctx.reply.object();
+                progress.field("p", static_cast<uint32_t>(w.written()));
+            }   // closed before the flush, or the chunk carries half a record
             ctx.out.flush();                       // push this progress chunk now
             reported = w.written();
         }
@@ -253,18 +254,24 @@ RequestError UpdateManager::Cmd_WritePartition(CommandContext& ctx)
     {
         ESP_LOGE(TAG, "request stream failed after %u bytes, not activating",
                  (unsigned)w.written());
-        int len = snprintf(msg, sizeof(msg),
-                           "{\"ok\":false,\"error\":\"stream failed at %lu bytes\"}",
-                           (unsigned long)w.written());
-        ctx.out.write(msg, len);
+        // The byte count belongs in the message, so it is composed as a value. A field
+        // value is still just a value; nothing here names the wire format.
+        char why[48];
+        snprintf(why, sizeof(why), "stream failed at %lu bytes", (unsigned long)w.written());
+
+        auto resp = ctx.reply.object();
+        resp.field("ok", false);
+        resp.field("error", why);
         return RequestError::Ok;
     }
 
     // This piece landed, and that is all this command claims. Erasing is `clear`'s
     // job and switching the boot slot is `activate`'s; a write writes.
-    int len = snprintf(msg, sizeof(msg), "{\"ok\":true,\"offset\":%lu,\"size\":%lu}",
-                       (unsigned long)offset, (unsigned long)w.written());
-    ctx.out.write(msg, len);   // the dispatcher's finish() emits this as the FINAL chunk
+    // The dispatcher's finish() emits this as the FINAL chunk.
+    auto resp = ctx.reply.object();
+    resp.field("ok", true);
+    resp.field("offset", offset);
+    resp.field("size", static_cast<uint32_t>(w.written()));
     return RequestError::Ok;
 }
 
@@ -292,7 +299,7 @@ RequestError UpdateManager::Cmd_ClearPartition(CommandContext& ctx)
     char label[17] = {};
     RETURN_IF_ERROR(ctx.readArgs(Required("partition", label)));
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
     if (const char* err = PartitionWriter::Clear(label))
     {
         resp.field("ok", false);
@@ -308,7 +315,7 @@ RequestError UpdateManager::Cmd_ActivatePartition(CommandContext& ctx)
     char label[17] = {};
     RETURN_IF_ERROR(ctx.readArgs(Required("partition", label)));
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
     if (const char* err = PartitionWriter::Activate(label))
     {
         resp.field("ok", false);
@@ -332,7 +339,7 @@ RequestError UpdateManager::Cmd_DownloadPartition(CommandContext& ctx)
         ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, label);
     if (!p)
     {
-        JsonObject resp(ctx.out);
+        auto resp = ctx.reply.object();
         resp.field("ok", false);
         resp.field("error", "unknown partition");
         return RequestError::Ok;
@@ -342,7 +349,7 @@ RequestError UpdateManager::Cmd_DownloadPartition(CommandContext& ctx)
 
     if (!ctx.out.canLend())
     {
-        JsonObject resp(ctx.out);
+        auto resp = ctx.reply.object();
         resp.field("ok", false);
         resp.field("error", "transport cannot stream");
         return RequestError::Ok;

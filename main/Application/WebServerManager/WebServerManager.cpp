@@ -4,7 +4,6 @@
 #include "CommandManager.h"
 #include "RelayManager.h"
 #include "JsonHelpers.h"
-#include "JsonScope.h"
 #include "SessionTable.h"
 
 #include <unistd.h>
@@ -146,21 +145,31 @@ RequestError WebServerManager::Cmd_GetWebFile(CommandContext& ctx)
     if (StaticFileHandler::Resolve(BASE_PATH, path, file))
         f = fopen(file.path, "rb");
 
+    // The header is a record; the body is raw bytes after it. The scope must therefore
+    // close before the newline that divides them, hence the braces — the reply is not
+    // one document, and ctx.out stays reachable alongside ctx.reply for exactly this.
     if (!f)
     {
         // A real 404 — SPA fallback is the asking route layer's decision, not
         // ours (see StaticFileHandler::Resolve).
-        static constexpr const char* notFound = "{\"ok\":true,\"status\":404}\n";
-        ctx.out.write(notFound, strlen(notFound));
+        {
+            auto head = ctx.reply.object();
+            head.field("ok", true);
+            head.field("status", static_cast<uint32_t>(404));
+        }
+        ctx.out.write("\n", 1);
         return RequestError::Ok;   // the request was fine; the file simply is not there
     }
 
-    char header[256];
-    int n = snprintf(header, sizeof(header),
-                     "{\"ok\":true,\"status\":200,\"contentType\":\"%s\"%s}\n",
-                     file.contentType,
-                     file.gzipped ? ",\"contentEncoding\":\"gzip\"" : "");
-    ctx.out.write(header, static_cast<size_t>(n));
+    {
+        auto head = ctx.reply.object();
+        head.field("ok", true);
+        head.field("status", static_cast<uint32_t>(200));
+        head.field("contentType", file.contentType);
+        if (file.gzipped)
+            head.field("contentEncoding", "gzip");
+    }
+    ctx.out.write("\n", 1);
 
     // Streams out chunk-by-chunk through the session window; a 200 KB bundle
     // never needs a 200 KB buffer here or on the transport.
@@ -182,7 +191,7 @@ RequestError WebServerManager::Cmd_AuthHello(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
     resp.field("authRequired", auth_.AuthRequired());
     return RequestError::Ok;
 }
@@ -192,7 +201,7 @@ RequestError WebServerManager::Cmd_AuthLogin(CommandContext& ctx)
     char password[64] = {};
     RETURN_IF_ERROR(ctx.readArgs(Optional("password", password)));
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
 
     // A wrong password is MEANING, not form: the request was perfectly well made, the
     // answer is no. So it is a reply, not a refusal.
@@ -216,7 +225,7 @@ RequestError WebServerManager::Cmd_AuthResume(CommandContext& ctx)
     char key[SessionTable::TOKEN_LEN] = {};
     RETURN_IF_ERROR(ctx.readArgs(Required("key", key)));
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
 
     if (!auth_.ValidateKey(key))
     {

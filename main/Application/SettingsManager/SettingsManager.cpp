@@ -1,7 +1,6 @@
 #include "SettingsManager.h"
 #include "CommandManager.h"
 #include "ContextLock.h"
-#include "JsonScope.h"
 #include "JsonReader.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
@@ -226,7 +225,7 @@ RequestError SettingsManager::Cmd_SetSetting(CommandContext& ctx)
         Optional("value", value)
     ));
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
 
     for (Setting& s : *this)
     {
@@ -268,7 +267,7 @@ RequestError SettingsManager::Cmd_SaveSettings(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
     resp.field("ok", Save());
     return RequestError::Ok;
 }

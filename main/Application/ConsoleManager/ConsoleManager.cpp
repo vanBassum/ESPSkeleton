@@ -1,7 +1,7 @@
 #include "ConsoleManager.h"
 #include "CommandManager.h"
 #include "JsonWriter.h"
-#include "JsonScope.h"
+#include "ReplyWriter.h"
 #include "BufferStream.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -147,11 +147,11 @@ void ConsoleManager::BroadcastTaskLoop()
     }
 }
 
-void ConsoleManager::WriteHistory(JsonObject& resp) const
+void ConsoleManager::WriteHistory(ReplyObject& resp) const
 {
     LOCK(mutex_);
 
-    JsonArray lines = resp.array("lines");
+    auto lines = resp.array("lines");
 
     int32_t start = (count_ < MAX_LINES) ? 0 : head_;
     for (int32_t i = 0; i < count_; i++)
@@ -169,7 +169,7 @@ RequestError ConsoleManager::Cmd_GetLogs(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
-    JsonObject resp(ctx.out);
+    auto resp = ctx.reply.object();
     WriteHistory(resp);
     return RequestError::Ok;
 }

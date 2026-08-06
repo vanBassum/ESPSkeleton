@@ -61,7 +61,7 @@ Strux/
 │   │       └── MockLed.h              # Led role without hardware (state only)
 │   └── lib/                           # Reusable utilities
 │       ├── common/                    # Stream, MemoryStream, BufferStream, Fatal
-│       ├── json/                      # JsonWriter, JsonReader, JsonScope
+│       ├── json/                      # JsonWriter, JsonReader
 │       ├── rtos/                      # Task, Mutex, Timer, InitState
 │       └── system/                    # DateTime, TimeSpan
 ├── frontend/                          # React web UI (Vite + Tailwind + shadcn)

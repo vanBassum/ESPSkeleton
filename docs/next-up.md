@@ -9,12 +9,6 @@ Last updated 2026-08-06.
 
 ## Now
 
-**A reply is written through `ctx.reply`, not through `JsonObject`** — the mirror of
-`ArgReader`, so a handler names the shape of its reply and never the wire format
-(`ReplyWriter.h`, `JsonReplyWriter.h`). The mechanism is in and `settings getSettings` is
-converted; the other handlers still construct `JsonObject` over `ctx.out` directly. Both
-work at once, so this converts one handler at a time. `JsonScope.h` goes when the last
-one is done.
 
 **Putting the relay in production** — live at `https://strux.vanbassum.com`, behind
 Traefik and Authentik. Steps 1–8 done: a device must be approved and must present its own
