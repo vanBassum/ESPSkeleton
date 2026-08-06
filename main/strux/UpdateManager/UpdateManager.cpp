@@ -6,7 +6,7 @@
 #include <cstring>
 #include <cstdio>
 
-UpdateManager::UpdateManager(StruxServices& strux)
+UpdateManager::UpdateManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

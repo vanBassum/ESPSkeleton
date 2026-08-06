@@ -1,7 +1,7 @@
-#include "Board.h"
+#include "BoardContext.h"
 #include "esp_log.h"
 
-void Board::Init()
+void BoardContext::Init()
 {
     auto init = initState_.TryBeginInit();
     if (!init)

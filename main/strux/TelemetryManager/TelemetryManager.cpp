@@ -13,7 +13,7 @@
 #include <cstdio>
 #include <cstring>
 
-TelemetryManager::TelemetryManager(StruxServices& strux)
+TelemetryManager::TelemetryManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

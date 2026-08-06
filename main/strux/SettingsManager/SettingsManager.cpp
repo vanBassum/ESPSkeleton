@@ -13,7 +13,7 @@
 // Init
 // ──────────────────────────────────────────────────────────────
 
-SettingsManager::SettingsManager(StruxServices& strux)
+SettingsManager::SettingsManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

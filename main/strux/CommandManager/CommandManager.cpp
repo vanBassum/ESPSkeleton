@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
-CommandManager::CommandManager(StruxServices& strux)
+CommandManager::CommandManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

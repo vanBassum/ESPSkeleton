@@ -38,7 +38,7 @@ struct CommandEntry
     // A registered entry is a live link in the dispatch chain; letting it
     // die would leave a dangling pointer in the chain. There is no
     // compile-time way to forbid this (a deleted dtor would propagate up
-    // through the owning manager to the global ApplicationContext), so:
+    // through the owning manager to the global AppContext), so:
     // abort. The device resets with a clear message on the very first run
     // of the offending code.
     ~CommandEntry()

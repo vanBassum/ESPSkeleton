@@ -1,6 +1,6 @@
 #pragma once
 
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "TypedSettings.h"
 #include "Task.h"
@@ -75,7 +75,7 @@ class RelayManager
     static constexpr int BROADCAST_TIMEOUT_MS = 200;
 
 public:
-    explicit RelayManager(StruxServices& strux);
+    explicit RelayManager(StruxProvider& strux);
 
     RelayManager(const RelayManager&) = delete;
     RelayManager& operator=(const RelayManager&) = delete;
@@ -102,7 +102,7 @@ public:
     const char* GetDeviceId() const { return deviceId_; }
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
     InitState initState_;
 
     RelaySocket socket_;

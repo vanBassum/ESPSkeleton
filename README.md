@@ -39,7 +39,7 @@ Strux/
 │   ├── main.cpp                       # Boot sequence — just Init() calls
 │   ├── strux/                         # THE FRAMEWORK — pull improvements into a fork
 │   │   ├── StruxContext.h             # Owns every framework manager + the init order
-│   │   ├── StruxServices.h            # What one framework manager may reach for
+│   │   ├── StruxProvider.h            # What one framework manager may reach for
 │   │   ├── CommandManager/            # Command dispatch (WebSocket + relay)
 │   │   ├── ConsoleManager/            # Log capture + WebSocket broadcast
 │   │   ├── NetworkManager/            # WiFi STA/AP with retry and fallback
@@ -57,16 +57,17 @@ Strux/
 │   │       ├── rtos/                  # Task, Mutex, Timer, InitState
 │   │       └── system/                # DateTime, TimeSpan
 │   ├── app/                           # THE APPLICATION — this is what a fork writes
-│   │   ├── ApplicationContext.h       # Owns this product's managers
-│   │   ├── AppServices.h              # Peers + getStrux() + getBoard()
+│   │   ├── AppContext.h               # Owns this product's managers
+│   │   ├── AppProvider.h              # Peers + getStrux() + getBoard()
 │   │   └── LedManager/                # Worked example — delete when you have real ones
 │   ├── hardware/                      # THE BOARD — depends on nothing above it
 │   │   ├── boards/                    # One folder per target board (-DBOARD=<name>)
 │   │   │   └── esp32_devkit/          # Generic ESP32 DevKit (default)
 │   │   │       ├── BoardConfig.h      # Pin definitions for this board
-│   │   │       ├── Board.h/.cpp       # The board's Board class — owns all drivers
-│   │   │       └── board.cmake        # Board build fragment (adds Board.cpp)
+│   │   │       ├── BoardContext.h/.cpp # Owns all drivers, answers BoardProvider
+│   │   │       └── board.cmake        # Board build fragment (adds BoardContext.cpp)
 │   │   ├── interfaces/                # Role interfaces (application vocabulary)
+│   │   │   ├── BoardProvider.h        # The roles every board owes
 │   │   │   └── Led.h                  # Led role: Set/IsOn + On/Off/Toggle helpers
 │   │   └── drivers/                   # Shared drivers, usable by any board
 │   │       ├── GpioLed.h              # GPIO implementation of the Led role
@@ -82,7 +83,7 @@ Strux/
 
 | Folder | Contains | Changes when you... |
 |--------|----------|---------------------|
-| `hardware/boards/<name>/` | Pin definitions, the board's `Board` class (owns all driver instances), `board.cmake`, optional `sdkconfig.defaults` overlay | Swap or add a board |
+| `hardware/boards/<name>/` | Pin definitions, the board's `BoardContext` class (owns all driver instances), `board.cmake`, optional `sdkconfig.defaults` overlay | Swap or add a board |
 | `hardware/interfaces/` | Role interfaces the application speaks (`Led`) — small, application vocabulary | Application expects a new capability |
 | `hardware/drivers/` | Board-independent chip/peripheral drivers implementing the roles | Add a peripheral |
 | `strux/` | The framework: managers, dispatch, transports, settings, OTA | The template improves — pull it into a fork |
@@ -95,9 +96,9 @@ Dependencies run one way: the board depends on nothing, the framework depends on
 
 ### Multiple boards
 
-The target board is selected at configure time with `-DBOARD=<name>` (default: `esp32_devkit`). Only the selected board folder is put on the include path, so application code just includes `BoardConfig.h` or `Board.h` and gets the right one. The application never changes between boards: it compiles against the `Board` class's surface, and each board makes itself compatible — with real hardware or a mock. There is no `IBoard` base class; a board missing something the application uses simply fails to compile. To support a new board:
+The target board is selected at configure time with `-DBOARD=<name>` (default: `esp32_devkit`). Only the selected board folder is put on the include path, so application code just includes `BoardConfig.h` or `BoardContext.h` and gets the right one. The application never changes between boards: it compiles against the `BoardContext` class's surface, and each board makes itself compatible — with real hardware or a mock. Every board implements [`BoardProvider`](main/hardware/interfaces/BoardProvider.h), the list of roles a board owes, so a board that forgets one fails in the board rather than at some call site. To support a new board:
 
-1. Copy `main/hardware/boards/esp32_devkit/` to `main/hardware/boards/<your_board>/` and edit `BoardConfig.h` and `Board.h`/`Board.cpp` (bind each role to a real driver or a `Mock*` one)
+1. Copy `main/hardware/boards/esp32_devkit/` to `main/hardware/boards/<your_board>/` and edit `BoardConfig.h` and `BoardContext.h`/`BoardContext.cpp` (bind each role to a real driver or a `Mock*` one)
 2. Add extra board-only source files to `BOARD_SOURCES` in its `board.cmake` (optional)
 3. Add `sdkconfig.defaults` in the board folder if the board needs different flash size, PSRAM, or partitions (optional)
 4. Build with `idf.py -DBOARD=<your_board> build`
@@ -160,13 +161,13 @@ Vite's dev server will proxy WebSocket connections to the device. Edit React com
 
 ## Architecture
 
-All managers follow the same pattern: they receive a `StruxServices&` (or `AppServices&` in `app/`) reference at construction and initialize via `Init()`. This gives you dependency injection without a framework.
+All managers follow the same pattern: they receive a `StruxProvider&` (or `AppProvider&` in `app/`) reference at construction and initialize via `Init()`. This gives you dependency injection without a framework.
 
 ```
 Board (bottom — depends on nothing above it)
 └── the selected board's hardware: LED, sensors, buses
 
-StruxContext (the framework — answers StruxServices)
+StruxContext (the framework — answers StruxProvider)
 ├── ConsoleManager        — Captures ESP-IDF logs, broadcasts via WebSocket
 ├── SettingsManager       — NVS read/write behind typed setting objects
 ├── SystemManager         — Device identity, ping/info/reboot commands
@@ -181,7 +182,7 @@ StruxContext (the framework — answers StruxServices)
 ├── RelayManager          — Outbound pipe so the device is reachable off-LAN
 └── TelemetryManager      — Measurements out through the relay
 
-ApplicationContext (the top — answers AppServices, holds Board& and StruxServices&)
+AppContext (the top — answers AppProvider, holds Board& and StruxProvider&)
 └── LedManager            — Worked example; replace with your product's managers
 ```
 
@@ -190,14 +191,14 @@ ApplicationContext (the top — answers AppServices, holds Board& and StruxServi
 ```cpp
 Board board;
 StruxContext strux;
-ApplicationContext application{ board, strux };
+AppContext application{ board, strux };
 
 board.Init();         // hardware first: it depends on nothing
 strux.Init();         // then the framework the application registers into
 application.Init();   // then the product
 ```
 
-That is the whole file. The order *within* each layer lives in that layer's context — `StruxContext::Init()` owns Strux's ordering, so a fork that pulls a new framework manager gets its position too. Hardware drivers live in the board's `Board` class; application managers reach them through `AppServices::getBoard()`, and the framework never touches hardware at all.
+That is the whole file. The order *within* each layer lives in that layer's context — `StruxContext::Init()` owns Strux's ordering, so a fork that pulls a new framework manager gets its position too. Hardware drivers live in the board's `BoardContext` class; application managers reach them through `AppProvider::getBoard()`, and the framework never touches hardware at all.
 
 > **Looking for Home Assistant / MQTT?** That's deliberately not what Strux is for — [ESPHome](https://esphome.io/) does HA-native devices far better. Strux targets product firmware with its own web UI and logic. (An earlier version shipped MQTT + HA discovery; it lives on in git history if a fork wants it.)
 
@@ -269,18 +270,21 @@ namespace BoardConfig
 }
 ```
 
-### Board
+### BoardContext
 
-Each board folder provides a [`Board`](main/hardware/boards/esp32_devkit/Board.h) class that owns every hardware driver instance (and bus host) and exposes the capability surface the application compiles against. Devices the application addresses by *meaning* go through small role interfaces in `hardware/interfaces/` — the included [`Led`](main/hardware/interfaces/Led.h) role is implemented by [`GpioLed`](main/hardware/drivers/GpioLed.h). A board without the hardware binds a mock ([`MockLed`](main/hardware/drivers/MockLed.h)); a driver whose full API the application needs can be exposed directly as an escape hatch.
+Each board folder provides a [`BoardContext`](main/hardware/boards/esp32_devkit/BoardContext.h) that owns every hardware driver instance (and bus host) and answers [`BoardProvider`](main/hardware/interfaces/BoardProvider.h) — the roles every board owes. Devices the application addresses by *meaning* go through small role interfaces in `hardware/interfaces/` — the included [`Led`](main/hardware/interfaces/Led.h) role is implemented by [`GpioLed`](main/hardware/drivers/GpioLed.h), and a board without the hardware binds a mock ([`MockLed`](main/hardware/drivers/MockLed.h)).
+
+`BoardProvider` lists roles only. A driver whose *full* API the application needs is exposed straight off `BoardContext` as an escape hatch, off the interface — which is what stops the role list turning into the union of every board's peripherals.
 
 This is where you add your project-specific hardware:
 
 ```cpp
-class Board {
+class BoardContext : public BoardProvider {
 public:
-    Led& GetLed() { return led_; }
-    // Add role accessors, or concrete ones when the app needs the full API:
-    // TemperatureSensor& GetTemperatureSensor() { return sensor_; }
+    Led& GetLed() override { return led_; }        // a role — on BoardProvider
+    // TemperatureSensor& GetSensor() override { return sensor_; }
+
+    // Concrete accessors stay OFF BoardProvider — only boards that have it need it:
     // Dps5020& GetDps5020() { return dps5020_; }
 
 private:
@@ -298,7 +302,7 @@ This is a template — copy it, rename it, and build on top of it:
 
 1. **Rename the project** in `CMakeLists.txt` (`project(YourProject)`), `.github/workflows/release.yml`, and `frontend/src/config.ts` (dev-server host + GitHub repo for the release check) — the UI itself needs no renaming: it shows the device name and project name reported by the firmware
 2. **Update `BoardConfig.h`** (or add a new board folder under `hardware/boards/`) with your board's pin assignments
-3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in the board's `Board` class
+3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in the board's `BoardContext` class
 4. **Add application logic** as new managers in `app/` — and delete `app/LedManager/`, which is only there as a worked example. Nothing in `strux/` needs editing to add a feature.
 5. **Extend the web UI** — add pages in `frontend/src/pages/`, register routes in the sidebar
 6. **Add settings** by declaring typed setting members in the owning manager and registering them in its `Init()` (see [Settings](#settings))
@@ -308,14 +312,14 @@ This is a template — copy it, rename it, and build on top of it:
 Almost always an *application* manager — see [`app/LedManager/`](main/app/LedManager/) for the worked example:
 
 1. Create a new directory under `app/YourManager/`
-2. Implement your manager class, accepting `AppServices&` in the constructor. It reaches the framework through `services.getStrux()` and the hardware through `services.getBoard()`
-3. Add it to `app/AppServices.h` (forward declare + virtual getter)
-4. Add it to `app/ApplicationContext.h` (member, getter, and a call in `Init()`)
+2. Implement your manager class, accepting `AppProvider&` in the constructor. It reaches the framework through `services.getStrux()` and the hardware through `services.getBoard()`
+3. Add it to `app/AppProvider.h` (forward declare + virtual getter)
+4. Add it to `app/AppContext.h` (member, getter, and a call in `Init()`)
 5. Register source files in `APP_SOURCES` and the folder in `INCLUDE_DIRS_LIST`, both in `main/CMakeLists.txt`
 
 Nothing in `strux/` is touched — the manager announces itself by registering its commands and settings into the framework from its own `Init()`.
 
-A *framework* manager (one every fork would want) is the same five steps against `strux/StruxServices.h`, `strux/StruxContext.h` — member **and** a position in its ordered `Init()` — and `STRUX_SOURCES`.
+A *framework* manager (one every fork would want) is the same five steps against `strux/StruxProvider.h`, `strux/StruxContext.h` — member **and** a position in its ordered `Init()` — and `STRUX_SOURCES`.
 
 ### Adding a New Command
 
@@ -351,10 +355,10 @@ Routes are two words (`category command`). `ctx.readArgs(...)` is not optional e
 
 1. Define pins in the board's `hardware/boards/<name>/BoardConfig.h`
 2. Create your driver in `hardware/drivers/` (e.g., `hardware/drivers/MyDisplay.h`), taking pins/buses as constructor parameters. If the application addresses the device by role, add or implement a small role interface in `hardware/interfaces/`
-3. Instantiate it in the board's `Board` class and expose it (role interface or concrete accessor)
+3. Instantiate it in the board's `BoardContext` class and expose it (role interface or concrete accessor)
 4. Add component dependencies in `main/CMakeLists.txt` (IDF built-ins) or `main/idf_component.yml` (managed components); board-only source files go in the board's `board.cmake` via `BOARD_SOURCES`
 
-See [`Led.h`](main/hardware/interfaces/Led.h), [`GpioLed.h`](main/hardware/drivers/GpioLed.h), and [`Board.h`](main/hardware/boards/esp32_devkit/Board.h) for a complete example.
+See [`Led.h`](main/hardware/interfaces/Led.h), [`GpioLed.h`](main/hardware/drivers/GpioLed.h), and [`BoardContext.h`](main/hardware/boards/esp32_devkit/BoardContext.h) for a complete example.
 
 ---
 

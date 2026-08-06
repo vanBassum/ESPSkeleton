@@ -1,5 +1,5 @@
 #pragma once
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "CommandManager/CommandManager.h"
 #include "ConsoleManager/ConsoleManager.h"
 #include "NetworkManager/NetworkManager.h"
@@ -11,13 +11,13 @@
 #include "UpdateManager/UpdateManager.h"
 #include "WebServerManager/WebServerManager.h"
 
-// The framework layer's context: owns every Strux manager and answers StruxServices.
+// The framework layer's context: owns every Strux manager and answers StruxProvider.
 //
 // Init() carries the ORDER, and that is the point of it. The order has real constraints
 // in it — the Relay shares the WebServer's Authenticator, Telemetry leaves down the
 // Relay's pipe — and while it lived in main.cpp every fork owned a copy of it. A fork
 // that pulls a new Strux manager now gets its position too, instead of having to be told.
-class StruxContext : public StruxServices
+class StruxContext : public StruxProvider
 {
 public:
     StruxContext() = default;

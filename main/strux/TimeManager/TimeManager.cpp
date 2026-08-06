@@ -6,7 +6,7 @@
 
 TimeManager *TimeManager::instance = nullptr;
 
-TimeManager::TimeManager(StruxServices &ctx)
+TimeManager::TimeManager(StruxProvider &ctx)
     : strux_(ctx)
 {
 }

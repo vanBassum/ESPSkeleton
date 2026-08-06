@@ -50,39 +50,43 @@ Design documents, implementation plans and an ideas folder were all removed on 2
 
 Dependencies run one way only, bottom to top:
 
-| Layer | Owns | Provider (what the layer above may reach for) |
+Every layer is the same pair: a **context** owning the layer's instances, and a **provider** saying what the layer above may reach for. A manager takes exactly one reference — its own layer's provider — and finds everything through it.
+
+| Layer | Context (owns) | Provider (exposes) |
 |---|---|---|
-| `main/hardware/` — the **board** | driver instances, bus hosts | the `Board` class's own public surface, checked at compile time |
-| `main/strux/` — the **framework** | the ten Strux managers | `StruxServices` ([main/strux/StruxServices.h](main/strux/StruxServices.h)), answered by `StruxContext` |
-| `main/app/` — the **application** | this product's managers | `AppServices` ([main/app/AppServices.h](main/app/AppServices.h)), answered by `ApplicationContext` |
+| `main/hardware/` — the **board** | `BoardContext` — driver instances, bus hosts | `BoardProvider` ([hardware/interfaces/BoardProvider.h](main/hardware/interfaces/BoardProvider.h)) — the roles a board owes |
+| `main/strux/` — the **framework** | `StruxContext` — the ten Strux managers | `StruxProvider` ([main/strux/StruxProvider.h](main/strux/StruxProvider.h)) |
+| `main/app/` — the **application** | `AppContext` — this product's managers | `AppProvider` ([main/app/AppProvider.h](main/app/AppProvider.h)) |
 
 [main.cpp](main/main.cpp) is four calls: `board.Init()`, `strux.Init()`, `application.Init()`, then the OTA validity mark. **The order *within* a layer lives in that layer's context**, not here — `StruxContext::Init()` carries Strux's ordering and its constraints (Relay after WebServer, whose `Authenticator` it shares; Telemetry after Relay, down whose pipe it leaves), so a fork pulling a new framework manager gets its position along with it.
 
 Two rules keep the graph acyclic, and both matter more than they look:
 
-- **Strux never reaches up, and never sideways into hardware.** `StruxServices` has no `getBoard()` and no way to see `AppServices`. Hardware is deliberate: because there is no `IBoard`, a board only owes what the code above it calls, so a framework that touched `GetLed()` would make every board in every fork owe an LED.
-- **Anything the framework needs from the application is *registered*, not fetched.** The app registers commands, settings and telemetry points into Strux from its own `Init()`. A Strux manager wanting `AppServices&` is a design error, not a missing accessor.
+- **Strux never reaches up, and never sideways into hardware.** `StruxProvider` has no `getBoard()` and no way to see `AppProvider`. Hardware belongs to the application: a framework that called `GetLed()` would put that role on `BoardProvider` and oblige every board in every fork to bind one.
+- **Anything the framework needs from the application is *registered*, not fetched.** The app registers commands, settings and telemetry points into Strux from its own `Init()`. A Strux manager wanting `AppProvider&` is a design error, not a missing accessor.
 
-The board layer has a context but no pure-virtual provider, and that is the one asymmetry. `Board` *is* its layer's context — it owns the instances and exposes the surface above it — but that surface is a compile-time contract, so a board may simply omit what nobody calls. A `BoardServices` vtable would be `IBoard`, which is rejected on purpose (see below).
+`BoardProvider` declares **roles only** (`Led&` today), and that boundary is what keeps it from becoming the union of every board's peripherals: concrete driver accessors — the escape hatch for when the application needs a driver's full API — stay on `BoardContext` itself, checked at compile time. So the day one board grows a display, no other board owes a `MockDisplay`. `AppProvider::getBoard()` returns `BoardContext&`, not `BoardProvider&`, precisely so that escape hatch stays reachable.
+
+What the provider buys over the older duck-typed `Board` is where the failure lands: a board that forgets a role now fails *in the board*, leaving a pure virtual unimplemented, instead of failing later at a call site in application code. What it costs is that a board must bind every role even if this product never uses it — which was already the discipline (`MockLed` exists for exactly that), so the trade is cheap.
 
 Every manager, in either managed layer:
 
-- takes its layer's provider (`StruxServices&` or `AppServices&`) in its constructor and reaches everything through it, never directly,
+- takes its layer's provider (`StruxProvider&` or `AppProvider&`) in its constructor and reaches everything through it, never directly,
 - has copy/move deleted,
 - initializes in `Init()` guarded by an `InitState` (`strux/lib/rtos/InitState.h`), not in the constructor.
 
-Adding a **framework** manager: create the class, add it to `StruxServices`, `StruxContext` (member *and* the ordered `Init()`), and `STRUX_SOURCES` + `INCLUDE_DIRS_LIST` in [main/CMakeLists.txt](main/CMakeLists.txt). Adding an **application** manager: the same, against `AppServices`, `ApplicationContext` and `APP_SOURCES` — and nothing in `strux/` is touched. [main/app/LedManager/](main/app/LedManager/) is the worked example: it blinks the board LED, and along the way registers two settings, two commands and a telemetry point without a single edit to the framework. Delete it when the product has real features.
+Adding a **framework** manager: create the class, add it to `StruxProvider`, `StruxContext` (member *and* the ordered `Init()`), and `STRUX_SOURCES` + `INCLUDE_DIRS_LIST` in [main/CMakeLists.txt](main/CMakeLists.txt). Adding an **application** manager: the same, against `AppProvider`, `AppContext` and `APP_SOURCES` — and nothing in `strux/` is touched. [main/app/LedManager/](main/app/LedManager/) is the worked example: it blinks the board LED, and along the way registers two settings, two commands and a telemetry point without a single edit to the framework. Delete it when the product has real features.
 
 Note: the two source lists are separated so a fork does not fight the template over one file, but they are still *one* file and still one ESP-IDF component. Making `strux/` a real component is the step that would make syncing a pull rather than a merge; it has not been taken.
 
 ### Layer separation within the board
 
-- `main/hardware/` — changes when you swap the board. Depends on nothing above it: `Board` takes no provider and drivers take their pins and buses as constructor arguments. Split into:
-  - `boards/<name>/` — one folder per target board: `BoardConfig.h` (pins/constants), `Board.h`/`Board.cpp` (the board's `Board` class — owns every driver instance and bus host, exposes the capability surface the application compiles against; `Board.cpp` is added via `BOARD_SOURCES` in the `board.cmake` fragment), and an optional `sdkconfig.defaults` overlaying the common root one. Selected with `-DBOARD=<name>`; only the chosen board folder is on the include path, so `#include "BoardConfig.h"` and `#include "Board.h"` resolve to it. There is no `IBoard` base class — the contract is duck-typed: a board missing a method the application uses fails to compile for that board.
-  - `interfaces/` — role interfaces in application vocabulary (`Led`), 1–3 pure-virtual methods each, never chip or GPIO vocabulary. Drivers implement them (`GpioLed : Led`); a board without the hardware binds a mock (`MockLed`). Add a role interface only when application code speaks in that role; expose a concrete driver accessor from `Board` instead when the application needs a driver's full API (escape hatch). Multi-instance roles get a semantic enum (`Sensor::Ambient`, never `Sensor_2`) mapped by the board — introduce it with the first multi-instance role.
+- `main/hardware/` — changes when you swap the board. Depends on nothing above it: `BoardContext` takes no provider (drivers take their pins and buses as constructor arguments, so nothing here needs one to find a peer) and no layer above is visible from it. Split into:
+  - `boards/<name>/` — one folder per target board: `BoardConfig.h` (pins/constants), `BoardContext.h`/`BoardContext.cpp` (the board's `BoardContext : BoardProvider` — owns every driver instance and bus host; `BoardContext.cpp` is added via `BOARD_SOURCES` in the `board.cmake` fragment), and an optional `sdkconfig.defaults` overlaying the common root one. Selected with `-DBOARD=<name>`; only the chosen board folder is on the include path, so `#include "BoardConfig.h"` and `#include "BoardContext.h"` resolve to it.
+  - `interfaces/` — the role interfaces in application vocabulary (`Led`), 1–3 pure-virtual methods each, never chip or GPIO vocabulary — plus `BoardProvider`, which assembles them into the list every board owes. Drivers implement the roles (`GpioLed : Led`); a board without the hardware binds a mock (`MockLed`). Adding a role to `BoardProvider` obliges every board to bind it, so add one only when application code speaks in that role; when the application needs a driver's full API, expose a concrete accessor from `BoardContext` instead and leave `BoardProvider` alone (escape hatch). Multi-instance roles get a semantic enum (`Sensor::Ambient`, never `Sensor_2`) mapped by the board — introduce it with the first multi-instance role.
   - `drivers/` — board-independent chip/peripheral drivers shared by boards (e.g. `GpioLed.h`), taking pins/buses as constructor parameters (passed by the board from its `BoardConfig` constants).
 - `main/strux/` — the framework: the ten managers, plus `lib/` beneath them. Changes when the template improves.
-- `main/app/` — changes when you add a feature to *this* product. Hardware driver *instances* live in the board's `Board` class, reached via `AppServices::getBoard()`.
+- `main/app/` — changes when you add a feature to *this* product. Hardware driver *instances* live in the board's `BoardContext` class, reached via `AppProvider::getBoard()`.
 - `main/strux/lib/` — stable building blocks: RTOS wrappers (`Task`, `Mutex`, `Timer`), `Stream`/`MemoryStream`/`BufferStream`, `JsonWriter`/`JsonReader`, `DateTime`/`TimeSpan`. Rarely changes. The request/reply seam (`CommandContext`, `ArgReader`, `ReplyWriter`) lives in `lib/protocol/`.
 
 Every folder is on the include path, so headers are included by name alone (`#include "Stream.h"`) and moving one between layers does not touch its callers.

@@ -1,28 +1,29 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "esp_ota_ops.h"
-#include "Board.h"
+#include "BoardContext.h"
 #include "StruxContext.h"
-#include "ApplicationContext.h"
+#include "AppContext.h"
 
 static const char* TAG = "main";
 
 // Three layers, bottom to top, and the dependencies run one way only:
 //
-//   Board            the hardware. Knows nothing above it.
-//   StruxContext     the framework. Knows the board? No — see StruxServices.h.
-//   ApplicationContext   this product. Knows both.
+//   BoardContext   the hardware. Knows nothing above it.
+//   StruxContext   the framework. Knows the board? No — see StruxProvider.h.
+//   AppContext     this product. Knows both.
 //
-// Each layer owns its instances (its context) and exposes what the layer above may reach
-// for (its provider: StruxServices, AppServices — the board's is its own class surface,
-// checked at compile time rather than through a vtable).
+// Each layer is the same pair: a CONTEXT that owns the layer's instances, and a PROVIDER
+// that says what the layer above may reach for — BoardProvider, StruxProvider,
+// AppProvider. A manager therefore takes exactly one reference, its own layer's provider,
+// and finds everything through it.
 //
 // This file is deliberately four calls long. The ORDER WITHIN each layer lives in that
 // layer's context, so a fork pulling a new Strux manager gets its position along with it
 // instead of having to be told.
-Board board;
+BoardContext board;
 StruxContext strux;
-ApplicationContext application{ board, strux };
+AppContext application{ board, strux };
 
 extern "C" void app_main(void)
 {

@@ -16,7 +16,7 @@ static constexpr const char* TAG = "WebServerManager";
 static constexpr const char* BASE_PATH = "/www";
 static WebServerManager* s_instance_ = nullptr;
 
-WebServerManager::WebServerManager(StruxServices& strux)
+WebServerManager::WebServerManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

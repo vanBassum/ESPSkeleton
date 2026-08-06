@@ -1,6 +1,6 @@
 #pragma once
 
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "TypedSettings.h"
 #include "SessionProtocol.h"
@@ -83,7 +83,7 @@ public:
                            bool escapeEquals);
     };
 
-    explicit TelemetryManager(StruxServices& strux);
+    explicit TelemetryManager(StruxProvider& strux);
 
     TelemetryManager(const TelemetryManager&) = delete;
     TelemetryManager& operator=(const TelemetryManager&) = delete;
@@ -104,7 +104,7 @@ public:
     uint32_t Dropped() const { return dropped_; }
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
     InitState initState_;
     Task task_;
 

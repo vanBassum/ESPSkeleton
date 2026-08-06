@@ -10,7 +10,7 @@
 #include "freertos/task.h"
 #include <cstring>
 
-SystemManager::SystemManager(StruxServices& strux)
+SystemManager::SystemManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

@@ -7,7 +7,7 @@
 #include "esp_log.h"
 #include "mdns.h"
 
-NetworkManager::NetworkManager(StruxServices& strux)
+NetworkManager::NetworkManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

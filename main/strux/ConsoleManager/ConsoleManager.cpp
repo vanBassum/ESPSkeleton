@@ -15,7 +15,7 @@ struct LogQueueItem {
     char text[ConsoleManager::MAX_LINE_LEN];
 };
 
-ConsoleManager::ConsoleManager(StruxServices& strux)
+ConsoleManager::ConsoleManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

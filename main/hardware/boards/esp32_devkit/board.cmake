@@ -8,4 +8,4 @@
 # built-ins in COMPONENT_REQUIRES.
 # ──────────────────────────────────────────────────────────────
 
-list(APPEND BOARD_SOURCES "${CMAKE_CURRENT_LIST_DIR}/Board.cpp")
+list(APPEND BOARD_SOURCES "${CMAKE_CURRENT_LIST_DIR}/BoardContext.cpp")

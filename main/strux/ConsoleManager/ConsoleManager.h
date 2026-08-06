@@ -1,6 +1,6 @@
 #pragma once
 
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "Mutex.h"
@@ -20,7 +20,7 @@ public:
     static constexpr int32_t MAX_LINE_LEN = 200;
 
 public:
-    explicit ConsoleManager(StruxServices& strux);
+    explicit ConsoleManager(StruxProvider& strux);
 
     ConsoleManager(const ConsoleManager&) = delete;
     ConsoleManager& operator=(const ConsoleManager&) = delete;
@@ -33,7 +33,7 @@ public:
     void WriteHistory(ReplyObject& resp) const;
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
     InitState initState_;
 
     // Ring buffer for log lines (allocated in PSRAM during Init)

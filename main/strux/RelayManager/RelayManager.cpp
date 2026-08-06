@@ -18,7 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-RelayManager::RelayManager(StruxServices& strux)
+RelayManager::RelayManager(StruxProvider& strux)
     : strux_(strux)
 {
 }

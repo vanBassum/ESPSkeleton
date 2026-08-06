@@ -1,6 +1,6 @@
 #pragma once
 
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "TypedSettings.h"
@@ -20,7 +20,7 @@ class SystemManager
     static constexpr const char* TAG = "SystemManager";
 
 public:
-    explicit SystemManager(StruxServices& strux);
+    explicit SystemManager(StruxProvider& strux);
 
     SystemManager(const SystemManager&) = delete;
     SystemManager& operator=(const SystemManager&) = delete;
@@ -34,7 +34,7 @@ public:
     void GetDeviceName(char* out, size_t maxLen);
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
     InitState initState_;
 
     // ── Settings (registered with SettingsManager in Init) ──

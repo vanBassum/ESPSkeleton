@@ -1,6 +1,6 @@
 #pragma once
 
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "Setting.h"
@@ -22,7 +22,7 @@ class SettingsManager {
     static constexpr const char* NVS_NAMESPACE = "settings";
 
 public:
-    explicit SettingsManager(StruxServices& strux);
+    explicit SettingsManager(StruxProvider& strux);
 
     SettingsManager(const SettingsManager&) = delete;
     SettingsManager& operator=(const SettingsManager&) = delete;
@@ -66,7 +66,7 @@ public:
     bool WriteString(const char* key, const char* v);
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
     InitState initState_;
     std::unique_ptr<nvs::NVSHandle> handle_;
 

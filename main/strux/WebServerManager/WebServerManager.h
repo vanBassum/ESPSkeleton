@@ -1,7 +1,7 @@
 #pragma once
 
 #include <esp_http_server.h>
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "TypedSettings.h"
@@ -15,7 +15,7 @@ class WebServerManager {
     static constexpr const char* TAG = "WebServerManager";
 
 public:
-    explicit WebServerManager(StruxServices& strux);
+    explicit WebServerManager(StruxProvider& strux);
 
     WebServerManager(const WebServerManager&) = delete;
     WebServerManager& operator=(const WebServerManager&) = delete;
@@ -33,7 +33,7 @@ public:
     Authenticator& GetAuthenticator() { return auth_; }
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
 
     InitState initState;
     httpd_handle_t server_ = nullptr;

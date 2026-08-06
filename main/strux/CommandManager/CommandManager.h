@@ -1,6 +1,6 @@
 #pragma once
 
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "RecursiveMutex.h"
@@ -27,7 +27,7 @@ class CommandManager {
     static constexpr const char* TAG = "CommandManager";
 
 public:
-    explicit CommandManager(StruxServices& strux);
+    explicit CommandManager(StruxProvider& strux);
 
     CommandManager(const CommandManager&) = delete;
     CommandManager& operator=(const CommandManager&) = delete;
@@ -81,7 +81,7 @@ public:
                          const char** failedArg = nullptr);
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
     InitState initState_;
 
     RecursiveMutex mutex_;

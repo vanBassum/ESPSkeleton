@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AppServices.h"
+#include "AppProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "TypedSettings.h"
@@ -10,7 +10,7 @@
 // The worked example of an application manager. It blinks the LED, and in doing so
 // touches every edge the layering allows and none that it forbids:
 //
-//   • the board, for the hardware        — services_.getBoard().GetLed()
+//   • the board, for the hardware        — app_.getBoard().GetLed()
 //   • the framework, for settings        — led.blink / led.period, in the settings UI
 //                                          with no UI code written
 //   • the framework, for commands        — `led get` / `led set`, in `help list` and
@@ -18,8 +18,8 @@
 //   • the framework, for telemetry       — a point when the LED is switched
 //
 // Note what it does NOT do: nothing in Strux knows this class exists. It is not named in
-// StruxContext, not in StruxServices, and not in main.cpp. It announces itself by
-// registering, from its own Init(), into managers it found through AppServices. Copy this
+// StruxContext, not in StruxProvider, and not in main.cpp. It announces itself by
+// registering, from its own Init(), into managers it found through AppProvider. Copy this
 // file to start a feature; delete it when the product has real ones.
 // ──────────────────────────────────────────────────────────────
 class LedManager
@@ -27,7 +27,7 @@ class LedManager
     static constexpr const char* TAG = "LedManager";
 
 public:
-    explicit LedManager(AppServices& services);
+    explicit LedManager(AppProvider& app);
 
     LedManager(const LedManager&) = delete;
     LedManager& operator=(const LedManager&) = delete;
@@ -44,7 +44,7 @@ public:
     bool IsBlinking() const { return blinking_; }
 
 private:
-    AppServices& services_;
+    AppProvider& app_;
     InitState initState_;
     Timer timer_;
     bool blinking_ = false;

@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #include "WiFiInterface.h"
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "TypedSettings.h"
@@ -21,7 +21,7 @@ class NetworkManager {
     static constexpr const char* DefaultApPassword = ""; // Open network
 
 public:
-    explicit NetworkManager(StruxServices& strux);
+    explicit NetworkManager(StruxProvider& strux);
 
     NetworkManager(const NetworkManager&) = delete;
     NetworkManager& operator=(const NetworkManager&) = delete;
@@ -45,7 +45,7 @@ public:
     bool GetRssi(int8_t& out) const { return wifi_interface_.GetRssi(out); }
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
 
     InitState initState;
     WiFiInterface wifi_interface_;

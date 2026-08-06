@@ -1,6 +1,6 @@
 #pragma once
 
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
 #include <esp_ota_ops.h>
@@ -11,7 +11,7 @@ class UpdateManager {
     static constexpr const char* TAG = "UpdateManager";
 
 public:
-    explicit UpdateManager(StruxServices& strux);
+    explicit UpdateManager(StruxProvider& strux);
 
     UpdateManager(const UpdateManager&) = delete;
     UpdateManager& operator=(const UpdateManager&) = delete;
@@ -22,7 +22,7 @@ public:
     // surface is its command table below.
 
 private:
-    StruxServices& strux_;
+    StruxProvider& strux_;
     InitState initState_;
 
     // One mechanism for ANY partition, addressed by label — see PartitionWriter.

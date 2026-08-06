@@ -7,7 +7,7 @@
 // The credential authority: checks the configured password, owns the RAM
 // session-key table, and detects a password change. Transport-neutral; no
 // connection state. Owned by WebServerManager (a plain class, not a
-// StruxServices manager).
+// StruxProvider manager).
 //
 // It does not DECLARE the password setting — settings belong to the manager that
 // owns them, and this is not a manager. It holds a reference to WebServerManager's

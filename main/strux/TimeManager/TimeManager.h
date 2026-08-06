@@ -1,5 +1,5 @@
 #pragma once
-#include "StruxServices.h"
+#include "StruxProvider.h"
 #include "InitState.h"
 #include "TypedSettings.h"
 #include "DateTime.h"
@@ -9,7 +9,7 @@ class TimeManager
     inline static constexpr const char *TAG = "TimeManager";
 
 public:
-    explicit TimeManager(StruxServices &ctx);
+    explicit TimeManager(StruxProvider &ctx);
 
     void Init();
 
@@ -17,7 +17,7 @@ public:
     bool IsTimeValid() const;
 
 private:
-    StruxServices &strux_;
+    StruxProvider &strux_;
     InitState initState;
 
     volatile bool synced = false;

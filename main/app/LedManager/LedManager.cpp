@@ -1,13 +1,13 @@
 #include "LedManager.h"
-#include "Board.h"
-#include "StruxServices.h"
+#include "BoardContext.h"
+#include "StruxProvider.h"
 #include "SettingsManager.h"
 #include "CommandManager.h"
 #include "TelemetryManager.h"
 #include "esp_log.h"
 
-LedManager::LedManager(AppServices& services)
-    : services_(services)
+LedManager::LedManager(AppProvider& app)
+    : app_(app)
 {
 }
 
@@ -22,7 +22,7 @@ void LedManager::Init()
 
     // Reaching DOWN into the framework, which is the only direction allowed. Nothing in
     // Strux was edited to make these two lines work.
-    StruxServices& strux = services_.getStrux();
+    StruxProvider& strux = app_.getStrux();
     strux.getSettingsManager().Register({ &blinkOnBoot_, &periodMs_ });
     strux.getCommandManager().Register(this, commands_);
 
@@ -48,7 +48,7 @@ void LedManager::SetBlinking(bool blinking)
     }
 
     timer_.Stop();
-    services_.getBoard().GetLed().Off();
+    app_.getBoard().GetLed().Off();
 }
 
 void LedManager::SetOn(bool on)
@@ -56,12 +56,12 @@ void LedManager::SetOn(bool on)
     if (blinking_)
         SetBlinking(false);
 
-    services_.getBoard().GetLed().Set(on);
+    app_.getBoard().GetLed().Set(on);
 }
 
 void LedManager::OnTick()
 {
-    services_.getBoard().GetLed().Toggle();
+    app_.getBoard().GetLed().Toggle();
 
     // Re-read the setting every tick so a period changed in the settings UI takes effect
     // on the next one. Get() is a field read, not an NVS read, so this is free.
@@ -93,7 +93,7 @@ RequestError LedManager::Cmd_Get(CommandContext& ctx)
     RETURN_IF_ERROR(ctx.readArgs());
 
     auto resp = ctx.reply.object();
-    resp.field("on", services_.getBoard().GetLed().IsOn());
+    resp.field("on", app_.getBoard().GetLed().IsOn());
     resp.field("blinking", blinking_);
     resp.field("periodMs", periodMs_.Get());
     return RequestError::Ok;
@@ -104,7 +104,7 @@ RequestError LedManager::Cmd_Set(CommandContext& ctx)
     // "Absent means leave it alone" needs no has() here: the destinations start at the
     // current state, so an Optional the caller omitted simply writes itself back.
     bool blink = blinking_;
-    bool on    = services_.getBoard().GetLed().IsOn();
+    bool on    = app_.getBoard().GetLed().IsOn();
 
     RETURN_IF_ERROR(ctx.readArgs(
         Optional("blink", blink),
@@ -118,14 +118,14 @@ RequestError LedManager::Cmd_Set(CommandContext& ctx)
 
     // Telemetry from a command handler rather than from OnTick(): a Point is a few
     // hundred bytes of stack, which the timer service task has not got.
-    auto point = services_.getStrux().getTelemetryManager().Measure("led");
+    auto point = app_.getStrux().getTelemetryManager().Measure("led");
     point.Tag("mode", blinking_ ? "blink" : "static");
-    point.Field("on", services_.getBoard().GetLed().IsOn());
+    point.Field("on", app_.getBoard().GetLed().IsOn());
     point.Commit();
 
     auto resp = ctx.reply.object();
     resp.field("ok", true);
-    resp.field("on", services_.getBoard().GetLed().IsOn());
+    resp.field("on", app_.getBoard().GetLed().IsOn());
     resp.field("blinking", blinking_);
     return RequestError::Ok;
 }
