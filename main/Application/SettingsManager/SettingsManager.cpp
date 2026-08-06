@@ -189,12 +189,12 @@ RequestError SettingsManager::Cmd_GetSettings(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
-    JsonObject root(ctx.out);
-    JsonArray settings = root.array("settings");
+    auto root     = ctx.reply.object();
+    auto settings = root.array("settings");
 
     for (const Setting& s : *this)
     {
-        JsonObject o = settings.object();
+        auto o = settings.object();
         o.field("key", s.key);
         o.field("label", s.label);
         o.field("type", SettingTypeToString(s.type));

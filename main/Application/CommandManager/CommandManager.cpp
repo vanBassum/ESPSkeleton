@@ -1,5 +1,6 @@
 #include "CommandManager.h"
 #include "JsonArgReader.h"
+#include "JsonReplyWriter.h"
 #include "DescribeArgReader.h"
 #include "JsonScope.h"
 #include "Stream.h"
@@ -44,7 +45,8 @@ RequestError CommandManager::Execute(const char* category, const char* name,
     // path holding a request-sized buffer — swapping in a token implementation here
     // deletes it without touching a single handler.
     JsonArgReader reader(in);
-    CommandContext ctx(reader, in, out, connection);
+    JsonReplyWriter writer(out);
+    CommandContext ctx(reader, writer, in, out, connection);
     const RequestError err = e->handler(e->ctx, ctx);
     if (err != RequestError::Ok && failedArg)
         *failedArg = reader.failedArgument();
@@ -212,7 +214,8 @@ RequestError CommandManager::DescribeCommand(const char* category, const char* c
     JsonArray args = resp.array("arguments");
     DescribeArgReader reader(args);
     NullStream sink;
-    CommandContext described(reader, sink, sink, nullptr);
+    JsonReplyWriter nowhere(sink);   // the described handler is stopped before it replies
+    CommandContext described(reader, nowhere, sink, sink, nullptr);
     const RequestError r = e->handler(e->ctx, described);
 
     if (r != RequestError::Described)

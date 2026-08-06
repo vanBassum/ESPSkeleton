@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Stream.h"
+#include "ReplyWriter.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -127,15 +128,22 @@ public:
 class CommandContext
 {
 public:
-    CommandContext(ArgReader& reader, Stream& request, Stream& reply,
+    CommandContext(ArgReader& reader, ReplyWriter& writer,
+                   Stream& request, Stream& response,
                    ConnectionAuth* connection = nullptr)
-        : in(request), out(reply), connection(connection), reader_(reader) {}
+        : in(request), out(response), reply(writer),
+          connection(connection), reader_(reader) {}
 
     CommandContext(const CommandContext&) = delete;
     CommandContext& operator=(const CommandContext&) = delete;
 
     Stream& in;    ///< request body, positioned there by readArgs
-    Stream& out;   ///< reply
+    Stream& out;   ///< reply, as raw bytes
+
+    /// The reply as structure: `auto resp = ctx.reply.object();`. Writes through to
+    /// `out` in the connection's format, so a handler need not name one. Raw writes to
+    /// `out` remain legal alongside it — a header record then a file body, say.
+    ReplyWriter& reply;
 
     /// Auth state of the connection this arrived on; null when the transport gates
     /// nothing. Only the `auth` commands have any business touching it.
