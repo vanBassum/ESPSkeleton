@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ServiceProvider.h"
 #include "InitState.h"
 #include "BoardConfig.h"
 #include "drivers/GpioLed.h"
@@ -21,6 +20,14 @@
 //     addresses by meaning — bind a Mock* driver when not fitted;
 //   • concrete driver accessors are allowed as an escape hatch
 //     when the application needs a driver's full API.
+//
+// The bottom layer, and it depends on nothing above it — not the
+// framework, not the application. Drivers take their pins and buses
+// as constructor arguments, so nothing here needs a provider to find
+// a peer, and Board itself IS this layer's context: it owns the
+// instances and exposes the surface the layer above compiles against.
+// That surface is a compile-time contract rather than a vtable, which
+// is why a board may simply omit what nobody calls.
 // ──────────────────────────────────────────────────────────────
 
 class Board
@@ -28,7 +35,7 @@ class Board
     static constexpr const char *TAG = "Board";
 
 public:
-    explicit Board(ServiceProvider &serviceProvider);
+    Board() = default;
 
     Board(const Board &) = delete;
     Board &operator=(const Board &) = delete;
@@ -40,7 +47,6 @@ public:
     Led &GetLed() { return led_; }
 
 private:
-    ServiceProvider &serviceProvider_;
     InitState initState_;
 
     // Hardware instances — buses first, then the drivers that use them.

@@ -37,18 +37,30 @@ It's not a framework that forces you into rigid patterns. It's a well-organized 
 Strux/
 ├── main/                              # ESP-IDF firmware
 │   ├── main.cpp                       # Boot sequence — just Init() calls
-│   ├── Application/                   # Application logic (managers)
-│   │   ├── ApplicationContext.h       # Service locator — owns all managers
-│   │   ├── ServiceProvider.h          # Dependency injection interface
-│   │   ├── CommandManager/            # Command dispatch (WebSocket + HTTP)
+│   ├── strux/                         # THE FRAMEWORK — pull improvements into a fork
+│   │   ├── StruxContext.h             # Owns every framework manager + the init order
+│   │   ├── StruxServices.h            # What one framework manager may reach for
+│   │   ├── CommandManager/            # Command dispatch (WebSocket + relay)
 │   │   ├── ConsoleManager/            # Log capture + WebSocket broadcast
 │   │   ├── NetworkManager/            # WiFi STA/AP with retry and fallback
+│   │   ├── RelayManager/              # Outbound pipe for off-LAN access
 │   │   ├── SettingsManager/           # NVS key-value store
 │   │   ├── SystemManager/             # Device identity, ping/info/reboot
-│   │   ├── TimeManager/              # SNTP + timezone
-│   │   ├── UpdateManager/            # OTA firmware + www partition
-│   │   └── WebServerManager/         # HTTP + WebSocket server
-│   ├── hardware/                      # Hardware abstraction
+│   │   ├── TelemetryManager/          # Measurements out via the relay
+│   │   ├── TimeManager/               # SNTP + timezone
+│   │   ├── UpdateManager/             # OTA firmware + www partition
+│   │   ├── WebServerManager/          # HTTP + WebSocket server
+│   │   └── lib/                       # Reusable utilities
+│   │       ├── common/                # Stream, MemoryStream, BufferStream, Fatal
+│   │       ├── json/                  # JsonWriter, JsonReader
+│   │       ├── protocol/              # CommandContext, ArgReader, ReplyWriter, Session
+│   │       ├── rtos/                  # Task, Mutex, Timer, InitState
+│   │       └── system/                # DateTime, TimeSpan
+│   ├── app/                           # THE APPLICATION — this is what a fork writes
+│   │   ├── ApplicationContext.h       # Owns this product's managers
+│   │   ├── AppServices.h              # Peers + getStrux() + getBoard()
+│   │   └── LedManager/                # Worked example — delete when you have real ones
+│   ├── hardware/                      # THE BOARD — depends on nothing above it
 │   │   ├── boards/                    # One folder per target board (-DBOARD=<name>)
 │   │   │   └── esp32_devkit/          # Generic ESP32 DevKit (default)
 │   │   │       ├── BoardConfig.h      # Pin definitions for this board
@@ -59,11 +71,6 @@ Strux/
 │   │   └── drivers/                   # Shared drivers, usable by any board
 │   │       ├── GpioLed.h              # GPIO implementation of the Led role
 │   │       └── MockLed.h              # Led role without hardware (state only)
-│   └── lib/                           # Reusable utilities
-│       ├── common/                    # Stream, MemoryStream, BufferStream, Fatal
-│       ├── json/                      # JsonWriter, JsonReader
-│       ├── rtos/                      # Task, Mutex, Timer, InitState
-│       └── system/                    # DateTime, TimeSpan
 ├── frontend/                          # React web UI (Vite + Tailwind + shadcn)
 ├── www/                               # Build output — gzipped, embedded in flash
 ├── CMakeLists.txt                     # Root ESP-IDF project config
@@ -78,10 +85,13 @@ Strux/
 | `hardware/boards/<name>/` | Pin definitions, the board's `Board` class (owns all driver instances), `board.cmake`, optional `sdkconfig.defaults` overlay | Swap or add a board |
 | `hardware/interfaces/` | Role interfaces the application speaks (`Led`) — small, application vocabulary | Application expects a new capability |
 | `hardware/drivers/` | Board-independent chip/peripheral drivers implementing the roles | Add a peripheral |
-| `Application/` | Managers, business logic, orchestration, commands | Add features or change behavior |
-| `lib/` | RTOS wrappers, JSON, time utilities | Rarely — these are stable building blocks |
+| `strux/` | The framework: managers, dispatch, transports, settings, OTA | The template improves — pull it into a fork |
+| `app/` | Your product: managers, business logic, commands | Add features or change behavior |
+| `strux/lib/` | RTOS wrappers, JSON, protocol, time utilities | Rarely — these are stable building blocks |
 
-**Rule of thumb:** if the code changes when you swap the board, it belongs in `hardware/boards/<name>/`. If it's a chip driver several boards could use, it belongs in `hardware/drivers/`. If it changes when you add a feature, it belongs in `Application/`.
+**Rule of thumb:** if the code changes when you swap the board, it belongs in `hardware/boards/<name>/`. If it's a chip driver several boards could use, it belongs in `hardware/drivers/`. If it changes when you add a feature to this product, it belongs in `app/`. If every fork would want it, it belongs in `strux/`.
+
+Dependencies run one way: the board depends on nothing, the framework depends on the board's *nothing* (it never touches hardware), and the application depends on both. Anything the framework needs from the application arrives by registration — a command, a setting, a telemetry point — never by reaching upward. `app/LedManager/` is the worked example of all three edges at once.
 
 ### Multiple boards
 
@@ -150,10 +160,13 @@ Vite's dev server will proxy WebSocket connections to the device. Edit React com
 
 ## Architecture
 
-All managers follow the same pattern: they receive a `ServiceProvider&` reference at construction and initialize via `Init()`. This gives you dependency injection without a framework.
+All managers follow the same pattern: they receive a `StruxServices&` (or `AppServices&` in `app/`) reference at construction and initialize via `Init()`. This gives you dependency injection without a framework.
 
 ```
-ApplicationContext (owns everything)
+Board (bottom — depends on nothing above it)
+└── the selected board's hardware: LED, sensors, buses
+
+StruxContext (the framework — answers StruxServices)
 ├── ConsoleManager        — Captures ESP-IDF logs, broadcasts via WebSocket
 ├── SettingsManager       — NVS read/write behind typed setting objects
 ├── SystemManager         — Device identity, ping/info/reboot commands
@@ -161,28 +174,30 @@ ApplicationContext (owns everything)
 │   └── WiFiInterface     — ESP WiFi abstraction (swappable for Ethernet)
 ├── TimeManager           — SNTP time sync with timezone support
 ├── CommandManager        — Pure dispatcher for commands registered by other managers
-├── Board                 — The selected board's hardware (LED, sensors, buses)
 ├── UpdateManager         — Session-based updates to any partition by label
-└── WebServerManager      — HTTP + WebSocket server, static file serving
-    ├── StaticFileHandler
-    └── WebSocketHandler
+├── WebServerManager      — HTTP + WebSocket server, static file serving
+│   ├── StaticFileHandler
+│   └── WebSocketHandler
+├── RelayManager          — Outbound pipe so the device is reachable off-LAN
+└── TelemetryManager      — Measurements out through the relay
+
+ApplicationContext (the top — answers AppServices, holds Board& and StruxServices&)
+└── LedManager            — Worked example; replace with your product's managers
 ```
 
 ### Boot sequence (main.cpp)
 
 ```cpp
-g_appContext.getConsoleManager().Init();
-g_appContext.getSettingsManager().Init();
-g_appContext.getSystemManager().Init();
-g_appContext.getNetworkManager().Init();
-g_appContext.getTimeManager().Init();
-g_appContext.getCommandManager().Init();
-g_appContext.getBoard().Init();
-g_appContext.getUpdateManager().Init();
-g_appContext.getWebServerManager().Init();
+Board board;
+StruxContext strux;
+ApplicationContext application{ board, strux };
+
+board.Init();         // hardware first: it depends on nothing
+strux.Init();         // then the framework the application registers into
+application.Init();   // then the product
 ```
 
-The `main.cpp` stays clean — just `Init()` calls. Hardware drivers live in the board's `Board` class; application managers reach them through `getBoard()`.
+That is the whole file. The order *within* each layer lives in that layer's context — `StruxContext::Init()` owns Strux's ordering, so a fork that pulls a new framework manager gets its position too. Hardware drivers live in the board's `Board` class; application managers reach them through `AppServices::getBoard()`, and the framework never touches hardware at all.
 
 > **Looking for Home Assistant / MQTT?** That's deliberately not what Strux is for — [ESPHome](https://esphome.io/) does HA-native devices far better. Strux targets product firmware with its own web UI and logic. (An earlier version shipped MQTT + HA discovery; it lives on in git history if a fork wants it.)
 
@@ -224,7 +239,7 @@ inline static StringSetting host_{ "myfeature.host", "My Feature Host", ""   };
 inline static Int32Setting  port_{ "myfeature.port", "My Feature Port", 1883 };
 
 // In your manager's Init():
-serviceProvider_.getSettingsManager().Register({ &host_, &port_ });
+strux_.getSettingsManager().Register({ &host_, &port_ });
 
 // Anywhere in the owner — typed, no string keys:
 int32_t port = port_.Get();   // NVS value, or the default if unset
@@ -284,18 +299,23 @@ This is a template — copy it, rename it, and build on top of it:
 1. **Rename the project** in `CMakeLists.txt` (`project(YourProject)`), `.github/workflows/release.yml`, and `frontend/src/config.ts` (dev-server host + GitHub repo for the release check) — the UI itself needs no renaming: it shows the device name and project name reported by the firmware
 2. **Update `BoardConfig.h`** (or add a new board folder under `hardware/boards/`) with your board's pin assignments
 3. **Add hardware drivers** in `hardware/drivers/` and instantiate them in the board's `Board` class
-4. **Add application logic** as new managers in `Application/`
+4. **Add application logic** as new managers in `app/` — and delete `app/LedManager/`, which is only there as a worked example. Nothing in `strux/` needs editing to add a feature.
 5. **Extend the web UI** — add pages in `frontend/src/pages/`, register routes in the sidebar
 6. **Add settings** by declaring typed setting members in the owning manager and registering them in its `Init()` (see [Settings](#settings))
 
 ### Adding a New Manager
 
-1. Create a new directory under `Application/YourManager/`
-2. Implement your manager class, accepting `ServiceProvider&` in the constructor
-3. Add it to `ServiceProvider.h` (forward declare + virtual getter)
-4. Add it to `ApplicationContext.h` (member + getter implementation)
-5. Call `Init()` from `main.cpp`
-6. Register source files in `main/CMakeLists.txt`
+Almost always an *application* manager — see [`app/LedManager/`](main/app/LedManager/) for the worked example:
+
+1. Create a new directory under `app/YourManager/`
+2. Implement your manager class, accepting `AppServices&` in the constructor. It reaches the framework through `services.getStrux()` and the hardware through `services.getBoard()`
+3. Add it to `app/AppServices.h` (forward declare + virtual getter)
+4. Add it to `app/ApplicationContext.h` (member, getter, and a call in `Init()`)
+5. Register source files in `APP_SOURCES` and the folder in `INCLUDE_DIRS_LIST`, both in `main/CMakeLists.txt`
+
+Nothing in `strux/` is touched — the manager announces itself by registering its commands and settings into the framework from its own `Init()`.
+
+A *framework* manager (one every fork would want) is the same five steps against `strux/StruxServices.h`, `strux/StruxContext.h` — member **and** a position in its ordered `Init()` — and `STRUX_SOURCES`.
 
 ### Adding a New Command
 
@@ -303,17 +323,29 @@ Commands are dispatched by `CommandManager`, but each command lives in the manag
 
 ```cpp
 // In your manager's header:
-void Cmd_MyThing(Stream& in, Stream& out);
+RequestError Cmd_MyThing(CommandContext& ctx);
 
 inline static CommandEntry commands_[] = {
-    { "myThing", &InvokeCommand<&MyManager::Cmd_MyThing> },
+    { "myCategory", "myThing", &InvokeCommand<&MyManager::Cmd_MyThing> },
 };
 
 // In Init():
-serviceProvider_.getCommandManager().Register(this, commands_);
+services_.getStrux().getCommandManager().Register(this, commands_);
+
+// The handler: declare every argument in one call, then write the reply.
+RequestError MyManager::Cmd_MyThing(CommandContext& ctx)
+{
+    uint32_t times = 1;
+    RETURN_IF_ERROR(ctx.readArgs(Optional("times", times)));
+
+    auto resp = ctx.reply.object();
+    resp.field("ok", true);
+    resp.field("times", times);
+    return RequestError::Ok;
+}
 ```
 
-Handlers read the request payload from `in` and write their complete reply to `out` — for JSON, construct a `JsonReader`/`JsonObject` on the streams. The frontend calls commands via the WebSocket RPC layer in `backend.ts`; large transfers (uploads/downloads) go through the same commands over `POST /api/command`.
+Routes are two words (`category command`). `ctx.readArgs(...)` is not optional even with no arguments — it is what positions the stream at the request body and what lets `help list -category X -command Y` describe the command by re-dispatching it. The reply goes through `ctx.reply`, never by naming a wire format. The frontend calls commands via the WebSocket RPC layer in `backend.ts`, and the same commands are reachable through the relay; there is no HTTP command route.
 
 ### Adding a Hardware Driver
 

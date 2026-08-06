@@ -1,11 +1,6 @@
 #include "Board.h"
 #include "esp_log.h"
 
-Board::Board(ServiceProvider &ctx)
-    : serviceProvider_(ctx)
-{
-}
-
 void Board::Init()
 {
     auto init = initState_.TryBeginInit();

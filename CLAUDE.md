@@ -46,24 +46,46 @@ Design documents, implementation plans and an ideas folder were all removed on 2
 
 ## Architecture
 
-### Manager pattern (dependency injection)
+### Three layers, each with a context and a provider
 
-Everything in firmware is a "manager" owned by `ApplicationContext` ([main/Application/ApplicationContext.h](main/Application/ApplicationContext.h)), which implements the pure-virtual `ServiceProvider` interface ([main/Application/ServiceProvider.h](main/Application/ServiceProvider.h)). Every manager:
+Dependencies run one way only, bottom to top:
 
-- takes `ServiceProvider&` in its constructor and reaches other managers through it (never directly),
+| Layer | Owns | Provider (what the layer above may reach for) |
+|---|---|---|
+| `main/hardware/` — the **board** | driver instances, bus hosts | the `Board` class's own public surface, checked at compile time |
+| `main/strux/` — the **framework** | the ten Strux managers | `StruxServices` ([main/strux/StruxServices.h](main/strux/StruxServices.h)), answered by `StruxContext` |
+| `main/app/` — the **application** | this product's managers | `AppServices` ([main/app/AppServices.h](main/app/AppServices.h)), answered by `ApplicationContext` |
+
+[main.cpp](main/main.cpp) is four calls: `board.Init()`, `strux.Init()`, `application.Init()`, then the OTA validity mark. **The order *within* a layer lives in that layer's context**, not here — `StruxContext::Init()` carries Strux's ordering and its constraints (Relay after WebServer, whose `Authenticator` it shares; Telemetry after Relay, down whose pipe it leaves), so a fork pulling a new framework manager gets its position along with it.
+
+Two rules keep the graph acyclic, and both matter more than they look:
+
+- **Strux never reaches up, and never sideways into hardware.** `StruxServices` has no `getBoard()` and no way to see `AppServices`. Hardware is deliberate: because there is no `IBoard`, a board only owes what the code above it calls, so a framework that touched `GetLed()` would make every board in every fork owe an LED.
+- **Anything the framework needs from the application is *registered*, not fetched.** The app registers commands, settings and telemetry points into Strux from its own `Init()`. A Strux manager wanting `AppServices&` is a design error, not a missing accessor.
+
+The board layer has a context but no pure-virtual provider, and that is the one asymmetry. `Board` *is* its layer's context — it owns the instances and exposes the surface above it — but that surface is a compile-time contract, so a board may simply omit what nobody calls. A `BoardServices` vtable would be `IBoard`, which is rejected on purpose (see below).
+
+Every manager, in either managed layer:
+
+- takes its layer's provider (`StruxServices&` or `AppServices&`) in its constructor and reaches everything through it, never directly,
 - has copy/move deleted,
-- initializes in `Init()` guarded by an `InitState` (`lib/rtos/InitState.h`), not in the constructor.
+- initializes in `Init()` guarded by an `InitState` (`strux/lib/rtos/InitState.h`), not in the constructor.
 
-`main.cpp` is only ordered `Init()` calls — order matters (Console → Settings → System → Network → Time → Command → Board → Update → WebServer → Relay; Relay is last because it shares WebServer's `Authenticator`). Adding a manager means: create the class, add it to `ServiceProvider`, `ApplicationContext`, `main.cpp`, and `main/CMakeLists.txt` (both `SOURCE_FILES_LIST` and `INCLUDE_DIRS_LIST` — sources are listed explicitly, no globbing).
+Adding a **framework** manager: create the class, add it to `StruxServices`, `StruxContext` (member *and* the ordered `Init()`), and `STRUX_SOURCES` + `INCLUDE_DIRS_LIST` in [main/CMakeLists.txt](main/CMakeLists.txt). Adding an **application** manager: the same, against `AppServices`, `ApplicationContext` and `APP_SOURCES` — and nothing in `strux/` is touched. [main/app/LedManager/](main/app/LedManager/) is the worked example: it blinks the board LED, and along the way registers two settings, two commands and a telemetry point without a single edit to the framework. Delete it when the product has real features.
 
-### Layer separation
+Note: the two source lists are separated so a fork does not fight the template over one file, but they are still *one* file and still one ESP-IDF component. Making `strux/` a real component is the step that would make syncing a pull rather than a merge; it has not been taken.
 
-- `main/hardware/` — changes when you swap the board. Split into:
+### Layer separation within the board
+
+- `main/hardware/` — changes when you swap the board. Depends on nothing above it: `Board` takes no provider and drivers take their pins and buses as constructor arguments. Split into:
   - `boards/<name>/` — one folder per target board: `BoardConfig.h` (pins/constants), `Board.h`/`Board.cpp` (the board's `Board` class — owns every driver instance and bus host, exposes the capability surface the application compiles against; `Board.cpp` is added via `BOARD_SOURCES` in the `board.cmake` fragment), and an optional `sdkconfig.defaults` overlaying the common root one. Selected with `-DBOARD=<name>`; only the chosen board folder is on the include path, so `#include "BoardConfig.h"` and `#include "Board.h"` resolve to it. There is no `IBoard` base class — the contract is duck-typed: a board missing a method the application uses fails to compile for that board.
   - `interfaces/` — role interfaces in application vocabulary (`Led`), 1–3 pure-virtual methods each, never chip or GPIO vocabulary. Drivers implement them (`GpioLed : Led`); a board without the hardware binds a mock (`MockLed`). Add a role interface only when application code speaks in that role; expose a concrete driver accessor from `Board` instead when the application needs a driver's full API (escape hatch). Multi-instance roles get a semantic enum (`Sensor::Ambient`, never `Sensor_2`) mapped by the board — introduce it with the first multi-instance role.
   - `drivers/` — board-independent chip/peripheral drivers shared by boards (e.g. `GpioLed.h`), taking pins/buses as constructor parameters (passed by the board from its `BoardConfig` constants).
-- `main/Application/` — changes when you add a feature. Managers and business logic. Hardware driver *instances* live in the board's `Board` class, reached via `ServiceProvider::getBoard()`.
-- `main/lib/` — stable building blocks: RTOS wrappers (`Task`, `Mutex`, `Timer`), `Stream`/`MemoryStream`/`BufferStream`, `JsonWriter`/`JsonReader`, `DateTime`/`TimeSpan`. Rarely changes. The request/reply seam (`CommandContext`, `ArgReader`, `ReplyWriter`) lives in `lib/protocol/`.
+- `main/strux/` — the framework: the ten managers, plus `lib/` beneath them. Changes when the template improves.
+- `main/app/` — changes when you add a feature to *this* product. Hardware driver *instances* live in the board's `Board` class, reached via `AppServices::getBoard()`.
+- `main/strux/lib/` — stable building blocks: RTOS wrappers (`Task`, `Mutex`, `Timer`), `Stream`/`MemoryStream`/`BufferStream`, `JsonWriter`/`JsonReader`, `DateTime`/`TimeSpan`. Rarely changes. The request/reply seam (`CommandContext`, `ArgReader`, `ReplyWriter`) lives in `lib/protocol/`.
+
+Every folder is on the include path, so headers are included by name alone (`#include "Stream.h"`) and moving one between layers does not touch its callers.
 
 Note: `board.cmake` fragments cannot change component `REQUIRES` (ESP-IDF resolves those in an early pass without the `BOARD` cache var). IDF built-in deps go in `COMPONENT_REQUIRES` in [main/CMakeLists.txt](main/CMakeLists.txt); managed components go in [main/idf_component.yml](main/idf_component.yml).
 
@@ -72,9 +94,9 @@ Note: `board.cmake` fragments cannot change component `REQUIRES` (ESP-IDF resolv
 `CommandManager` is a pure dispatcher — it knows no commands and no other managers. Each command lives in the manager that owns its domain:
 
 - Handlers have the signature `void Handler(Stream& in, Stream& out)`: `in` carries the request payload, the handler writes its complete reply to `out`. Streams are the contract; JSON is a dialect the handler opts into by constructing `JsonReader`/`JsonObject` on line one. Binary payloads (e.g. firmware chunks) use the same contract.
-- Owners declare an `inline static CommandEntry commands_[]` table ([CommandEntry.h](main/Application/CommandManager/CommandEntry.h)) with `InvokeCommand<&Owner::Method>` trampolines, and hand it to `CommandManager::Register()` from their `Init()`. Tables must have static storage duration — a registered entry that dies aborts with `FATAL`.
+- Owners declare an `inline static CommandEntry commands_[]` table ([CommandEntry.h](main/strux/CommandManager/CommandEntry.h)) with `InvokeCommand<&Owner::Method>` trampolines, and hand it to `CommandManager::Register()` from their `Init()`. Tables must have static storage duration — a registered entry that dies aborts with `FATAL`.
 - `help list` is the registry describing itself and the one command `CommandManager` owns: categories and names come off the chain, and a command's *arguments* come from the command itself, by re-dispatching it with a `DescribeArgReader` that prints the declarations instead of filling them and stops the handler at its own `RETURN_IF_ERROR`. So calling `ctx.readArgs(...)` is not optional — a handler that skips it has no `help` and, worse, runs its body when described (logged as an error).
-- Two transports reach `Execute()`, and they differ *only* below `SessionLink` ([SessionLink.h](main/lib/protocol/SessionLink.h) — the protocol layer lives in `lib/protocol/`, not under a transport, because the transports depend on it and not the reverse): the local browser WebSocket (`WsSessionLink`, frames read on the httpd task) and the outbound relay pipe (`RelaySessionLink`, frames read on the relay's own task via [RelaySocket](main/Application/RelayManager/RelaySocket.h), a WebSocket driven at the transport layer rather than through `esp_websocket_client` — a callback-delivered frame cannot be the bottom of a streaming handler, and going one layer down is what removed the queue, the per-frame `malloc` and the dropped chunks). Both transports therefore *read* on the task that runs the command. Above that seam everything is shared — `Session` (the stream), `protocol::RunCommandSession` in [CommandEnvelope.h](main/lib/protocol/CommandEnvelope.h) (names the request, dispatches it, closes or refuses the reply), and `AuthGate` — so no handler knows or cares which transport it is serving. There is no HTTP command route; HTTP serves static files only. Wire format is binary session chunks `[session:u16 LE][flags:u8][payload]`, not a JSON envelope.
+- Two transports reach `Execute()`, and they differ *only* below `SessionLink` ([SessionLink.h](main/strux/lib/protocol/SessionLink.h) — the protocol layer lives in `lib/protocol/`, not under a transport, because the transports depend on it and not the reverse): the local browser WebSocket (`WsSessionLink`, frames read on the httpd task) and the outbound relay pipe (`RelaySessionLink`, frames read on the relay's own task via [RelaySocket](main/strux/RelayManager/RelaySocket.h), a WebSocket driven at the transport layer rather than through `esp_websocket_client` — a callback-delivered frame cannot be the bottom of a streaming handler, and going one layer down is what removed the queue, the per-frame `malloc` and the dropped chunks). Both transports therefore *read* on the task that runs the command. Above that seam everything is shared — `Session` (the stream), `protocol::RunCommandSession` in [CommandEnvelope.h](main/strux/lib/protocol/CommandEnvelope.h) (names the request, dispatches it, closes or refuses the reply), and `AuthGate` — so no handler knows or cares which transport it is serving. There is no HTTP command route; HTTP serves static files only. Wire format is binary session chunks `[session:u16 LE][flags:u8][payload]`, not a JSON envelope.
 - Remote access works: `RelayManager` dials out to a server so the device is reachable off-LAN, and the server pulls the device's own frontend with the ordinary `getWebFile` command. Demo server in [relay-server/](relay-server/); what is proven and what is left in [docs/backlog/2026-07-03-remote-access.md](docs/backlog/2026-07-03-remote-access.md). Off by default (`relay.enabled`).
 
 Log lines broadcast to all WebSocket clients via `ConsoleManager`. The frontend side is a singleton `BackendService` ([frontend/src/lib/backend.ts](frontend/src/lib/backend.ts)) that matches replies to requests by id and auto-reconnects.
@@ -83,7 +105,7 @@ Log lines broadcast to all WebSocket clients via `ConsoleManager`. The frontend 
 
 ### Settings
 
-Settings are typed leaf objects (`lib`-style, [TypedSettings.h](main/Application/SettingsManager/TypedSettings.h)) declared in the manager that owns them and registered at runtime:
+Settings are typed leaf objects (`lib`-style, [TypedSettings.h](main/strux/SettingsManager/TypedSettings.h)) declared in the manager that owns them and registered at runtime:
 
 ```cpp
 inline static UInt32Setting port_{ "myfeature.port", "My Feature Port", 1883 };
@@ -102,6 +124,6 @@ MQTT and Home Assistant integration were removed 2026-07-06 (last present at tag
 ## Conventions
 
 - C++17, no exceptions/RTTI-heavy patterns; `snprintf` with `sizeof` bounds, no `strcpy`/`strcat`.
-- A command's reply is written through `ctx.reply`, never by naming a format: `ReplyWriter` ([main/lib/protocol/ReplyWriter.h](main/lib/protocol/ReplyWriter.h)) is the mirror of `ArgReader`, and `JsonReplyWriter` is the only implementation today. Every scope comes from a factory — the root from `ctx.reply.object()`/`.array()`, children from their parent — so a call site never spells a type (`auto` is enough) and the methods on offer are exactly the enclosing scope's. Scopes are RAII and close on every return path; writing to a closed one is `FATAL`. It is not a builder: bytes go to the transport on every field, so a scope must close before anything else touches `ctx.out` (see `getWebFile`'s header line, and `updateWrite`'s progress records).
+- A command's reply is written through `ctx.reply`, never by naming a format: `ReplyWriter` ([main/strux/lib/protocol/ReplyWriter.h](main/strux/lib/protocol/ReplyWriter.h)) is the mirror of `ArgReader`, and `JsonReplyWriter` is the only implementation today. Every scope comes from a factory — the root from `ctx.reply.object()`/`.array()`, children from their parent — so a call site never spells a type (`auto` is enough) and the methods on offer are exactly the enclosing scope's. Scopes are RAII and close on every return path; writing to a closed one is `FATAL`. It is not a builder: bytes go to the transport on every field, so a scope must close before anything else touches `ctx.out` (see `getWebFile`'s header line, and `updateWrite`'s progress records).
 - Elsewhere, JSON is generated with `lib/json/JsonWriter.h` and parsed with `JsonReader` (no external JSON lib). `JsonWriter` is now only the log broadcast, which is not a reply.
 - Firmware version derives from the latest git tag (`v0.1.0` → `0.1.0`) in the root CMakeLists.

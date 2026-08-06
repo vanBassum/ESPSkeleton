@@ -1,50 +1,66 @@
-set(SOURCE_FILES_LIST
-    "main.cpp"
-    "Application/NetworkManager/NetworkManager.cpp"
-    "Application/NetworkManager/NetworkInterface.cpp"
-    "Application/NetworkManager/WiFiInterface.cpp"
-    "Application/NetworkManager/DnsConfiguration.cpp"
-    "Application/WebServerManager/WebServerManager.cpp"
-    "Application/WebServerManager/Authenticator.cpp"
-    "Application/WebServerManager/StaticFileHandler.cpp"
-    "Application/WebServerManager/WebSocketHandler.cpp"
-    "Application/WebServerManager/ConnectionRegistry.cpp"
-    "Application/WebServerManager/SessionTable.cpp"
-    "Application/RelayManager/RelayManager.cpp"
-    "Application/RelayManager/RelaySocket.cpp"
-    "Application/TelemetryManager/TelemetryManager.cpp"
-    "Application/CommandManager/CommandManager.cpp"
-    "Application/UpdateManager/UpdateManager.cpp"
-    "Application/UpdateManager/PartitionWriter.cpp"
-    "Application/SettingsManager/SettingsManager.cpp"
-    "Application/SettingsManager/Setting.cpp"
-    "Application/SystemManager/SystemManager.cpp"
-    "Application/ConsoleManager/ConsoleManager.cpp"
-    "Application/TimeManager/TimeManager.cpp"
-    "lib/system/DateTime.cpp"
-    "lib/system/TimeSpan.cpp"
+# ── The framework. Pulled from the Strux template; a fork should not need to touch
+# this list, which is why it is kept apart from the application's.
+set(STRUX_SOURCES
+    "strux/NetworkManager/NetworkManager.cpp"
+    "strux/NetworkManager/NetworkInterface.cpp"
+    "strux/NetworkManager/WiFiInterface.cpp"
+    "strux/NetworkManager/DnsConfiguration.cpp"
+    "strux/WebServerManager/WebServerManager.cpp"
+    "strux/WebServerManager/Authenticator.cpp"
+    "strux/WebServerManager/StaticFileHandler.cpp"
+    "strux/WebServerManager/WebSocketHandler.cpp"
+    "strux/WebServerManager/ConnectionRegistry.cpp"
+    "strux/WebServerManager/SessionTable.cpp"
+    "strux/RelayManager/RelayManager.cpp"
+    "strux/RelayManager/RelaySocket.cpp"
+    "strux/TelemetryManager/TelemetryManager.cpp"
+    "strux/CommandManager/CommandManager.cpp"
+    "strux/UpdateManager/UpdateManager.cpp"
+    "strux/UpdateManager/PartitionWriter.cpp"
+    "strux/SettingsManager/SettingsManager.cpp"
+    "strux/SettingsManager/Setting.cpp"
+    "strux/SystemManager/SystemManager.cpp"
+    "strux/ConsoleManager/ConsoleManager.cpp"
+    "strux/TimeManager/TimeManager.cpp"
+    "strux/lib/system/DateTime.cpp"
+    "strux/lib/system/TimeSpan.cpp"
 )
 
+# ── The application. This is the list a fork owns.
+set(APP_SOURCES
+    "app/LedManager/LedManager.cpp"
+)
+
+set(SOURCE_FILES_LIST
+    "main.cpp"
+    ${STRUX_SOURCES}
+    ${APP_SOURCES}
+)
+
+# Every folder is on the include path, so headers are included by name alone
+# (`#include "Stream.h"`) and moving one between layers does not touch its callers.
 set(INCLUDE_DIRS_LIST
     .
-    "Application"
-    "Application/NetworkManager"
-    "Application/WebServerManager"
-    "Application/RelayManager"
-    "Application/TelemetryManager"
-    "Application/CommandManager"
-    "Application/UpdateManager"
-    "Application/SettingsManager"
-    "Application/SystemManager"
-    "Application/ConsoleManager"
-    "Application/TimeManager"
+    "strux"
+    "strux/NetworkManager"
+    "strux/WebServerManager"
+    "strux/RelayManager"
+    "strux/TelemetryManager"
+    "strux/CommandManager"
+    "strux/UpdateManager"
+    "strux/SettingsManager"
+    "strux/SystemManager"
+    "strux/ConsoleManager"
+    "strux/TimeManager"
+    "strux/lib"
+    "strux/lib/common"
+    "strux/lib/rtos"
+    "strux/lib/json"
+    "strux/lib/protocol"
+    "strux/lib/system"
     "hardware"
-    "lib"
-    "lib/common"
-    "lib/rtos"
-    "lib/json"
-    "lib/protocol"
-    "lib/system"
+    "app"
+    "app/LedManager"
 )
 
 set(COMPONENT_REQUIRES
