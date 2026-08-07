@@ -17,6 +17,8 @@ idf.py -p <PORT> flash monitor
 idf.py -DBOARD=<name> build           # select a board from main/hardware/boards/ (default: esp32_devkit)
 ```
 
+Boards today: `esp32_devkit` (ESP32-WROOM-32) and `esp32c3_supermini` (ESP32-C3, USB-C, LED on GPIO8 active low). A non-default chip needs *both* halves — `idf.py -DBOARD=esp32c3_supermini set-target esp32c3`, then build — because `set-target` picks the chip and `-DBOARD` picks the pinout, and a board's `sdkconfig.defaults` cannot supply the chip (see the note below). Add `-B build_c3 -D SDKCONFIG=sdkconfig.c3` to keep a second board's tree beside the default one instead of overwriting it.
+
 Frontend (React 19 + TypeScript + Vite + Tailwind + shadcn/ui, package manager is pnpm):
 
 ```bash
@@ -91,7 +93,10 @@ Note: the two source lists are separated so a fork does not fight the template o
 
 Every folder is on the include path, so headers are included by name alone (`#include "Stream.h"`) and moving one between layers does not touch its callers.
 
-Note: `board.cmake` fragments cannot change component `REQUIRES` (ESP-IDF resolves those in an early pass without the `BOARD` cache var). IDF built-in deps go in `COMPONENT_REQUIRES` in [main/CMakeLists.txt](main/CMakeLists.txt); managed components go in [main/idf_component.yml](main/idf_component.yml).
+Note: ESP-IDF runs an early expansion pass *without* the `BOARD` cache var, and two things a board would like to own are resolved there, so neither can come from the board folder:
+
+- **Component `REQUIRES`** — `board.cmake` fragments cannot change them. IDF built-in deps go in `COMPONENT_REQUIRES` in [main/CMakeLists.txt](main/CMakeLists.txt); managed components go in [main/idf_component.yml](main/idf_component.yml).
+- **The chip.** A `CONFIG_IDF_TARGET` line in a board's `sdkconfig.defaults` is read too late and loses silently to whatever the existing `sdkconfig` says — the build then runs with the *wrong toolchain* rather than failing. The chip is selected with `idf.py set-target`, never from a board file.
 
 ### Commands (the device's RPC surface)
 

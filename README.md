@@ -62,10 +62,12 @@ Strux/
 │   │   └── LedManager/                # Worked example — delete when you have real ones
 │   ├── hardware/                      # THE BOARD — depends on nothing above it
 │   │   ├── boards/                    # One folder per target board (-DBOARD=<name>)
-│   │   │   └── esp32_devkit/          # Generic ESP32 DevKit (default)
-│   │   │       ├── BoardConfig.h      # Pin definitions for this board
-│   │   │       ├── BoardContext.h/.cpp # Owns all drivers, answers BoardProvider
-│   │   │       └── board.cmake        # Board build fragment (adds BoardContext.cpp)
+│   │   │   ├── esp32_devkit/          # Generic ESP32 DevKit (default)
+│   │   │   │   ├── BoardConfig.h      # Pin definitions for this board
+│   │   │   │   ├── BoardContext.h/.cpp # Owns all drivers, answers BoardProvider
+│   │   │   │   └── board.cmake        # Board build fragment (adds BoardContext.cpp)
+│   │   │   └── esp32c3_supermini/     # ESP32-C3 SuperMini (RISC-V, USB-C)
+│   │   │       └── ...                # Same four files + sdkconfig.defaults overlay
 │   │   ├── interfaces/                # Role interfaces (application vocabulary)
 │   │   │   ├── BoardProvider.h        # The roles every board owes
 │   │   │   └── Led.h                  # Led role: Set/IsOn + On/Off/Toggle helpers
@@ -96,7 +98,14 @@ Dependencies run one way: the board depends on nothing, the framework depends on
 
 ### Multiple boards
 
-The target board is selected at configure time with `-DBOARD=<name>` (default: `esp32_devkit`). Only the selected board folder is put on the include path, so application code just includes `BoardConfig.h` or `BoardContext.h` and gets the right one. The application never changes between boards: it compiles against the `BoardContext` class's surface, and each board makes itself compatible — with real hardware or a mock. Every board implements [`BoardProvider`](main/hardware/interfaces/BoardProvider.h), the list of roles a board owes, so a board that forgets one fails in the board rather than at some call site. To support a new board:
+The target board is selected at configure time with `-DBOARD=<name>` (default: `esp32_devkit`). Two ship with the template:
+
+| `-DBOARD=` | Chip | Notes |
+|---|---|---|
+| `esp32_devkit` | ESP32-WROOM-32 (Xtensa) | Default. Built-in LED on GPIO2, active high |
+| `esp32c3_supermini` | ESP32-C3 (RISC-V) | The cheap ~18×22 mm USB-C board. Blue LED on GPIO8, active **low**; console on the chip's native USB Serial/JTAG |
+
+ Only the selected board folder is put on the include path, so application code just includes `BoardConfig.h` or `BoardContext.h` and gets the right one. The application never changes between boards: it compiles against the `BoardContext` class's surface, and each board makes itself compatible — with real hardware or a mock. Every board implements [`BoardProvider`](main/hardware/interfaces/BoardProvider.h), the list of roles a board owes, so a board that forgets one fails in the board rather than at some call site. To support a new board:
 
 1. Copy `main/hardware/boards/esp32_devkit/` to `main/hardware/boards/<your_board>/` and edit `BoardConfig.h` and `BoardContext.h`/`BoardContext.cpp` (bind each role to a real driver or a `Mock*` one)
 2. Add extra board-only source files to `BOARD_SOURCES` in its `board.cmake` (optional)
@@ -124,10 +133,19 @@ idf.py build                          # default board: esp32_devkit
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-To build for a different board (see `main/hardware/boards/`):
+To build for a different board (see `main/hardware/boards/`), set both the chip and the board — `set-target` picks the chip, `-DBOARD` picks the pinout. A board's `sdkconfig.defaults` overlay cannot name the chip: IDF resolves `IDF_TARGET` in an early pass that does not yet see `BOARD`.
 
 ```bash
-idf.py -DBOARD=<name> build
+idf.py -DBOARD=esp32c3_supermini set-target esp32c3
+idf.py -DBOARD=esp32c3_supermini build
+idf.py -p COM7 flash monitor
+```
+
+Switching chips rewrites `sdkconfig`. To keep two boards side by side, give each its own build tree and config:
+
+```bash
+idf.py -B build_c3 -D SDKCONFIG=sdkconfig.c3 -DBOARD=esp32c3_supermini set-target esp32c3
+idf.py -B build_c3 -D SDKCONFIG=sdkconfig.c3 -DBOARD=esp32c3_supermini build
 ```
 
 If [pnpm](https://pnpm.io/) is installed, the frontend is built automatically as part of `idf.py build`. The React app is compiled, gzipped, and embedded into a FAT partition on flash. No SD card or external storage needed.

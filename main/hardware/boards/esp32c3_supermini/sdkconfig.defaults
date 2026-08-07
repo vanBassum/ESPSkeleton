@@ -1,0 +1,19 @@
+# ──────────────────────────────────────────────────────────────
+# Board overlay: ESP32-C3 SuperMini. Overlays the root sdkconfig.defaults
+# and wins on conflicts (composed in the root CMakeLists.txt).
+#
+# The chip itself is NOT set here. IDF resolves IDF_TARGET in the same early
+# pass that cannot see -DBOARD (the note in main/CMakeLists.txt), so a
+# CONFIG_IDF_TARGET line in this file is read too late and silently loses to
+# whatever the existing sdkconfig says. Select the chip the ordinary way:
+#   idf.py -DBOARD=esp32c3_supermini set-target esp32c3
+# ──────────────────────────────────────────────────────────────
+
+# The USB-C port is the chip's own USB Serial/JTAG peripheral, not a UART
+# bridge: without this the console goes out of GPIO21 and `idf.py monitor`
+# shows nothing.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Flash is 4 MB (as in the root defaults) but wired for DIO on these boards,
+# and the C3's SPI flash tops out at 80 MHz — same speed, safer mode.
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y

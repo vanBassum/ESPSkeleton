@@ -19,6 +19,8 @@
 # Build artifacts and directories
 **/build/
 build/
+# Per-board build trees (idf.py -B build_c3 ...)
+build_*/
 *.o
 *.a
 *.out
@@ -29,8 +31,11 @@ build/
 *.elf
 *.map
 flasher_args.json # Generated in build directory
-sdkconfig.old
 sdkconfig
+# ...including the per-board configs (idf.py -D SDKCONFIG=sdkconfig.c3 ...).
+# The board overlays checked into main/hardware/boards/<name>/ are not these.
+sdkconfig.*
+!sdkconfig.defaults
 
 # ESP-IDF dependencies
 # For older versions or manual component management
