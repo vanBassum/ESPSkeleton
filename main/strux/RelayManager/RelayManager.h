@@ -119,8 +119,9 @@ private:
     WsConnection conn_;
 
     // Sized for the worst case BuildUri() can produce: url + id + fw version +
-    // percent-encoded name and project name.
-    char uri_[384] = {};
+    // percent-encoded name and project name + the 16-hex content digest. Rebuilt
+    // before every connect attempt, so it is not a one-shot buffer.
+    char uri_[416] = {};
     char deviceId_[48] = {};
 
     // 32 hex + NUL. Proves to the server that this device is the id it claims.

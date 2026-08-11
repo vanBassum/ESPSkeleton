@@ -32,6 +32,21 @@ public:
     /// here; it is transport-neutral.
     Authenticator& GetAuthenticator() { return auth_; }
 
+    /// A fingerprint of what the frontend partition currently holds, as 16 hex
+    /// characters. The relay sends it on connect so its file cache can tell "this is
+    /// the same UI I already have" from "this device was reflashed" — see
+    /// docs/reasoning/2026-08-11-11h19.
+    ///
+    /// Names and sizes, NOT bytes: reading 900 KB of flash to describe it would cost
+    /// more than the cache it protects saves. That is sound because the build content-
+    /// hashes every asset's *name*, so a rebuilt frontend renames everything anyway;
+    /// what it cannot see is an edit that keeps both the name and the byte count.
+    ///
+    /// Computed on demand rather than cached, so it describes what is on flash now —
+    /// `www` can be replaced without a reboot, and a stale answer here would be worse
+    /// than no answer.
+    void GetContentDigest(char* out, size_t cap) const;
+
 private:
     StruxProvider& strux_;
 

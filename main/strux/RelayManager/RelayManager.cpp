@@ -186,6 +186,17 @@ void RelayManager::BuildUri()
 
     strlcat(uri_, "&project=", sizeof(uri_));
     AppendEncoded(uri_, sizeof(uri_), app ? app->project_name : "unknown");
+
+    // What the server's file cache keys on. Deliberately NOT the firmware version:
+    // `www` is its own partition and is replaced independently of the app, so a
+    // version-keyed cache goes stale and stays stale (docs/reasoning/2026-08-11-11h19).
+    // Recomputed here rather than at boot because this runs before every connect —
+    // a device that had its UI replaced without rebooting announces the new content on
+    // its next dial, and the server drops what it had.
+    char digest[17] = {};
+    strux_.getWebServerManager().GetContentDigest(digest, sizeof(digest));
+    strlcat(uri_, "&www=", sizeof(uri_));
+    strlcat(uri_, digest, sizeof(uri_));
 }
 
 // ──────────────────────────────────────────────────────────
@@ -210,11 +221,16 @@ void RelayManager::TaskLoop()
                 continue;
             }
 
+            // Rebuilt per attempt, not once in Init: the content digest in it has to
+            // describe what is on the frontend partition NOW, and that partition can be
+            // replaced without a reboot.
+            BuildUri();
+
             const auto result = socket_.Connect(uri_, CONNECT_TIMEOUT_MS, headers_);
             if (result == RelaySocket::ConnectResult::BadUri)
             {
-                // uri_ is built once in Init and cannot change without a reboot, so
-                // retrying a URL the parser already rejected would only reprint its
+                // Rebuilding does not make a rejected URL usable — relay.url is the
+                // part the parser refused, and retrying would only reprint its
                 // complaint forever. Stop the task instead; the settings UI is where
                 // this gets fixed, and the fix takes effect on the next boot.
                 ESP_LOGE(TAG, "relay.url is not usable — not retrying until reboot");
