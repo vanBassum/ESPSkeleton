@@ -56,16 +56,7 @@ operator.
    anything else. Needs the server to carry a client identity alongside the session
    id — which is a protocol change, not a device change.
 
-4. **Server-side file caching**, keyed on `(deviceId, firmware, path)`. An uncached
-   page load is N sequential WAN round trips, because one request in flight per device
-   is now permanent (multiplexing was rejected 2026-08-03 — concurrency is not worth a
-   slot table and per-channel buffers on this much RAM). Caching is the fix for page
-   load latency; the slow fetch-through-the-pipe then happens once per firmware
-   version instead of once per view. Version-keyed so a device-served UI can never
-   mismatch its firmware, which is the whole reason the UI is served from the device
-   rather than copied onto the server.
-
-5. **A legitimately silent command longer than the gate's idle window.**
+4. **A legitimately silent command longer than the gate's idle window.**
    `partition clear` says nothing while it erases: 4.1–4.5 s measured for a 1.5 MB
    slot, against a 15 s window. Fine today, but the margin is the erase time of the
    largest partition rather than a number anyone chose. The fix, if a bigger partition

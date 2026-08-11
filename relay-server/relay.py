@@ -36,13 +36,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
 import os
+import re
 import sqlite3
 import struct
 import time
+from collections import OrderedDict
 
 import aiohttp
 from aiohttp import WSMsgType, web
@@ -210,6 +213,153 @@ class InfluxWriter:
 
 
 influx: InfluxWriter | None = None
+
+
+# ── Frontend file cache ───────────────────────────────────────────────────────
+# Why it exists: one request in flight per device is permanent (multiplexing was
+# rejected 2026-08-03), so an uncached page load is N *sequential* WAN round trips,
+# each one an ESP32 reading flash 512 bytes at a time. Caching makes that happen once
+# instead of once per view.
+#
+# What it is keyed on is the part that changed. The backlog proposed
+# (deviceId, firmware, path) — but the www partition is uploaded INDEPENDENTLY of the
+# app, which is not a hypothetical: on 2026-08-11 a device's entire UI was replaced
+# while it kept reporting fw 0.0.5. A firmware-keyed cache would have served the old UI
+# forever.
+#
+# So the key is (deviceId, path) and the freshness rule comes from the build instead.
+# Vite content-hashes every asset's NAME (assets/index-D3-EqElo.js), so those bytes can
+# never change meaning — cached with no expiry, and a new build simply asks for
+# different names. index.html is the one mutable file and it is the file that *names*
+# the hashed ones, so its freshness is sufficient for the correctness of everything
+# else. It gets a short TTL; nothing needs a version number.
+#
+# The same distinction is handed to the browser as Cache-Control, which matters more
+# than the server-side hit: an immutable asset is not requested again at all, so the
+# second page load costs zero pipe traffic rather than a cheap hit.
+
+class FileCache:
+    """(deviceId, path) → one frontend file, bounded, LRU, with single-flight."""
+
+    # Bytes, not entries: entries here are one 477-byte index.html and one 130 KB
+    # bundle, and it is the bundle that decides whether this fits in a container.
+    MAX_BYTES = 32 * 1024 * 1024
+
+    # How long a MUTABLE file may be served without asking the device again. Sized to
+    # collapse the burst of one page load (and one reload behind it), not to keep
+    # anything for long: it is the whole delay between uploading a new UI and seeing
+    # it, so seconds, not minutes.
+    MUTABLE_TTL = 10.0
+
+    # A vite content-hashed name: assets/<name>-<hash>.<ext>. Deliberately narrow —
+    # anything this does not match is treated as mutable, so a file that grows a
+    # different naming scheme becomes slow rather than wrong.
+    IMMUTABLE = re.compile(r"/assets/[^/]+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
+
+    def __init__(self) -> None:
+        # OrderedDict as an LRU: move_to_end on read, popitem(last=False) to evict.
+        self.entries: "OrderedDict[tuple[str, str], dict]" = OrderedDict()
+        self.bytes = 0
+        self.hits = 0
+        self.misses = 0
+        # One in-flight fetch per key. Two browsers asking for the same uncached file
+        # would otherwise take the pipe twice in a row for identical bytes.
+        self._inflight: dict[tuple[str, str], asyncio.Future] = {}
+
+    @classmethod
+    def immutable(cls, path: str) -> bool:
+        return bool(cls.IMMUTABLE.search(path))
+
+    def get(self, key: tuple[str, str]) -> dict | None:
+        entry = self.entries.get(key)
+        if entry is None:
+            return None
+        if entry["expires"] is not None and time.monotonic() >= entry["expires"]:
+            self._drop(key)
+            return None
+        self.entries.move_to_end(key)
+        self.hits += 1
+        return entry
+
+    def put(self, key: tuple[str, str], header: dict, body: bytes) -> dict:
+        # A single file larger than the whole budget would evict everything and then
+        # itself; refuse to store it rather than thrash.
+        entry = {
+            "header": header,
+            "body": body,
+            # Weak ETag would be wrong here: these are exact bytes, and the browser
+            # gets a 304 off this comparison.
+            "etag": '"' + hashlib.sha256(body).hexdigest()[:16] + '"',
+            "expires": None if self.immutable(key[1]) else time.monotonic() + self.MUTABLE_TTL,
+        }
+        if len(body) > self.MAX_BYTES:
+            return entry
+        self._drop(key)
+        self.entries[key] = entry
+        self.bytes += len(body)
+        while self.bytes > self.MAX_BYTES and self.entries:
+            self._drop(next(iter(self.entries)))
+        return entry
+
+    def _drop(self, key: tuple[str, str]) -> None:
+        entry = self.entries.pop(key, None)
+        if entry is not None:
+            self.bytes -= len(entry["body"])
+
+    async def get_or_fetch(self, conn: "DeviceConnection", path: str) -> dict:
+        """Cached entry for `path`, fetching it off the device at most once."""
+        key = (conn.device_id, path)
+        entry = self.get(key)
+        if entry is not None:
+            return entry
+
+        # Someone else is already pulling these exact bytes — wait for theirs.
+        inflight = self._inflight.get(key)
+        if inflight is not None:
+            return await asyncio.shield(inflight)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._inflight[key] = future
+        try:
+            self.misses += 1
+            header, body = await conn.get_web_file(path)
+            # Only 200s are cached. A 404 is cheap, and caching one would pin a
+            # mistake for as long as the entry lives.
+            entry = (self.put(key, header, body) if header.get("status") == 200
+                     else {"header": header, "body": body, "etag": None, "expires": 0})
+            if not future.done():
+                future.set_result(entry)
+            return entry
+        except BaseException as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        finally:
+            self._inflight.pop(key, None)
+            # Nobody may be awaiting an exception we already re-raised.
+            if future.done() and future.exception() is not None:
+                future.exception()
+
+    def drop_device(self, device_id: str) -> int:
+        n = 0
+        for key in [k for k in self.entries if k[0] == device_id]:
+            self._drop(key)
+            n += 1
+        return n
+
+    def flush(self) -> int:
+        n = len(self.entries)
+        self.entries.clear()
+        self.bytes = 0
+        return n
+
+    def stats(self) -> dict:
+        return {"entries": len(self.entries), "bytes": self.bytes,
+                "hits": self.hits, "misses": self.misses}
+
+
+cache = FileCache()
 
 
 class DeviceConnection:
@@ -715,8 +865,15 @@ async def device_ws(request: web.Request) -> web.StreamResponse:
                  device_id, conn.pipe, previous.pipe)
         await previous.close()
     devices[device_id] = conn
-    log.info("device %s connected on pipe #%d (%s fw %s) from %s",
-             device_id, conn.pipe, name or "unnamed", firmware, request.remote)
+    # A new pipe may be a device that just rebooted into different content, and a
+    # reflash is exactly when a stale UI would be most confusing. Dropped on CONNECT
+    # rather than on disconnect, so the cache is already clean before the first
+    # request arrives. A flapping device therefore re-fetches its UI per reconnect,
+    # which is the right way round: slow beats wrong.
+    dropped = cache.drop_device(device_id)
+    log.info("device %s connected on pipe #%d (%s fw %s) from %s%s",
+             device_id, conn.pipe, name or "unnamed", firmware, request.remote,
+             f" — dropped {dropped} cached files" if dropped else "")
 
     try:
         async for msg in ws:
@@ -765,7 +922,7 @@ async def browser_ws(request: web.Request) -> web.StreamResponse:
 
 
 async def device_frontend(request: web.Request) -> web.StreamResponse:
-    """Serve the device's own frontend, one web read per request (no cache yet)."""
+    """Serve the device's own frontend, from the cache when it can be."""
     device_id = request.match_info["deviceId"]
     tail = request.match_info.get("path", "")
 
@@ -776,9 +933,9 @@ async def device_frontend(request: web.Request) -> web.StreamResponse:
     path = "/" + tail if tail else "/index.html"
 
     try:
-        header, body = await conn.get_web_file(path)
+        entry = await cache.get_or_fetch(conn, path)
 
-        if header.get("status") != 200:
+        if entry["header"].get("status") != 200:
             # SPA fallback is OUR decision — the device answers a real 404. Only
             # fall back for things that look like routes: a mistyped asset must
             # stay a 404 rather than becoming HTML with status 200, which the
@@ -786,8 +943,11 @@ async def device_frontend(request: web.Request) -> web.StreamResponse:
             leaf = tail.rsplit("/", 1)[-1]
             if "." in leaf:
                 return web.Response(status=404, text=f"{path} not found on {device_id}")
-            header, body = await conn.get_web_file("/index.html")
-            if header.get("status") != 200:
+            # Served under index.html's own key, so a fallback and a real index.html
+            # request share one cache entry rather than each holding a copy.
+            path = "/index.html"
+            entry = await cache.get_or_fetch(conn, path)
+            if entry["header"].get("status") != 200:
                 return web.Response(status=404, text="no index.html on the device")
 
     except asyncio.TimeoutError:
@@ -795,7 +955,20 @@ async def device_frontend(request: web.Request) -> web.StreamResponse:
     except RelayError as exc:
         return web.Response(status=502, text=str(exc))
 
+    header, body, etag = entry["header"], entry["body"], entry["etag"]
+
+    # Told to the browser, so the *second* load costs no pipe traffic at all rather
+    # than a cheap server-side hit. Only content-hashed names may be immutable; for
+    # everything else no-cache means "ask, but a 304 is likely", which is one small
+    # conditional GET instead of a bundle.
     headers = {}
+    if etag:
+        headers["ETag"] = etag
+        headers["Cache-Control"] = ("public, max-age=31536000, immutable"
+                                    if cache.immutable(path) else "no-cache")
+        if request.headers.get("If-None-Match") == etag:
+            return web.Response(status=304, headers=headers)
+
     encoding = header.get("contentEncoding")
     if encoding:
         # The device stores its frontend gzipped; without this the browser gets
@@ -843,6 +1016,7 @@ async def api_pairing(request: web.Request) -> web.StreamResponse:
         "approved": store.approved(),
         "events": store.recent_events(20),
         "connected": sorted(devices.keys()),
+        "cache": cache.stats(),
         "telemetry": {
             "enabled": bool(influx and influx.enabled),
             "written": influx.written if influx else 0,
@@ -876,6 +1050,7 @@ async def api_forget(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "deviceId is required"}, status=400)
 
     forgotten = store.forget(device_id)
+    cache.drop_device(device_id)
 
     # Drop the live pipe too, or a device stays connected after being revoked —
     # the token is only checked when a connection is made.
@@ -890,6 +1065,14 @@ async def api_forget(request: web.Request) -> web.StreamResponse:
 
     log.info("forgot device %s", device_id)
     return web.json_response({"ok": True, "wasApproved": forgotten})
+
+
+async def api_cache_flush(request: web.Request) -> web.StreamResponse:
+    """Drop every cached file. The escape hatch for a UI replaced without a reboot —
+    the MUTABLE_TTL gets there on its own within seconds, this is for not waiting."""
+    n = cache.flush()
+    log.info("cache flushed (%d files)", n)
+    return web.json_response({"ok": True, "dropped": n})
 
 
 DASHBOARD = """<!doctype html>
@@ -962,6 +1145,8 @@ document.addEventListener('click', ev => {
   const id = b.dataset.id;
   if (b.dataset.act === 'approve') {
     post('/api/approve', { deviceId: id, token: b.dataset.token });
+  } else if (b.dataset.act === 'flushcache') {
+    post('/api/cache/flush', {});
   } else if (b.dataset.act === 'forget') {
     if (confirm('Forget ' + id + '? It will be refused until you approve it again.'))
       post('/api/forget', { deviceId: id });
@@ -1035,6 +1220,16 @@ function eventBlock(events) {
     + '</div>';
 }
 
+function cacheBlock(c) {
+  if (!c) return '';
+  const total = c.hits + c.misses;
+  const rate = total ? Math.round((c.hits / total) * 100) + '%' : '—';
+  return '<h2>File cache</h2><div class="ev">' + c.entries + ' files, '
+       + Math.round(c.bytes / 1024) + ' kB — ' + c.hits + ' hits / ' + c.misses
+       + ' fetched from devices (' + rate + ') '
+       + '<button data-act="flushcache">Flush</button></div>';
+}
+
 function telemetryBlock(t) {
   if (!t) return '';
   if (!t.enabled) return '<h2>Telemetry</h2><div class="ev">No Influx configured — '
@@ -1055,7 +1250,7 @@ async function tick() {
   } catch (e) { return; }
   document.getElementById('out').innerHTML =
       pendingBlock(pair.pending) + deviceBlock(live, pair.approved)
-    + telemetryBlock(pair.telemetry) + eventBlock(pair.events);
+    + cacheBlock(pair.cache) + telemetryBlock(pair.telemetry) + eventBlock(pair.events);
 }
 tick(); setInterval(tick, 2000);
 </script>
@@ -1086,6 +1281,7 @@ def build_app() -> web.Application:
     app.router.add_get("/api/pairing", api_pairing)
     app.router.add_post("/api/approve", api_approve)
     app.router.add_post("/api/forget", api_forget)
+    app.router.add_post("/api/cache/flush", api_cache_flush)
     app.router.add_get("/device", device_ws)
     app.router.add_get("/devices/{deviceId}/ws", browser_ws)
     app.router.add_get("/devices/{deviceId}", device_redirect)
