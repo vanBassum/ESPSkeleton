@@ -33,10 +33,18 @@ Three options, and they are not equivalent:
 3. **Gated.** Return secrets only to an authenticated caller. Does nothing about the
    default-open case, which is the case that matters.
 
-Option 1 is the recommendation. The work is small; what has kept it open is that
-`TypedSettings` has no notion of a secret, so it is a (small) change to the settings
-vocabulary rather than a patch to one command — and it is worth doing once, properly,
-because every downstream fork inherits it.
+Option 1 was the recommendation, and a fourth option has since displaced it as the one to
+start from: **4. Bind without publishing.** `Register()` fuses two jobs — binding the leaf
+to NVS storage and publishing it into the chain `settings list` walks — so a credential
+that is bound but not published cannot leak, with no flag and nothing new on the wire.
+What that costs is the generated UI for those settings, which has to be hand-rolled. The
+reasoning is in
+[registration fuses binding with publishing](../reasoning/2026-08-11-17h21-registration-fuses-binding-a-setting-with-publishing-it.md);
+discussed 2026-08-11 and left undecided.
+
+Whichever wins, it is worth doing once, properly, because every downstream fork inherits
+it. Also settled: `relay.token` leaks today too, and the frontend's `sensitiveKeys`
+heuristic does not even mask it.
 
 ## While it is open
 
