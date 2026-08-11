@@ -6,8 +6,6 @@
 #include "JsonHelpers.h"
 #include "SessionTable.h"
 
-#include <dirent.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
@@ -182,74 +180,6 @@ RequestError WebServerManager::Cmd_GetWebFile(CommandContext& ctx)
 
     fclose(f);
     return RequestError::Ok;
-}
-
-// ──────────────────────────────────────────────────────────────
-// Content digest — what the relay's cache is keyed on
-// ──────────────────────────────────────────────────────────────
-
-// FNV-1a, 64-bit. Not a cryptographic claim: this answers "did the served tree
-// change", and nobody gains anything by forging it — a device that lies about its own
-// content only makes its own UI stale on its own relay.
-static constexpr uint64_t FNV_OFFSET = 1469598103934665603ULL;
-static constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
-
-static uint64_t HashEntry(const char* name, uint32_t size)
-{
-    uint64_t h = FNV_OFFSET;
-    for (const char* p = name; *p; ++p)
-    {
-        h ^= static_cast<unsigned char>(*p);
-        h *= FNV_PRIME;
-    }
-    for (int i = 0; i < 4; ++i)
-    {
-        h ^= (size >> (i * 8)) & 0xff;
-        h *= FNV_PRIME;
-    }
-    return h;
-}
-
-// Per-entry hashes are SUMMED rather than chained, so the result does not depend on
-// the order readdir happens to return — which FAT does not promise and which changes
-// when files are rewritten in place.
-static uint64_t HashTree(const char* dirPath, int depth)
-{
-    DIR* dir = opendir(dirPath);
-    if (!dir) return 0;
-
-    uint64_t acc = 0;
-    while (const dirent* entry = readdir(dir))
-    {
-        // strlcat rather than snprintf: a long-filename entry can be longer than any
-        // buffer worth putting on this task's stack, and strlcat reports the length it
-        // WOULD have needed, so overflow is detected rather than silently truncated
-        // into a stat() of the wrong path.
-        char full[192];
-        strlcpy(full, dirPath, sizeof(full));
-        strlcat(full, "/", sizeof(full));
-        if (strlcat(full, entry->d_name, sizeof(full)) >= sizeof(full)) continue;
-
-        struct stat st;
-        if (stat(full, &st) != 0) continue;
-
-        if (S_ISDIR(st.st_mode))
-        {
-            // assets/ is one level down; the bound is here so a surprise on flash
-            // cannot turn this into an unbounded walk on the relay task's stack.
-            if (depth > 0) acc += HashTree(full, depth - 1);
-            continue;
-        }
-        acc += HashEntry(entry->d_name, static_cast<uint32_t>(st.st_size));
-    }
-    closedir(dir);
-    return acc;
-}
-
-void WebServerManager::GetContentDigest(char* out, size_t cap) const
-{
-    const uint64_t h = HashTree(BASE_PATH, 2);
-    snprintf(out, cap, "%016llx", static_cast<unsigned long long>(h));
 }
 
 // ──────────────────────────────────────────────────────────────

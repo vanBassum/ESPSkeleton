@@ -167,8 +167,10 @@ void RelayManager::BuildUri()
 
     // Registration rides the connect URL's query string rather than a protocol
     // message: the server knows who connected before the first chunk, and the
-    // session protocol gains no relay-specific verb. Firmware version travels with
-    // it so the server can key a file cache on it later.
+    // session protocol gains no relay-specific verb. Firmware version travels with it
+    // for the device list — NOT as a cache key: `www` is replaced independently of the
+    // app, so the version does not describe the frontend (2026-08-11-11h19), and the
+    // relay caches per connection instead, which needs nothing from here.
     //
     // Two identities go up here, and they are not the same thing. `id` is technical
     // and is what the token proves — it addresses the device in every URL. `name` and
@@ -186,17 +188,6 @@ void RelayManager::BuildUri()
 
     strlcat(uri_, "&project=", sizeof(uri_));
     AppendEncoded(uri_, sizeof(uri_), app ? app->project_name : "unknown");
-
-    // What the server's file cache keys on. Deliberately NOT the firmware version:
-    // `www` is its own partition and is replaced independently of the app, so a
-    // version-keyed cache goes stale and stays stale (docs/reasoning/2026-08-11-11h19).
-    // Recomputed here rather than at boot because this runs before every connect —
-    // a device that had its UI replaced without rebooting announces the new content on
-    // its next dial, and the server drops what it had.
-    char digest[17] = {};
-    strux_.getWebServerManager().GetContentDigest(digest, sizeof(digest));
-    strlcat(uri_, "&www=", sizeof(uri_));
-    strlcat(uri_, digest, sizeof(uri_));
 }
 
 // ──────────────────────────────────────────────────────────
@@ -221,16 +212,11 @@ void RelayManager::TaskLoop()
                 continue;
             }
 
-            // Rebuilt per attempt, not once in Init: the content digest in it has to
-            // describe what is on the frontend partition NOW, and that partition can be
-            // replaced without a reboot.
-            BuildUri();
-
             const auto result = socket_.Connect(uri_, CONNECT_TIMEOUT_MS, headers_);
             if (result == RelaySocket::ConnectResult::BadUri)
             {
-                // Rebuilding does not make a rejected URL usable — relay.url is the
-                // part the parser refused, and retrying would only reprint its
+                // uri_ is built once in Init and cannot change without a reboot, so
+                // retrying a URL the parser already rejected would only reprint its
                 // complaint forever. Stop the task instead; the settings UI is where
                 // this gets fixed, and the fix takes effect on the next boot.
                 ESP_LOGE(TAG, "relay.url is not usable — not retrying until reboot");

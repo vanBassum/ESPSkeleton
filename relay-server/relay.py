@@ -25,8 +25,12 @@ The human side of this server is expected to sit behind a reverse proxy that
 authenticates users; there are no accounts here. `/device` cannot be, because a
 device cannot follow a login redirect — hence the token.
 
-Deliberately out of scope for now: file caching, and per-device origin isolation
-(every device's UI is served from this one origin).
+Frontend files are cached here, for as long as the device stays connected — a device's
+content cannot change without a reboot, and a reboot drops the pipe, so connecting is
+the only invalidation point this server needs.
+
+Deliberately out of scope for now: per-device origin isolation (every device's UI is
+served from this one origin).
 
 Open work: docs/backlog/2026-07-03-remote-access.md
 Deployment: docs/backlog/2026-08-05-relay-in-production.md
@@ -36,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gzip
 import hashlib
 import hmac
 import json
@@ -239,50 +244,58 @@ influx: InfluxWriter | None = None
 # second page load costs zero pipe traffic rather than a cheap hit.
 
 class FileCache:
-    """(deviceId, path) → one frontend file, bounded, LRU, with single-flight."""
+    """(deviceId, path) → one frontend file, bounded, LRU, with single-flight.
+
+    **A connection is the cache's lifetime.** Entries are dropped when a device
+    connects and then kept for as long as that connection lasts — no TTL and no
+    revalidation, because the only moment a device's content can change under us is
+    one we already see: it has to reboot, and rebooting drops the pipe.
+
+    That is what keeps this entirely server-side. The alternative — the device
+    announcing a content digest so the server could tell a flap from a reflash — works,
+    but it puts a relay's caching strategy into the firmware, and no other transport has
+    an opinion about it. What it costs is the one case connect cannot see: `www`
+    replaced on a running device without a reboot. That stays cached until the device
+    next reconnects, and the Flush button is the answer.
+    """
 
     # Bytes, not entries: entries here are one 477-byte index.html and one 130 KB
     # bundle, and it is the bundle that decides whether this fits in a container.
     MAX_BYTES = 32 * 1024 * 1024
 
-    # How long a MUTABLE file may be served without asking the device again. Sized to
-    # collapse the burst of one page load (and one reload behind it), not to keep
-    # anything for long: it is the whole delay between uploading a new UI and seeing
-    # it, so seconds, not minutes.
-    MUTABLE_TTL = 10.0
-
-    # A vite content-hashed name: assets/<name>-<hash>.<ext>. Deliberately narrow —
-    # anything this does not match is treated as mutable, so a file that grows a
-    # different naming scheme becomes slow rather than wrong.
+    # A vite content-hashed name: assets/<name>-<hash>.<ext>. Only used to decide what
+    # the BROWSER is told (immutable vs revalidate) — server-side, every entry lives
+    # for the connection either way.
     IMMUTABLE = re.compile(r"/assets/[^/]+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
 
+    # Files named by index.html, so a freshly connected device can be warmed in one go
+    # instead of one round trip per asset on somebody's first page load.
+    ASSET_REF = re.compile(r"""["']\.?(/assets/[^"']+)["']""")
+
     def __init__(self) -> None:
-        # Keyed (deviceId, wwwDigest, path). OrderedDict as an LRU: move_to_end on
-        # read, popitem(last=False) to evict.
-        self.entries: "OrderedDict[tuple[str, str, str], dict]" = OrderedDict()
+        # Keyed (deviceId, path). OrderedDict as an LRU: move_to_end on read,
+        # popitem(last=False) to evict.
+        self.entries: "OrderedDict[tuple[str, str], dict]" = OrderedDict()
         self.bytes = 0
         self.hits = 0
         self.misses = 0
         # One in-flight fetch per key. Two browsers asking for the same uncached file
         # would otherwise take the pipe twice in a row for identical bytes.
-        self._inflight: dict[tuple[str, str, str], asyncio.Future] = {}
+        self._inflight: dict[tuple[str, str], asyncio.Future] = {}
 
     @classmethod
     def immutable(cls, path: str) -> bool:
         return bool(cls.IMMUTABLE.search(path))
 
-    def get(self, key: tuple[str, str, str]) -> dict | None:
+    def get(self, key: tuple[str, str]) -> dict | None:
         entry = self.entries.get(key)
         if entry is None:
-            return None
-        if entry["expires"] is not None and time.monotonic() >= entry["expires"]:
-            self._drop(key)
             return None
         self.entries.move_to_end(key)
         self.hits += 1
         return entry
 
-    def put(self, key: tuple[str, str, str], header: dict, body: bytes) -> dict:
+    def put(self, key: tuple[str, str], header: dict, body: bytes) -> dict:
         # A single file larger than the whole budget would evict everything and then
         # itself; refuse to store it rather than thrash.
         entry = {
@@ -291,7 +304,6 @@ class FileCache:
             # Weak ETag would be wrong here: these are exact bytes, and the browser
             # gets a 304 off this comparison.
             "etag": '"' + hashlib.sha256(body).hexdigest()[:16] + '"',
-            "expires": None if self.immutable(key[2]) else time.monotonic() + self.MUTABLE_TTL,
         }
         if len(body) > self.MAX_BYTES:
             return entry
@@ -302,21 +314,14 @@ class FileCache:
             self._drop(next(iter(self.entries)))
         return entry
 
-    def _drop(self, key: tuple[str, str, str]) -> None:
+    def _drop(self, key: tuple[str, str]) -> None:
         entry = self.entries.pop(key, None)
         if entry is not None:
             self.bytes -= len(entry["body"])
 
-    @staticmethod
-    def key_for(conn: "DeviceConnection", path: str) -> tuple[str, str, str]:
-        # The digest is in the KEY rather than only used to invalidate, so a device
-        # whose content changed can never be served an old entry even if the drop
-        # below is skipped or races a request already in flight.
-        return (conn.device_id, conn.www, path)
-
     async def get_or_fetch(self, conn: "DeviceConnection", path: str) -> dict:
         """Cached entry for `path`, fetching it off the device at most once."""
-        key = self.key_for(conn, path)
+        key = (conn.device_id, path)
         entry = self.get(key)
         if entry is not None:
             return entry
@@ -335,7 +340,7 @@ class FileCache:
             # Only 200s are cached. A 404 is cheap, and caching one would pin a
             # mistake for as long as the entry lives.
             entry = (self.put(key, header, body) if header.get("status") == 200
-                     else {"header": header, "body": body, "etag": None, "expires": 0})
+                     else {"header": header, "body": body, "etag": None})
             if not future.done():
                 future.set_result(entry)
             return entry
@@ -349,18 +354,9 @@ class FileCache:
             if future.done() and future.exception() is not None:
                 future.exception()
 
-    def drop_device(self, device_id: str, keep: str | None = None) -> int:
-        """Drop this device's entries; with `keep`, only those under a DIFFERENT digest.
-
-        `keep` is what makes a reconnect cheap: the device announces what it is serving,
-        so entries under that digest survive and only content it no longer has is
-        evicted. Written against the digest rather than against the previous connection
-        because a device that disconnected cleanly leaves no previous connection to
-        compare with — and that is the common case, not the exception.
-        """
+    def drop_device(self, device_id: str) -> int:
         n = 0
-        for key in [k for k in self.entries
-                    if k[0] == device_id and (keep is None or k[1] != keep)]:
+        for key in [k for k in self.entries if k[0] == device_id]:
             self._drop(key)
             n += 1
         return n
@@ -379,6 +375,46 @@ class FileCache:
 cache = FileCache()
 
 
+async def warm_cache(conn: "DeviceConnection") -> None:
+    """Pull a freshly connected device's frontend into the cache, once.
+
+    Runs as its own task: it takes the pipe several times over, and the device's read
+    loop must not wait for that. A browser arriving mid-warm is not a problem — it
+    shares the in-flight fetch rather than starting a second one.
+
+    index.html first, then everything it names. Fetching the assets it *names* rather
+    than crawling the partition is what keeps this to the files that are actually
+    served, and it stays correct across a rebuild for free: a new build names new files.
+    """
+    try:
+        entry = await cache.get_or_fetch(conn, "/index.html")
+        if entry["header"].get("status") != 200:
+            log.info("warm %s: no index.html", conn.device_id)
+            return
+
+        body = entry["body"]
+        if entry["header"].get("contentEncoding") == "gzip":
+            # Stored gzipped on the device and served through untouched — so to read
+            # the references out of it, decompress a copy here and throw it away.
+            body = gzip.decompress(body)
+
+        paths = sorted(set(FileCache.ASSET_REF.findall(body.decode("utf-8", "replace"))))
+        for path in paths:
+            if conn.ws.closed:
+                return
+            await cache.get_or_fetch(conn, path)
+
+        log.info("warmed %s: index.html + %d asset%s, %d kB",
+                 conn.device_id, len(paths), "" if len(paths) == 1 else "s",
+                 cache.bytes // 1024)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Never fatal: an unwarmed cache is a slow first page load, not an error, and
+        # the device is still perfectly usable.
+        log.info("warm %s stopped: %s", conn.device_id, exc)
+
+
 class DeviceConnection:
     """One ESP32's outbound socket: id space, session maps, and the in-flight gate."""
 
@@ -388,16 +424,11 @@ class DeviceConnection:
     _seq = 0
 
     def __init__(self, device_id: str, firmware: str, ws: web.WebSocketResponse,
-                 name: str = "", project: str = "", www: str = ""):
+                 name: str = "", project: str = ""):
         DeviceConnection._seq += 1
         self.pipe = DeviceConnection._seq
         self.device_id = device_id
         self.firmware = firmware
-        # Fingerprint of the device's frontend partition, announced on connect. Part of
-        # the cache key, so a device that comes back with different content cannot be
-        # served what we held for the old content — and one that comes back with the
-        # SAME content keeps its cached files across the reconnect.
-        self.www = www
         # Display only. device_id is the technical identity and the thing the token
         # proves; these two are what a human reads in the device list, so nothing is
         # ever keyed on them and a rename costs a device nothing.
@@ -863,10 +894,6 @@ async def device_ws(request: web.Request) -> web.StreamResponse:
     firmware = request.query.get("fw", "unknown")
     name = request.query.get("name", "")
     project = request.query.get("project", "")
-    # Fingerprint of the device's frontend partition. Absent from older firmware, and
-    # that must stay harmless: an empty digest is just another key, so such a device
-    # caches normally and only loses the keep-across-reconnect optimisation.
-    www = request.query.get("www", "")
     token = request.headers.get("X-Strux-Token", "")
     if not device_id:
         return web.Response(status=400, text="missing ?id=")
@@ -884,7 +911,7 @@ async def device_ws(request: web.Request) -> web.StreamResponse:
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
 
-    conn = DeviceConnection(device_id, firmware, ws, name, project, www)
+    conn = DeviceConnection(device_id, firmware, ws, name, project)
     previous = devices.get(device_id)
     if previous is not None:
         log.info("device %s reconnected on pipe #%d, dropping pipe #%d",
@@ -896,11 +923,15 @@ async def device_ws(request: web.Request) -> web.StreamResponse:
     # blip — and the cache stays warm; different digest and everything under the old one
     # goes, because that device was reflashed. Entries are keyed by digest too, so this
     # is memory hygiene rather than the thing that makes it correct.
-    dropped = cache.drop_device(device_id, keep=www)
-    log.info("device %s connected on pipe #%d (%s fw %s www %s) from %s%s",
-             device_id, conn.pipe, name or "unnamed", firmware, www or "—",
-             request.remote,
-             f" — content changed, dropped {dropped} cached files" if dropped else "")
+    # Connect is the invalidation point, and the only one this server needs: a device's
+    # content cannot change without a reboot, and a reboot lands here. Everything cached
+    # for the old connection goes, and the new one is warmed in the background — so the
+    # files are pulled once, now, instead of during somebody's first page load.
+    dropped = cache.drop_device(device_id)
+    asyncio.create_task(warm_cache(conn))
+    log.info("device %s connected on pipe #%d (%s fw %s) from %s%s",
+             device_id, conn.pipe, name or "unnamed", firmware, request.remote,
+             f" — dropped {dropped} cached files" if dropped else "")
 
     try:
         async for msg in ws:
@@ -1022,7 +1053,6 @@ async def api_devices(request: web.Request) -> web.StreamResponse:
             "name": conn.name,
             "project": conn.project,
             "firmware": conn.firmware,
-            "www": conn.www,
             "online": not conn.ws.closed,
             "uptimeSeconds": int(now - conn.connected_at),
             "browsers": len(conn.browsers),
