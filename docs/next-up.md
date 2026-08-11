@@ -5,15 +5,15 @@ lands or is dropped — never ticked off in place. Everything else lives in
 `docs/backlog/` (work for later) or `docs/reasoning/` (why things are the way they are).
 If a fact wants to survive, it does not belong in this file.
 
-Last updated 2026-08-06.
+Last updated 2026-08-11.
 
 ## Now
 
 
 **Putting the relay in production** — live at `https://strux.vanbassum.com`, behind
-Traefik and Authentik. Steps 1–8 done: a device must be approved and must present its own
-token, or the upgrade is refused with a 403, and pairing is one click in the dashboard.
-Step 9 — secrets out of `settings list` — is the last one before the plan calls it
+Traefik and Authentik. A device must be approved and must present its own token, or the
+upgrade is refused with a 403, and pairing is one click in the dashboard. Step 9 —
+secrets out of `settings list` — is the last one before the plan calls it
 production-ready.
 → [`backlog/2026-08-05-relay-in-production.md`](backlog/2026-08-05-relay-in-production.md)
 

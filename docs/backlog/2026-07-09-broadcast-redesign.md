@@ -7,10 +7,10 @@ piecemeal. This note captures both the concrete bug to fix and the direction.
 ## Context
 
 Log lines reach the browser via `ConsoleManager`, which hooks
-`esp_log_set_vprintf` ([ConsoleManager.cpp](../../main/Application/ConsoleManager/ConsoleManager.cpp)),
+`esp_log_set_vprintf` ([ConsoleManager.cpp](../../main/strux/ConsoleManager/ConsoleManager.cpp)),
 accumulates whole lines, and hands each to a broadcast callback on its own task.
 The callback is `WebSocketHandler::Broadcast`
-([WebSocketHandler.cpp](../../main/Application/WebServerManager/WebSocketHandler.cpp)),
+([WebSocketHandler.cpp](../../main/strux/WebServerManager/WebSocketHandler.cpp)),
 which since session-transport step 1 sends each line as a **binary session chunk on
 the reserved session 0** (`session::BROADCAST_SESSION`) to every tracked client.
 

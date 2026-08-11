@@ -9,10 +9,10 @@ Demo server: [`relay-server/`](../../relay-server/) — Python, deliberately, to
 the path before writing an ASP.NET one, and the device side assumes nothing about the
 server's language.
 
-**Being deployed step by step in
+**Deployed step by step in
 [`2026-08-05-relay-in-production.md`](2026-08-05-relay-in-production.md)** — that plan
-covers items 1, 2 and 3 below (credential, TLS, and the browser side, the last of which
-Authentik answers), so work from it rather than from this list.
+took the device→server credential, TLS and the human side (Authentik) off this list, so
+work from it rather than from this one.
 
 ## What is already proven on hardware
 
@@ -30,33 +30,18 @@ esp32_devkit against `relay.py` on a LAN host, 2026-08-02 and 2026-08-05:
 - One later build was pushed over the relay with no serial cable attached.
 - Liveness: recovery from failed connects, and 100 s fully idle without losing the pipe.
 
-Not proven: `wss://` (item 2 below), and anything with more than one browser or one
-operator.
+`wss://` was proven on hardware later, against the production server. Still not proven:
+anything with more than one browser or one operator.
 
 ## Open, in the order that will probably matter
 
-1. **The device→server credential.** The worst gap by far: anything that guesses the
-   MAC-derived device id does not impersonate the device, it **evicts** it — the
-   server keys its registry on that id and the newcomer takes the slot. Until this
-   exists the relay must not face a public IP. TLS, server-side login and a persistent
-   registry all sit behind the same question: *does this ever face a public network,
-   or is it a LAN convenience?* Answer that and the rest follows.
-
-2. **TLS / `wss://` — untested, not unimplemented.** `RelaySocket` attaches the
-   certificate bundle when the URL is `wss://`, and the build has the bundle enabled,
-   but no run has ever used it. Two things to check when someone does: that the
-   handshake succeeds at all, and that it fits the relay task's stack — 10 K, sized by
-   reasoning rather than measurement, and now shared with the command handlers because
-   one task does both. If it is tight, measure with `uxTaskGetStackHighWaterMark`
-   rather than guessing again.
-
-3. **Per-browser auth on a shared pipe.** The pipe is *one* connection, so its auth
+1. **Per-browser auth on a shared pipe.** The pipe is *one* connection, so its auth
    state is shared: a login by one remote user authenticates the pipe for every
    browser the server relays. Acceptable for a single trusted operator, wrong for
    anything else. Needs the server to carry a client identity alongside the session
    id — which is a protocol change, not a device change.
 
-4. **A legitimately silent command longer than the gate's idle window.**
+2. **A legitimately silent command longer than the gate's idle window.**
    `partition clear` says nothing while it erases: 4.1–4.5 s measured for a 1.5 MB
    slot, against a 15 s window. Fine today, but the margin is the erase time of the
    largest partition rather than a number anyone chose. The fix, if a bigger partition

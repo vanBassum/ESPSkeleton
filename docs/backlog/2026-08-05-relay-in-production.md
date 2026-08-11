@@ -31,46 +31,13 @@ is in efuse, so a wiped board comes back as the *same* id with a fresh token and
 is one re-approve. A random id in NVS would return as a stranger and orphan its old
 approval. The id is technical; `device.name` is what a human reads.
 
-## Plumbing
-
-- [x] **1. `relay-server/Dockerfile` + `/healthz`** → the relay runs in a container.
-      `python:3.13-slim`, non-root, `requirements.txt`. `/healthz` exists so the
-      healthcheck has a target (slim has no curl).
-- [x] **2. `.github/workflows/relay-image.yml`** → `ghcr.io/vanbassum/strux-relay:latest`
-      and `:sha-<short>` on every push touching `relay-server/**`, plus manual dispatch.
-      `permissions: packages: write`, `GITHUB_TOKEN`, amd64.
-- [x] **3. `strato-stack/stacks/strux-relay/strux-relay-compose.yml`** + DNS + `.env`
-      → live at `https://strux.vanbassum.com`, browser side behind Authentik. Verified
-      from outside: dashboard 302s to the login flow, `/device` reaches the relay
-      unauthenticated, `/devices/<id>/ws` still 302s (so the `Path`-not-`PathPrefix`
-      rule does what it was written for), and a WS client gets a 101 over TLS.
-- [x] **4. Point the device at `wss://<domain>/device`** → TLS proven on hardware. The
-      relay task's stack came out at **6412 of 10240 bytes free** immediately after the
-      handshake — so TLS costs it under 4 K and the 10 K is not close to tight. The
-      number is no longer a one-off measurement: `CheckStackHeadroom()` logs every new
-      low, and WARNs under a quarter left.
+Steps 1–8 and 11 are done and deleted; the relay is containerised, live behind Traefik
+and Authentik, keeps its state in SQLite, and refuses any device that is not approved
+and presenting its own token. What they left behind that is worth keeping is in *Facts*
+below.
 
 ## Security — the actual gates
 
-- [x] **5. SQLite on the `runtime` volume** → state survives a restart. stdlib
-      `sqlite3`, WAL. Tables: `approved`, `pending`, and an `events` log for step 11.
-      Keep per-connect queries tiny; blob-sized work (the future file cache) goes through
-      `asyncio.to_thread`.
-- [x] **6. Device `relay.token`** → the device can prove who it is. New `StringSetting`,
-      empty by default; on `Init`, if empty, generate 32 hex from `esp_fill_random` and
-      store it. Sent as an `X-Strux-Token` upgrade header, so the session protocol does
-      not change.
-- [x] **7. Server refuses unknown id or wrong token with HTTP 403** → strangers cannot
-      register and nobody can take a device's slot. **This is the step that makes public
-      exposure safe.** Refuse *before* accepting the upgrade: the device already logs
-      `upgrade refused with HTTP 403`, so there is a clear reason on both ends. An
-      authenticated reconnect still replaces the old pipe — it proved itself, and
-      refusing it would lock a rebooted device out until the dead socket times out.
-- [x] **8. Dashboard: pending list, approve, forget** → pair a new device in one click,
-      and recover a board whose NVS was wiped. Pending records hold the token that was
-      presented; two different tokens for one id means somebody is guessing, so show
-      both rather than collapsing them. Built with 7 rather than after it: without an
-      approve button, 7 locks every device out until somebody edits SQLite by hand.
 - [ ] **9. Secrets out of `settings list`** → an approved pipe stops handing out the
       WiFi PSK. Write-only is the recommended shape; detail in
       [secret-settings-over-the-wire](2026-08-05-secret-settings-over-the-wire.md).
@@ -84,11 +51,6 @@ approval. The id is technical; `device.name` is what a human reads.
       `pending` stops at `MAX_PENDING` (50). Past the cap a known pair still counts its
       attempts, so the signal keeps rising while no new row is created. What is left is
       the rate limit itself.
-- [x] **11. Log refusals and approvals** → the attack signal is visible when it fires.
-      Came along with 5 and 8 rather than as its own step: refusals carry a reason
-      (`not approved` / `token mismatch`), approvals and forgets are recorded, and the
-      dashboard renders the last 20. Verified in production — the eight events from the
-      device's first pairing are in there.
 
 ## Later, only if this ever hosts hardware Bas did not install
 
@@ -128,14 +90,27 @@ approval. The id is technical; `device.name` is what a human reads.
   unauthenticated because it cannot follow a login redirect.
 - **The `./runtime/data` bind mount is owned by root when Docker creates it**, and the
   image runs as uid 10001. It is `chown`ed on the server; a fresh host needs that again
-  before step 5 writes SQLite there.
+  before the relay can write SQLite there.
 - **Deploying only this stack** is `git reset --hard origin/main` then
   `make up stack=strux-relay`. Plain `make deploy` would `up` every stack, including
   whatever else happens to be mid-flight on `main`.
 - **The device generates its own token**, the server pins it on approval. No server→device
-  message and no network-triggered NVS write; the secret only travels inside TLS.
+  message and no network-triggered NVS write; the secret only travels inside TLS. It rides
+  as an `X-Strux-Token` upgrade header, so the session protocol did not change.
 - **Device settings involved:** `relay.enabled`, `relay.url`, `relay.deviceId`,
-  and `relay.token` (new in step 6).
+  and `relay.token`.
+- **TLS costs the relay task under 4 K.** Measured right after the handshake: 6412 of
+  10240 bytes still free, so the 10 K is not close to tight. It is not a one-off number
+  either — `CheckStackHeadroom()` logs every new low and WARNs under a quarter left.
+- **An authenticated reconnect replaces the live pipe.** It proved itself, and refusing it
+  would lock a rebooted device out until the dead socket timed out.
+- **Two different tokens for one pending id means somebody is guessing**, so the dashboard
+  shows both rather than collapsing them.
+- **The refusal happens before the upgrade is accepted**, which is what gives both ends a
+  reason: the device logs `upgrade refused with HTTP 403`, the server logs `not approved`
+  or `token mismatch` into the `events` table the dashboard renders.
+- **Blob-sized server work goes through `asyncio.to_thread`** — SQLite is stdlib
+  `sqlite3` in WAL mode on the `runtime` volume, and per-connect queries stay tiny.
 - **Approval needs no push.** The device is already retrying every 5 s, so the reconnect
   after an approve is the one that succeeds — that *is* the handshake. Which also means an
   unapproved device logs `upgrade refused with HTTP 403` twelve times a minute until

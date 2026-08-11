@@ -20,18 +20,12 @@ command with its reply (pretty-printed) and errors. Matches the
 architecture: commands ARE the RPC surface; the reply belongs next to
 the request, not in stdout.
 
-Enabler worth doing with either: CommandManager has no introspection —
-a `listCommands` command (walk the registration chain, return names)
-would give the UI autocomplete/discovery.
-
-**That enabler shipped 2026-08-05 and went further than this note asked.** `help list`
-walks the registry for categories and command names, *and* `help list -category X
--command Y` returns that command's declared arguments — name, type, required, max
-length — by re-dispatching the handler with a reader that prints its declarations
-instead of filling them. So the "per-command schemas don't exist" objection to the
-Scalar/Swagger shape below is no longer true: they do exist, they are generated from
-the handler itself, and they cannot go stale. Step 3 of the sketch is now the cheapest
-part of this feature rather than the wildest.
+**Introspection is no longer an enabler to build — it is there.** `help list` walks the
+registry for categories and command names, and `help list -category X -command Y`
+returns that command's declared arguments (name, type, required, max length) by
+re-dispatching the handler with a reader that prints its declarations instead of filling
+them. So the UI can discover both commands *and* their argument schemas off the device,
+and those schemas cannot go stale.
 
 ## Direction sketch (Bas, 2026-07-07 — thoughts incomplete, parked)
 
@@ -43,11 +37,9 @@ Start minimal and grow:
    dialect. Open question that raises: do we need protection against
    huge replies flooding/crashing the page (truncate/preview
    megabyte-scale payloads)? Undecided.
-2. **Then** `listCommands` introspection (walk CommandManager's chain,
-   names only).
-3. **Maybe later — Scalar/Swagger-like**: a card per command with
-   editable fields instead of raw JSON. Requires per-command schemas,
-   which don't exist (handlers parse payloads ad hoc) — "too wild for
-   now".
+2. **Maybe later — Scalar/Swagger-like**: a card per command with
+   editable fields instead of raw JSON. Written off as "too wild for
+   now" because per-command schemas didn't exist; `help list` supplies
+   them, so this is now the cheap part rather than the wild one.
 
 Parked here until the thinking completes; no plan yet.

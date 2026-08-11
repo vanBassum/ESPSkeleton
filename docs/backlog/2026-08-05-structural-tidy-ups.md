@@ -10,14 +10,14 @@ longer matches what the code does.
 Its entire command table is `partition status|list|write|clear|activate|read`, and its
 whole external surface is that table. The name is left over from when it owned
 `updateBegin`/`updateWrite`/`updateEnd` and a pull-OTA-from-URL path. `PartitionManager`
-would say what it is. A rename touches `ServiceProvider`, `ApplicationContext`,
-`main.cpp` and `main/CMakeLists.txt` — mechanical, but it lands in every downstream fork,
-so it wants doing deliberately rather than in passing.
+would say what it is. A rename touches `StruxProvider`, `StruxContext` and
+`STRUX_SOURCES` in `main/CMakeLists.txt` — mechanical, but it lands in every downstream
+fork, so it wants doing deliberately rather than in passing.
 
 ## `RelayManager` includes `WebServerManager.h` to borrow the `Authenticator`
 
-The last sideways edge between two transports, and the reason `main.cpp`'s init order
-has a comment about `Relay` coming last. The `Authenticator` is the credential
+The last sideways edge between two transports, and the reason `StruxContext::Init()`
+carries a constraint about `Relay` coming after `WebServer`. The `Authenticator` is the credential
 authority for the *device*, not for the web server — it lives under
 `WebServerManager/` because that is where it was extracted, not because it belongs
 there. Moving it (its own small manager, or into `SystemManager`) removes the edge and
