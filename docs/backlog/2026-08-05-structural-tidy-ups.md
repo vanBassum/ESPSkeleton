@@ -17,8 +17,8 @@ fork, so it wants doing deliberately rather than in passing.
 ## `RelayManager` includes `WebServerManager.h` to borrow the `Authenticator`
 
 The last sideways edge between two transports, and the reason `StruxContext::Init()`
-carries a constraint about `Relay` coming after `WebServer`. The `Authenticator` is the credential
-authority for the *device*, not for the web server — it lives under
+carries a constraint about `Relay` coming after `WebServer`. The `Authenticator` is the
+credential authority for the *device*, not for the web server — it lives under
 `WebServerManager/` because that is where it was extracted, not because it belongs
 there. Moving it (its own small manager, or into `SystemManager`) removes the edge and
 the ordering constraint together.
@@ -31,20 +31,6 @@ about what "central" should mean before changing this, and it is entangled with
 [broadcast-redesign](2026-07-09-broadcast-redesign.md) — broadcasts becoming
 device-initiated sessions is the version of this that solves it properly rather than
 turning one callback into a list of two.
-
-## `help` makes `ctx.readArgs()` load-bearing
-
-Describe mode works by re-dispatching a command with a reader that prints the
-declarations instead of filling them and returns a sentinel, which stops the handler
-at its own `RETURN_IF_ERROR`. So a handler that never calls `readArgs` has no `help`
-**and runs its body when described** — against streams that go nowhere, so nothing
-reaches the client, but a flash write would still happen. It is logged as an error
-when it occurs, and every handler today does the right thing.
-
-Enforcing it at compile time would mean moving the argument declarations outside the
-handler, which is exactly what makes them impossible to get out of sync today. So the
-trade is deliberate; this note exists so the next person to add a command knows the
-call is not optional.
 
 ## Decided *not* to do: the `ConsoleManager` log ring
 

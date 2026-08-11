@@ -41,14 +41,14 @@ anything with more than one browser or one operator.
    anything else. Needs the server to carry a client identity alongside the session
    id — which is a protocol change, not a device change.
 
-2. **A legitimately silent command longer than the gate's idle window.**
-   `partition clear` says nothing while it erases: 4.1–4.5 s measured for a 1.5 MB
-   slot, against a 15 s window. Fine today, but the margin is the erase time of the
-   largest partition rather than a number anyone chose. The fix, if a bigger partition
-   ever needs it, is for the handler to report progress the way `partition write`
-   already does — not a longer timeout.
-
 ## Settled, so nobody reopens them
+
+- **A silent command is bounded by the gate's idle window, and today it fits.**
+  `partition clear` says nothing while it erases: 4.1–4.5 s measured for a 1.5 MB slot,
+  against a 15 s window. Nothing to do — but the margin is the erase time of the largest
+  partition rather than a number anyone chose, so if a bigger partition ever overruns it
+  the fix is for the handler to report progress the way `partition write` already does,
+  not a longer timeout.
 
 - **`getWebFile` is `httpGet`-flavoured** (status + content-type + content-encoding +
   body), not raw bytes: frontend files are stored gzipped, so raw bytes would force

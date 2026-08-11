@@ -83,8 +83,6 @@ Open questions for that design pass:
   re-broadcasting httpd's own transport-error warnings, or mark the client dead
   before the retry that would log them).
 - Backpressure / drop policy for a slow client (logs must not block the device).
-- Relationship to the worker task from
-  [command-worker-task](2026-08-03-command-worker-task.md).
 
 ## Cheap interim (optional, if the storm is annoying before the redesign)
 
