@@ -528,7 +528,10 @@ class BackendService {
       })
 
       // Envelope chunk (not FINAL — the body follows on the same session id).
-      const envelope = new TextEncoder().encode(JSON.stringify({ type: "writePartition", partition }) + "\n")
+      // The route is TWO words: ReadCommandRoute splits "<category> <command>" and
+      // rejects a single-word type outright, so "writePartition" never reached the
+      // handler — every upload from this page was refused before it started.
+      const envelope = new TextEncoder().encode(JSON.stringify({ type: "partition write", partition }) + "\n")
       this.sendChunk(session, 0, envelope)
 
       // Body chunks. CHUNK matches the device's inbound window (see WebSocketHandler).
