@@ -68,6 +68,11 @@ public:
     /// Fragmented messages are stitched together — a message too large for `buf` is
     /// a misconfigured peer, so it closes the link rather than silently dropping a
     /// chunk out of somebody's firmware image.
+    ///
+    /// `timeoutMs` bounds the wait for a message to START. Once one has started,
+    /// STALL_TIMEOUT_MS bounds how long it may make no progress — so a caller free to
+    /// wait half a minute for silence to break does not also wait half a minute to
+    /// notice a pipe that died halfway through a chunk.
     int ReadFrame(uint8_t* buf, size_t cap, int timeoutMs);
 
     /// One binary frame. Safe from any task: a session's reply and a log broadcast
@@ -80,6 +85,13 @@ public:
     bool SendPing(int timeoutMs);
 
 private:
+    // How long a message that has started arriving may make no progress before the
+    // pipe is called dead. Every byte re-arms it, so a slow-but-moving transfer is
+    // never cut off; only actual silence mid-message is. It belongs here rather than
+    // with the caller's timeout because "a started message must keep moving" is a
+    // fact about the socket, not a policy about the relay.
+    static constexpr uint32_t STALL_TIMEOUT_MS = 2000;
+
     esp_transport_handle_t ws_     = nullptr;   // the layer we read and write
     esp_transport_handle_t parent_ = nullptr;   // tcp or ssl underneath it
     bool connected_ = false;

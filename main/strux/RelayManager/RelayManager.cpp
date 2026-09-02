@@ -18,6 +18,12 @@
 #include <cstdio>
 #include <cstdlib>
 
+namespace {
+
+inline uint32_t NowMs() { return pdTICKS_TO_MS(xTaskGetTickCount()); }
+
+} // namespace
+
 RelayManager::RelayManager(StruxProvider& strux)
     : strux_(strux)
 {
@@ -196,7 +202,7 @@ void RelayManager::BuildUri()
 
 void RelayManager::TaskLoop()
 {
-    int idlePolls = 0;
+    uint32_t nextPingAt = 0;
 
     for (;;)
     {
@@ -241,14 +247,18 @@ void RelayManager::TaskLoop()
             // Right after connect, because on a wss:// pipe the TLS handshake just
             // ran on this stack and is one of the two things it has to fit.
             CheckStackHeadroom();
-            idlePolls = 0;
+            nextPingAt = NowMs() + PING_INTERVAL_MS;
         }
 
-        // Between requests this is where the task sits. Mid-request the same read
-        // happens under the session, one layer down (RelaySessionLink) — same socket,
-        // same task, which is the property that removed the queue.
+        // Between requests this is where the task sits — blocked until a frame arrives
+        // or the next keepalive comes due, whichever happens first. Mid-request the
+        // same read happens under the session, one layer down (RelaySessionLink) —
+        // same socket, same task, which is the property that removed the queue.
+        int32_t untilPing = static_cast<int32_t>(nextPingAt - NowMs());
+        if (untilPing < 0) untilPing = 0;
+
         const int n = socket_.ReadFrame(sessionInbound_, sizeof(sessionInbound_),
-                                       IDLE_POLL_MS);
+                                        untilPing);
         if (n < 0)
         {
             OnDisconnected();
@@ -257,22 +267,23 @@ void RelayManager::TaskLoop()
 
         if (n == 0)
         {
-            // Silence. Make some traffic occasionally: a ping that will not go out is
-            // how an otherwise idle pipe finds out its TCP connection is gone.
-            if (++idlePolls >= PING_EVERY_IDLE_POLLS)
+            // The read ran its whole deadline out with nothing to show, which is what
+            // being idle looks like — so the ping is due. A ping that will not go out
+            // is how an otherwise idle pipe finds out its TCP connection is gone.
+            nextPingAt = NowMs() + PING_INTERVAL_MS;
+            if (!socket_.SendPing(PING_TIMEOUT_MS))
             {
-                idlePolls = 0;
-                if (!socket_.SendPing(PING_TIMEOUT_MS))
-                {
-                    ESP_LOGW(TAG, "keepalive ping failed");
-                    OnDisconnected();
-                }
+                ESP_LOGW(TAG, "keepalive ping failed");
+                OnDisconnected();
             }
             continue;
         }
 
-        idlePolls = 0;
         HandleFrame(sessionInbound_, static_cast<size_t>(n));
+
+        // After the request rather than before it: a session that took a while has
+        // just proven the pipe alive, and the next keepalive is owed from here.
+        nextPingAt = NowMs() + PING_INTERVAL_MS;
     }
 }
 

@@ -158,7 +158,12 @@ int RelaySocket::ReadFrame(uint8_t* buf, size_t cap, int timeoutMs)
 {
     if (!connected_) return -1;
 
-    const uint32_t deadline = NowMs() + static_cast<uint32_t>(timeoutMs);
+    // Two different waits in one variable. Until the first byte lands, `deadline` is
+    // the caller's idle timeout — tens of seconds, because for RelayManager it is the
+    // keepalive interval. From the first byte on it becomes a rolling no-progress
+    // window, re-armed by every read that returns data.
+    const uint32_t idleDeadline = NowMs() + static_cast<uint32_t>(timeoutMs);
+    uint32_t deadline = idleDeadline;
 
     size_t total    = 0;   // bytes of this message assembled so far
     size_t frameGot = 0;   // bytes of the current frame
@@ -204,6 +209,7 @@ int RelaySocket::ReadFrame(uint8_t* buf, size_t cap, int timeoutMs)
 
         total    += static_cast<size_t>(n);
         frameGot += static_cast<size_t>(n);
+        deadline = NowMs() + STALL_TIMEOUT_MS;   // progress: the message is still moving
 
         // One frame can take several reads, and one message can take several
         // frames. Only a complete frame carrying the FIN flag ends the message.
@@ -219,7 +225,10 @@ int RelaySocket::ReadFrame(uint8_t* buf, size_t cap, int timeoutMs)
         // is discarded whole rather than handed up as a session chunk.
         if (op != WS_TRANSPORT_OPCODES_BINARY && op != WS_TRANSPORT_OPCODES_CONT)
         {
+            // Nothing is half-arrived any more, so go back to waiting for a message to
+            // start — discarding one must not shorten the caller's idle window.
             total = 0;
+            deadline = idleDeadline;
             continue;
         }
         if (!fin) continue;

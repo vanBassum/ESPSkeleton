@@ -62,13 +62,15 @@ class RelayManager
     // Short, because this is just waiting for WiFi to finish coming up.
     static constexpr int NO_NETWORK_DELAY_MS = 1000;
 
-    // How long a read waits between requests. Also the tick of the keepalive below.
-    static constexpr int IDLE_POLL_MS = 1000;
-
-    // Ping after this many idle polls. Nothing on the pipe means nothing to notice a
-    // dead TCP connection by, so we make traffic: a ping that cannot be sent is the
-    // signal to reconnect.
-    static constexpr int PING_EVERY_IDLE_POLLS = 30;
+    // Nothing on an idle pipe means nothing to notice a dead TCP connection by, so we
+    // make traffic: a ping that cannot be sent is the signal to reconnect. This is
+    // both the keepalive interval and how long an idle read blocks, because they are
+    // the same question — the read returns exactly when the next ping comes due, so an
+    // idle pipe wakes this task once per interval rather than thirty times. Expressing
+    // it as a 1 s poll and a count of polls pinned the wake rate at 1 Hz for no reason
+    // beyond arithmetic, and that rate is the ceiling on how long a fork enabling light
+    // sleep could keep the chip asleep.
+    static constexpr int PING_INTERVAL_MS = 30000;
     static constexpr int PING_TIMEOUT_MS = 2000;
 
     // A log line is worth less than the task that emits it: never wait long.
