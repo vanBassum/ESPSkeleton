@@ -210,4 +210,12 @@ private:
     // ── Settings (registered with SettingsManager in Init) ──
     inline static StringSetting wifiSsid_    { "wifi.ssid",     "WiFi SSID",     "" };
     inline static StringSetting wifiPassword_{ "wifi.password", "WiFi Password", "" };
+
+    // On, because <name>.local is how you find a device whose address you were never
+    // told, and answering the occasional multicast query costs a radio that never
+    // sleeps nothing at all. The fork that wants this off is the one that enabled
+    // modem or light sleep, where every multicast query on the subnet becomes a wake
+    // this device pays for and did not ask for. Read once in Init, so a change takes
+    // effect on the next boot.
+    inline static BoolSetting mdnsEnabled_{ "net.mdns", "mDNS Enabled", true };
 };

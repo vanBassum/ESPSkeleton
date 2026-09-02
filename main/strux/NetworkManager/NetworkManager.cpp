@@ -46,6 +46,12 @@ void NetworkManager::Init()
     esp_log_level_set("phy_init", ESP_LOG_WARN);
     esp_log_level_set("esp_netif_handlers", ESP_LOG_WARN);
 
+    // Before the rest of this Init, not at the end of it with the command table:
+    // Setting::Get() aborts on a setting that was never registered, and from here on
+    // this function reads its own settings (mDNS below, the credentials in the first
+    // station round). Registering is what publishes them, so it has to come first.
+    strux_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_, &mdnsEnabled_ });
+
     wifi_interface_.SetEventHandler([this](const NetworkEvent& e) { HandleNetworkEvent(e); });
     wifi_interface_.Init();
 
@@ -57,17 +63,23 @@ void NetworkManager::Init()
     ComposeApSsid();
 
     // mDNS — <deviceName>.local
-    ESP_ERROR_CHECK(mdns_init());
-    mdns_hostname_set(deviceName);
-    mdns_instance_name_set(deviceName);
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    if (mdnsEnabled_.Get())
+    {
+        ESP_ERROR_CHECK(mdns_init());
+        mdns_hostname_set(deviceName);
+        mdns_instance_name_set(deviceName);
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "mDNS disabled — this device is reachable by address only");
+    }
 
     // One timer drives the whole cycle — see OnCycleTimer.
     connectTimer_.Init("net_cycle", pdMS_TO_TICKS(StaConnectTimeoutMs), false);
     connectTimer_.SetHandler([this]() { OnCycleTimer(); });
 
     strux_.getCommandManager().Register(this, commands_);
-    strux_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_ });
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
