@@ -634,6 +634,7 @@ export interface DeviceInfo {
   date: string
   time: string
   chip: string
+  ip: string
   heapFree: number
   heapMin: number
   deviceTime: string

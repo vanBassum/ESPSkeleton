@@ -1,6 +1,7 @@
 #include "SystemManager.h"
 #include "SettingsManager.h"
 #include "CommandManager.h"
+#include "NetworkManager.h"
 #include "DateTime.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -69,6 +70,13 @@ RequestError SystemManager::Cmd_Info(CommandContext& ctx)
     resp.field("date", app->date);
     resp.field("time", app->time);
     resp.field("chip", CONFIG_IDF_TARGET);
+
+    // Empty when there is no address yet — the wording for that belongs to
+    // whoever renders it, not here.
+    char ip[16] = {};
+    strux_.getNetworkManager().GetIpv4(ip, sizeof(ip));
+    resp.field("ip", ip);
+
     resp.field("heapFree", static_cast<uint32_t>(esp_get_free_heap_size()));
     resp.field("heapMin", static_cast<uint32_t>(esp_get_minimum_free_heap_size()));
 

@@ -35,6 +35,7 @@ export default function HomePage() {
             <Row label="ESP-IDF" value={info.idf} />
             <Row label="Compiled" value={`${info.date} ${info.time}`} />
             <Row label="Chip" value={info.chip} />
+            <Row label="IP address" value={info.ip || "No address"} />
             <Row label="Free heap" value={formatBytes(info.heapFree)} />
             <Row label="Min free heap" value={formatBytes(info.heapMin)} />
             <Row label="Device time" value={info.deviceTime} />
