@@ -4,6 +4,7 @@
 #include "CommandManager.h"
 #include "nvs_flash.h"
 #include "esp_wifi.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "mdns.h"
 #include <cstdio>
@@ -53,6 +54,8 @@ void NetworkManager::Init()
     strux_.getSystemManager().GetDeviceName(deviceName, sizeof(deviceName));
     wifi_interface_.SetHostname(deviceName);
 
+    ComposeApSsid();
+
     // mDNS — <deviceName>.local
     ESP_ERROR_CHECK(mdns_init());
     mdns_hostname_set(deviceName);
@@ -99,6 +102,34 @@ bool NetworkManager::GetIpv4(char* out, size_t len) const
 
     snprintf(out, len, IPSTR, IP2STR(&status.ipv4.ip));
     return true;
+}
+
+void NetworkManager::ComposeApSsid()
+{
+    // The SoftAP MAC, not the station's: it is the address this AP actually beacons
+    // from, so it is the one a client sees beside the name it is being put in. The two
+    // differ by one on an ESP32 — close enough to confuse, far enough to be the wrong
+    // number in a bug report.
+    uint8_t mac[6] = {};
+    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+
+    char code[7];
+    snprintf(code, sizeof(code), "%02X%02X%02X", mac[3], mac[4], mac[5]);
+
+    char deviceName[33] = {};
+    strux_.getSystemManager().GetDeviceName(deviceName, sizeof(deviceName));
+
+    // 32 is esp_wifi's ssid[32], and a full 32 characters is legal there — no
+    // terminator to leave room for (see the strncpy note in WiFiInterface). What has
+    // to fit around the name is "-AP-" plus six hex digits, so the name gets what is
+    // left: a "%.*s" precision rather than a truncating write, because that bound is
+    // one the compiler can see (it rejects the manual version under
+    // -Werror=format-truncation, and it is right to — the reasoning was mine, not the
+    // code's).
+    const int nameRoom = 32 - static_cast<int>(strlen(ApSsidSuffix) + strlen(code));
+    snprintf(apSsid_, sizeof(apSsid_), "%.*s%s%s",
+             nameRoom, deviceName, ApSsidSuffix, code);
+    ESP_LOGI(TAG, "Own AP name: '%s'", apSsid_);
 }
 
 void NetworkManager::OnCycleTimer()
@@ -263,8 +294,8 @@ void NetworkManager::OpenApWindow()
     wifi_interface_.Stop();
 
     ESP_LOGW(TAG, "'%s' unreachable after %d attempts, opening '%s' for %d min",
-             staSsid_, staRoundAttempts_.load(), DefaultApSsid, ApWindowMs / 60000);
-    wifi_interface_.StartAP(DefaultApSsid, DefaultApPassword);
+             staSsid_, staRoundAttempts_.load(), apSsid_, ApWindowMs / 60000);
+    wifi_interface_.StartAP(apSsid_, DefaultApPassword);
 
     connectTimer_.SetPeriod(pdMS_TO_TICKS(ApWindowMs));
     connectTimer_.Start();
@@ -285,8 +316,8 @@ void NetworkManager::StartProvisioningAp()
     {
         connectTimer_.Stop();
         wifi_interface_.Stop();
-        ESP_LOGI(TAG, "No WiFi network configured, starting AP '%s'", DefaultApSsid);
-        wifi_interface_.StartAP(DefaultApSsid, DefaultApPassword);
+        ESP_LOGI(TAG, "No WiFi network configured, starting AP '%s'", apSsid_);
+        wifi_interface_.StartAP(apSsid_, DefaultApPassword);
     }
 
     connectTimer_.SetPeriod(pdMS_TO_TICKS(ProvisioningPollMs));

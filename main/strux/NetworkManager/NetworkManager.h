@@ -68,7 +68,10 @@ class NetworkManager {
     /// (provisioning) and between station rounds (recovery). Credentials are re-read
     /// at the start of every round, so a network provisioned through this AP is
     /// picked up by the next round without a reboot.
-    static constexpr const char* DefaultApSsid = "Strux-AP";
+    ///
+    /// The SSID is composed at Init — `<device.name>-AP-<MAC suffix>` — not a
+    /// constant. See ComposeApSsid.
+    static constexpr const char* ApSsidSuffix = "-AP-";
     static constexpr const char* DefaultApPassword = ""; // Open network
 
 public:
@@ -163,6 +166,26 @@ private:
     /// for DHCP once associated, and the length of the AP window. Which one is running
     /// is apWindowOpen_ plus staAssociated_.
     Timer connectTimer_;
+
+    /// This device's own AP name, `<device.name>-AP-<MAC suffix>`, composed once at
+    /// Init. Every device gets a distinct one, and it stays the same across reboots
+    /// because the MAC does — so a client that saved it keeps working, and a label on
+    /// the case can carry it.
+    ///
+    /// The suffix is unconditional rather than only present on an unnamed device. Two
+    /// Strux devices falling back to an identically-named AP is precisely the
+    /// situation the recovery window exists for — a bench with several of them, none
+    /// of which joined the network — and there would be no way to tell which one you
+    /// had joined. Making it appear only when the name is unset also means the SSID
+    /// changes identity the moment somebody names the device, invalidating the
+    /// profile every client had saved.
+    char apSsid_[33] = {};
+
+    /// Builds apSsid_ from the device name and the SoftAP MAC's low three bytes. The
+    /// name is what gets truncated when the whole thing will not fit in 32 characters:
+    /// the MAC suffix is the part that distinguishes one device from another, so it is
+    /// the part that must survive.
+    void ComposeApSsid();
 
     void HandleNetworkEvent(const NetworkEvent& event);
     void OnCycleTimer();
