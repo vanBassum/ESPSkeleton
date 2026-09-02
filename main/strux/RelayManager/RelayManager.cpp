@@ -206,7 +206,7 @@ void RelayManager::TaskLoop()
             // still associating, so without this every boot spends a connect attempt
             // it cannot win and logs three ERROR lines from the TLS and transport
             // layers on the way out. Same check covers WiFi dropping later.
-            if (!strux_.getNetworkManager().HasIpv4())
+            if (!strux_.getNetworkManager().HasUpstream())
             {
                 vTaskDelay(pdMS_TO_TICKS(NO_NETWORK_DELAY_MS));
                 continue;

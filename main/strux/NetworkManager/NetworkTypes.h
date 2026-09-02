@@ -38,4 +38,10 @@ struct NetworkEvent
 {
     NetworkEventType type;
     NetworkStatus status;
+
+    /// Why the link went down, as a wifi_err_reason_t. Only a LinkDown carries one,
+    /// and only one the radio reported: reason 0 means the event came from somewhere
+    /// with nothing to say (the AP stopping), which is what tells a manager that this
+    /// LinkDown is its own teardown rather than an association that failed.
+    uint8_t reason = 0;
 };

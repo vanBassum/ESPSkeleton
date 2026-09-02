@@ -30,6 +30,13 @@ void WiFiInterface::Init()
         WIFI_EVENT, ESP_EVENT_ANY_ID, &WifiEventHandler, this, nullptr));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, ESP_EVENT_ANY_ID, &WifiEventHandler, this, nullptr));
+
+    // No modem sleep. esp_wifi defaults to WIFI_PS_MIN_MODEM, where the station only
+    // wakes for DTIM beacons — so every TCP round trip waits out a beacon interval,
+    // and serving a 477-byte index.html measured 13.5 s. A Strux device exists to
+    // answer a browser off a mains supply; latency is the resource worth spending
+    // here, not milliamps. A battery-powered fork is the one that should change this.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
 void WiFiInterface::SetHostname(const char* hostname)
@@ -46,7 +53,22 @@ void WiFiInterface::ConnectSta(const char* ssid, const char* password)
     netif_ = staNetif_;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ApplyStaConfig(ssid, password);
+    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_connect();
+}
 
+void WiFiInterface::ReconnectSta()
+{
+    // No set_config: the credentials and scan policy are already in the driver, and
+    // re-connecting is the pattern esp_wifi is built around.
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "reconnect refused: %s", esp_err_to_name(err));
+}
+
+void WiFiInterface::ApplyStaConfig(const char* ssid, const char* password)
+{
     wifi_config_t config = {};
     // strncpy, NOT snprintf, and deliberately so: these are esp_wifi's fixed-width
     // fields, not C strings. A 32-character SSID legitimately fills ssid[32] with no
@@ -55,9 +77,27 @@ void WiFiInterface::ConnectSta(const char* ssid, const char* password)
     strncpy((char*)config.sta.ssid, ssid, sizeof(config.sta.ssid) - 1);
     strncpy((char*)config.sta.password, password, sizeof(config.sta.password) - 1);
 
+    // Scan every channel and take the strongest, rather than the default fast scan's
+    // "first beacon that answers". One SSID is routinely more than one radio — a
+    // repeater or extender rebroadcasting the network is the ordinary case, not the
+    // exotic one — and the first of those heard is not necessarily one that will
+    // complete an association. The cost is a second or so of scan per attempt, which
+    // is inside the attempt timeout and cheap against a round that fails.
+    config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+
+    // Advertise PMF support. `config = {}` zeroes pmf_cfg, and a station that claims
+    // no Protected Management Frames is refused outright by a WPA3 access point and
+    // by the WPA2/WPA3 transition mode most modern routers and extenders ship with.
+    // The refusal arrives as an auth timeout (reason 2) at full signal strength,
+    // which reads as a range or antenna problem and is neither.
+    //
+    // capable, not required: an AP that does not offer PMF must still be joinable,
+    // and plenty of WPA2-only hardware does not.
+    config.sta.pmf_cfg.capable = true;
+    config.sta.pmf_cfg.required = false;
+
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    esp_wifi_connect();
 }
 
 void WiFiInterface::StartAP(const char* ssid, const char* password, uint8_t channel, uint8_t maxConnections)
@@ -182,9 +222,16 @@ void WiFiInterface::OnWifiEvent(esp_event_base_t event_base, int32_t event_id, v
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED:
-            ESP_LOGW(TAG, "STA disconnected");
-            RaiseEvent(NetworkEventType::LinkDown);
+        {
+            // The reason code travels up because the manager acts on it, not just
+            // logs it: a LinkDown carrying no reason is the AP netif stopping or this
+            // interface's own disconnect echoing back, and retrying on either would
+            // burn an attempt that was never made. See NetworkManager's LinkDown arm.
+            auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
+            ESP_LOGW(TAG, "STA disconnected (reason %d)", event->reason);
+            RaiseEvent(NetworkEventType::LinkDown, event->reason);
             break;
+        }
 
         case WIFI_EVENT_AP_START:
             ESP_LOGI(TAG, "AP started");
@@ -246,7 +293,7 @@ void WiFiInterface::OnWifiEvent(esp_event_base_t event_base, int32_t event_id, v
     }
 }
 
-void WiFiInterface::RaiseEvent(NetworkEventType type)
+void WiFiInterface::RaiseEvent(NetworkEventType type, uint8_t reason)
 {
     if (!eventHandler_)
         return;
@@ -254,5 +301,6 @@ void WiFiInterface::RaiseEvent(NetworkEventType type)
     NetworkEvent event{};
     event.type = type;
     event.status = getStatus();
+    event.reason = reason;
     eventHandler_(event);
 }
