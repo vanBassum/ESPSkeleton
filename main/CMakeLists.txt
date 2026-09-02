@@ -88,6 +88,9 @@ set(COMPONENT_REQUIRES
     wear_levelling
     esp_driver_gpio
     mdns
+    # Only to report the DFS bounds in `system info` — the scaling itself is
+    # configured by startup code, see CONFIG_PM_ENABLE in sdkconfig.defaults.
+    esp_pm
     # The relay drives a WebSocket at the transport layer instead of through
     # esp_websocket_client — see RelaySocket.h for why. esp-tls comes with it for
     # the certificate bundle a wss:// pipe verifies against.

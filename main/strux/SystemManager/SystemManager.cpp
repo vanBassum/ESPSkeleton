@@ -7,6 +7,7 @@
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
+#include "esp_pm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <cstring>
@@ -28,8 +29,33 @@ void SystemManager::Init()
     strux_.getSettingsManager().Register({ &name_ });
     strux_.getCommandManager().Register(this, commands_);
 
+    // Logged rather than only served by `system info`, because a fork changing the
+    // power settings is flashing a board over serial when it wants to know whether
+    // the change took, and may have no network to ask over yet.
+    char cpu[48] = {};
+    DescribeCpu(cpu, sizeof(cpu));
+    ESP_LOGI(TAG, "CPU: %s", cpu);
+
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
+}
+
+void SystemManager::DescribeCpu(char* out, size_t maxLen)
+{
+    out[0] = '\0';
+#if CONFIG_PM_ENABLE
+    // The bounds startup code actually installed, which is the whole point of asking:
+    // WiFi holds an APB_FREQ_MAX lock while the radio is up, so the effective floor at
+    // runtime is higher than the minimum reported here. See sdkconfig.defaults.
+    esp_pm_config_t pm = {};
+    if (esp_pm_get_configuration(&pm) == ESP_OK)
+    {
+        snprintf(out, maxLen, "%d MHz, scaling down to %d MHz",
+                 pm.max_freq_mhz, pm.min_freq_mhz);
+    }
+#endif
+    if (out[0] == '\0')
+        snprintf(out, maxLen, "%d MHz", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
 }
 
 void SystemManager::GetDeviceName(char* out, size_t maxLen)
@@ -70,6 +96,10 @@ RequestError SystemManager::Cmd_Info(CommandContext& ctx)
     resp.field("date", app->date);
     resp.field("time", app->time);
     resp.field("chip", CONFIG_IDF_TARGET);
+
+    char cpu[48] = {};
+    DescribeCpu(cpu, sizeof(cpu));
+    resp.field("cpu", cpu);
 
     // Empty when there is no address yet — the wording for that belongs to
     // whoever renders it, not here.

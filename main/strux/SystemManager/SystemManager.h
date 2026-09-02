@@ -33,6 +33,12 @@ public:
     /// stored value is empty.
     void GetDeviceName(char* out, size_t maxLen);
 
+    /// How this chip is clocked, and whether frequency scaling is on — e.g.
+    /// "160 MHz, scaling down to 40 MHz". Reported by `system info` and logged at
+    /// boot, because DFS is configured by startup code (CONFIG_PM_DFS_INIT_AUTO in
+    /// sdkconfig.defaults) and there is otherwise no evidence that it took.
+    void DescribeCpu(char* out, size_t maxLen);
+
 private:
     StruxProvider& strux_;
     InitState initState_;

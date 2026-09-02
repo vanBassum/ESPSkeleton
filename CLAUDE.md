@@ -19,6 +19,8 @@ idf.py -DBOARD=<name> build           # select a board from main/hardware/boards
 
 Boards today: `esp32_devkit` (ESP32-WROOM-32) and `esp32c3_supermini` (ESP32-C3, USB-C, LED on GPIO8 active low). A non-default chip needs *both* halves — `idf.py -DBOARD=esp32c3_supermini set-target esp32c3`, then build — because `set-target` picks the chip and `-DBOARD` picks the pinout, and a board's `sdkconfig.defaults` cannot supply the chip (see the note below). Add `-B build_c3 -D SDKCONFIG=sdkconfig.c3` to keep a second board's tree beside the default one instead of overwriting it.
 
+**A new line in `sdkconfig.defaults` does not reach an existing build.** Generated `sdkconfig` files are loaded *after* the defaults and win every conflict, and an option left at its default is still recorded there — as `# CONFIG_FOO is not set` — so adding `CONFIG_FOO=y` to the defaults changes nothing until the generated file is regenerated. It fails silently, exactly like the `CONFIG_IDF_TARGET` case below. `sdkconfig` and `sdkconfig.*` are gitignored and generated, so the fix is to delete the one for the tree you are building and re-run `set-target`. Anyone pulling a commit that changes the defaults has to do the same.
+
 Frontend (React 19 + TypeScript + Vite + Tailwind + shadcn/ui, package manager is pnpm):
 
 ```bash
