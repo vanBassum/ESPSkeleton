@@ -171,10 +171,8 @@ module page costs a live pipe round trip.
   runs with the operator's session for *every other* device. So the choice (all firmware
   trusted and cryptographically controlled, versus isolating device UI in a sandboxed
   iframe behind a message API) belongs to step 4 and does not block steps 0 to 3.
-- **Where the contract lives if the relay moves to its own repo.** See below.
-
-## Downstream
-
-The KC Toolbox is the reason the idea exists but it is not a step here: it is a third
-shell, in another repository, and it can only be attempted once the contract has been
-proven against the two shells this repo controls. Revisit it after step 4, not alongside.
+- **Where the contract lives, once the relay is its own repo.** Step 0 makes it a
+  cross-repo dependency: the relay shell and every module compile against the same
+  `ShellProvider`. Either a small published package both repos consume, or a duplicated
+  type file that will drift. This is the one thing the extraction costs, and it is step
+  2's problem rather than step 0's.
