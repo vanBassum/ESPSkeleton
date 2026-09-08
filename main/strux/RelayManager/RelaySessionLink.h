@@ -20,7 +20,7 @@ class RelaySessionLink : public SessionLink
     // session instead and let the server retry.
     //
     // Paired with the server's gate idle timeout (SESSION_IDLE_TIMEOUT in
-    // relay-server/relay.py), which is deliberately longer. Whichever fires first
+    // the strux-relay server), which is deliberately longer. Whichever fires first
     // decides how a stalled session ends, and it has to be this one: the device EOFs
     // its own request, the handler writes a reply, and that reply releases the
     // server's gate in the ordinary way. The other order releases the pipe while this
