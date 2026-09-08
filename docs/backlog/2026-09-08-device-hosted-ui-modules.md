@@ -49,9 +49,47 @@ implementation claim, so avoid the word.
 
 ## Steps, in order
 
-### 1. The shell-to-module contract
+The relay extraction is step 0 rather than a later convenience, and that reordering is
+deliberate. Doing it first means the contract in step 2 is designed against **two real
+React applications** instead of one plus a hypothetical: a contract validated against a
+single shell is exactly how a shell's accidental assumptions get baked into it. It also
+means step 0 delivers something on its own — an independently built relay — rather than
+being scaffolding for the module work.
 
-First, because both shells and every module compile against it, and because it is the
+### 0. Extract the relay into its own repository
+
+A pure move, nothing else in the same step: no restructuring, no UI change, no new
+dependency. It must come out building the same image and serving the same bytes. The only
+outside references are
+[`.github/workflows/relay-image.yml`](../../.github/workflows/relay-image.yml) — which
+moves with it and loses its path filter — this repo's `CLAUDE.md`, and two backlog files.
+The relay repo gains no dependency on Strux and Strux keeps none on it.
+
+Open: whether history comes along (`git subtree split` carries `relay-server/`'s commits;
+a copy starts at one commit), the repo name, and whether
+[`2026-08-05-relay-in-production.md`](2026-08-05-relay-in-production.md) follows the code.
+The `docs/reasoning/` notes stay here — several concern the relay's cache and transport,
+but splitting an append-only record across two repositories is worse than a slightly
+wrong home, so the new repo links back instead.
+
+### 1. React and shadcn on the relay, at behaviour parity
+
+Replace the relay's own UI, and only that. It means the `DASHBOARD` constant in
+[`relay-server/relay.py`](../../relay-server/relay.py) — one inline HTML string served at
+`/`, covering the device list, pairing, approve, forget and cache flush. It does **not**
+mean the `/devices/<id>/...` proxy path, which is not UI at all: device routing, the file
+cache, authentication and session handling, and the device-page flow must all come out
+functionally unchanged. The Dockerfile grows a frontend stage.
+
+**Deliberately no shell or module abstraction in this step, and none in step 0 either.**
+That is the point of keeping them apart: when something breaks, the cause cannot be
+ambiguous between the repo split, the React migration, the relay's routing and the plugin
+system. Design tokens are copied rather than shared for now — the styling contract is a
+step 2 concern.
+
+### 2. The shell-to-module contract
+
+Next, because both shells and every module compile against it, and because it is the
 only decision that is expensive to change later.
 
 The host API is narrow and capability-oriented — *not* the raw `BackendService`. A module
@@ -90,15 +128,15 @@ A module contributing several pages cannot be one `React.lazy` default export.
 registrations. Lifecycle: discover, load, validate contract, activate, contributions
 live, deactivate.
 
-### 2. Split the existing device frontend into shell plus modules
+### 3. Split the existing device frontend into shell plus modules
 
 One job, not two — the current frontend is carved in two rather than rebuilt. React is
 `external` in the module build, leaving a bare specifier that the shell resolves through
 an **import map**, so there is exactly one React instance; two copies is the one thing
-that genuinely breaks. This step needs no relay work at all, which is what makes it the
-item that proves the idea.
+that genuinely breaks. This step needs no relay work at all, so it can land and ship
+while the relay shell is still only a dashboard.
 
-### 3. The relay shell
+### 4. Teach the relay shell to consume the same modules
 
 Note what this changes on the relay: today the device's own `index.html` *is* the page at
 `/devices/<id>/`. A relay shell serves its own HTML and pulls only the manifest and the
@@ -132,19 +170,11 @@ module page costs a live pipe round trip.
   device's own origin is the status quo. On the relay shell it means one device's code
   runs with the operator's session for *every other* device. So the choice (all firmware
   trusted and cryptographically controlled, versus isolating device UI in a sandboxed
-  iframe behind a message API) belongs to step 3 and does not block steps 1 and 2.
+  iframe behind a message API) belongs to step 4 and does not block steps 0 to 3.
 - **Where the contract lives if the relay moves to its own repo.** See below.
 
-## Interaction with splitting the relay out
+## Downstream
 
-Moving `relay-server/` to its own repository was always going to be a copy rather than a
-refactor — nothing in it imports from the firmware, and the only outside references are
-[`.github/workflows/relay-image.yml`](../../.github/workflows/relay-image.yml), this
-repo's `CLAUDE.md`, and two backlog files.
-
-This plan is the first thing that changes that calculus, and only at step 3. The relay
-shell is a TypeScript app compiling against the same `ShellProvider` the modules compile
-against, so the contract becomes a cross-repo dependency: either a small published
-package that both repos consume, or a duplicated type file that will drift. That is an
-argument for doing the split *before* the relay shell exists, while the relay is still
-only Python and the boundary is genuinely clean.
+The KC Toolbox is the reason the idea exists but it is not a step here: it is a third
+shell, in another repository, and it can only be attempted once the contract has been
+proven against the two shells this repo controls. Revisit it after step 4, not alongside.
