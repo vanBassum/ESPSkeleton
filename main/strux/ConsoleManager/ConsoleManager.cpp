@@ -104,7 +104,10 @@ void ConsoleManager::FlushLine()
 
     StoreLine(lineBuf_, lineLen_);
 
-    if (queue_)
+    // See broadcastTaskHandle_: anything logged while a broadcast is in flight is a
+    // side effect of that broadcast, and queueing it is what turns one dead socket into
+    // a flood. It is still stored above, so `log list` and the serial console keep it.
+    if (queue_ && xTaskGetCurrentTaskHandle() != broadcastTaskHandle_.load())
     {
         LogQueueItem item = {};
         snprintf(item.text, sizeof(item.text), "%s", lineBuf_);
@@ -127,6 +130,10 @@ void ConsoleManager::StoreLine(const char* line, int32_t len)
 void ConsoleManager::BroadcastTaskLoop()
 {
     LogQueueItem item;
+
+    // Learned here rather than from Task, which does not expose its handle — and this
+    // is the one place that is certainly running on it.
+    broadcastTaskHandle_.store(xTaskGetCurrentTaskHandle());
 
     while (true)
     {
