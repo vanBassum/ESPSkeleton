@@ -121,11 +121,27 @@ below.
 - **The device name is attacker-controlled before approval.** An unapproved stranger's
   `name` lands in the pending list, which renders on an admin page — so the dashboard
   escapes it. Escaping is not decoration here.
-- **GHCR has a secondary push rate limit, and it presents as an auth error.** Three
-  pushes in quick succession got `denied: denied` on `docker login` once and
-  `permission_denied … exceeded a secondary rate limit` on push once. Neither is a
-  permissions problem — the workflow's token log says `Packages: write` both times. Wait
-  a few minutes and `gh run rerun <id> --failed`; nothing needs changing.
+- **A GHCR push denial is two different faults wearing one error.** Both say
+  `denied` and neither is explained by the workflow's token log, which reads
+  `Packages: write` in every case. Tell them apart by how many runs fail:
+
+  - **A secondary rate limit** — three pushes in quick succession got `denied: denied`
+    on `docker login` once and `permission_denied … exceeded a secondary rate limit` on
+    push once. Transient. Wait a few minutes and `gh run rerun <id> --failed`; nothing
+    needs changing.
+  - **A package linked to another repository** — every run fails, forever, with
+    `denied: permission_denied: write_package`. GHCR binds a package to the repo that
+    first pushed it, and `ghcr.io/vanbassum/strux-relay` was first pushed by CI in
+    **Strux** (tag `sha-434b0a9`), so the extracted repo's `GITHUB_TOKEN` had no write
+    grant on it. Twelve consecutive runs failed across three hours before this was
+    spotted, precisely because the note here said to wait it out.
+
+    The fix is manual and there is no REST endpoint for it: the package's settings page
+    → *Manage Actions access* → add the repository with **Write**. After the first
+    successful push, `docker/metadata-action` stamps `org.opencontainers.image.source`
+    at the new repo and GHCR re-links it, so the old grant can go.
+
+    Do **not** delete the package to force a relink — `latest` is what production pulls.
 - **Two IDF installs, and the tools are not where the docs assume.** `C:\esp\v6.0\esp-idf`
   is the framework; the toolchain is an ESP-IDF Installation Manager layout under
   `C:\Espressif\tools`, activated with
