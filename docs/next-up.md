@@ -21,10 +21,6 @@ secrets out of `settings list` — is the last one before the plan calls it
 production-ready.
 → [`backlog/2026-08-05-relay-in-production.md`](backlog/2026-08-05-relay-in-production.md)
 
-**An approved relay pipe still hands out the WiFi PSK** via `settings list`. That is
-step 9, and it is the reason "production-ready" is not ticked yet.
-→ [`backlog/2026-08-05-secret-settings-over-the-wire.md`](backlog/2026-08-05-secret-settings-over-the-wire.md)
-
 **Telemetry works end to end** — a manager records a point, the relay writes it to
 InfluxDB, and it queries back tagged by device. No buffering yet: a point taken while
 the relay is down is dropped. That and the other open ends are listed in

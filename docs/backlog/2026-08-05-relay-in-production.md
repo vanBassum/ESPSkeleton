@@ -36,14 +36,6 @@ and Authentik, keeps its state in SQLite, and refuses any device that is not app
 and presenting its own token. What they left behind that is worth keeping is in *Facts*
 below.
 
-## Security — the actual gates
-
-- [ ] **9. Secrets out of `settings list`** → an approved pipe stops handing out the
-      WiFi PSK. Write-only is the recommended shape; detail in
-      [secret-settings-over-the-wire](2026-08-05-secret-settings-over-the-wire.md).
-
-**Production-ready after 9.**
-
 ## Hardening
 
 - [ ] **10. Rate-limit `/device`** → no brute-forcing ids. The *cap* half of this landed
