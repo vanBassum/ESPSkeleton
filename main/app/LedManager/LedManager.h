@@ -7,8 +7,9 @@
 #include "Timer.h"
 
 // ──────────────────────────────────────────────────────────────
-// The worked example of an application manager. It blinks the LED, and in doing so
-// touches every edge the layering allows and none that it forbids:
+// The worked example of an application manager. It owns the LED — off at boot, toggled
+// from the dashboard, optionally blinking — and in doing so touches every edge the
+// layering allows and none that it forbids:
 //
 //   • the board, for the hardware        — app_.getBoard().GetLed()
 //   • the framework, for settings        — led.blink / led.period, in the settings UI
@@ -58,7 +59,10 @@ private:
 
     // ── Settings. Keys are at most 15 characters — NVS's limit, asserted at RUNTIME in
     // Register(), so an over-long key compiles fine and then boot-loops the device.
-    inline static BoolSetting   blinkOnBoot_{ "led.blink",  "Blink LED on boot", true };
+    // Default OFF: the template ships quiet. Blinking is a demo, not a boot behaviour —
+    // the LED is toggled from the dashboard (or `led set`), and this setting is here for
+    // a product that genuinely wants a heartbeat.
+    inline static BoolSetting   blinkOnBoot_{ "led.blink",  "Blink LED on boot", false };
     inline static UInt32Setting periodMs_{ "led.period", "Blink Period (ms)", 1000 };
 
     // ── Commands ──

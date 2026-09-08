@@ -479,6 +479,16 @@ class BackendService {
     return this.send("system reboot")
   }
 
+  async getLed(): Promise<LedState> {
+    return this.send<LedState>("led get")
+  }
+
+  /** Omitted fields are left alone by the device, so `{ on }` never disturbs the
+   *  blink mode and `{ blink }` never disturbs the level. */
+  async setLed(params: { on?: boolean; blink?: boolean }): Promise<LedState> {
+    return this.send<LedState>("led set", params)
+  }
+
   /** Returns false on wrong password; throws on connection failure. On success
    *  stores the session key and marks the connection authenticated. */
   async login(password: string): Promise<boolean> {
@@ -639,6 +649,12 @@ export interface DeviceInfo {
   heapFree: number
   heapMin: number
   deviceTime: string
+}
+
+export interface LedState {
+  on: boolean
+  blinking: boolean
+  periodMs?: number
 }
 
 export interface UpdateStatus {

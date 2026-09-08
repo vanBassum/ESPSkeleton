@@ -1,5 +1,6 @@
 import { useDeviceInfo } from "@/hooks/use-device-info"
 import { PreReleaseBadge } from "@/components/PreReleaseBadge"
+import { LedCard } from "@/components/LedCard"
 import { CpuIcon } from "lucide-react"
 
 function formatBytes(bytes: number): string {
@@ -43,6 +44,8 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      <LedCard />
     </div>
   )
 }

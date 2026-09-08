@@ -29,8 +29,12 @@ void LedManager::Init()
     timer_.SetHandler([this] { OnTick(); });
     timer_.Init("led", pdMS_TO_TICKS(periodMs_.Get()));
 
+    // Either way the LED leaves Init() in a state this manager chose, rather than in
+    // whatever the driver happened to leave behind.
     if (blinkOnBoot_.Get())
         SetBlinking(true);
+    else
+        SetOn(false);
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
