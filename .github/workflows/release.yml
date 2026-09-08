@@ -11,18 +11,33 @@ permissions:
 
 env:
   IDF_VERSION: "v6.0"
-  IDF_TARGET: "esp32"
   PROJECT_NAME: "Strux"
 
 jobs:
-  build-and-release:
+  # One leg per board in main/hardware/boards/. set-target picks the chip and
+  # -DBOARD picks the pinout: a board cannot supply its own chip (see the note
+  # in main/CMakeLists.txt), so both halves are spelled out here.
+  build:
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false          # a broken board should not hide the other one
+      matrix:
+        include:
+          - board: esp32_devkit
+            target: esp32
+          - board: esp32c3_supermini
+            target: esp32c3
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          # The firmware version is `git describe --tags` in the root
+          # CMakeLists. A shallow checkout has no tags, and the fallback is
+          # silent: the release would be built as 0.0.0-dev.
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -36,6 +51,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
+      # Builds into www/. The ESP-IDF container has no pnpm, so the CMake
+      # frontend target is skipped there and the FAT image is made from this.
       - name: Build frontend
         run: cd frontend && pnpm install --frozen-lockfile && pnpm build
 
@@ -43,37 +60,74 @@ jobs:
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: ${{ env.IDF_VERSION }}
-          target: ${{ env.IDF_TARGET }}
+          target: ${{ matrix.target }}
           command: |
             set -euo pipefail
-            idf.py set-target ${{ env.IDF_TARGET }}
-            idf.py build
-            cd build && esptool.py --chip ${{ env.IDF_TARGET }} merge_bin -o merged-factory.bin -f raw @flash_args
+            # The container runs as root over a checkout owned by the runner,
+            # so git refuses the repo as "dubious ownership" — and the version
+            # lookup swallows the failure, so this is the difference between a
+            # tagged build and a 0.0.0-dev one.
+            git config --global --add safe.directory "$PWD"
+            idf.py -DBOARD=${{ matrix.board }} set-target ${{ matrix.target }}
+            idf.py -DBOARD=${{ matrix.board }} build
+            # Not `esptool.py ... merge_bin`: IDF v6.0 ships esptool v5, where
+            # that wrapper is deprecated and the subcommand is spelled
+            # merge-bin. idf.py calls it correctly for whichever esptool the
+            # image happens to carry.
+            idf.py -DBOARD=${{ matrix.board }} merge-bin -o merged-factory.bin -f raw
 
-      - name: Prepare release artifacts
+      # A release numbered 0.0.0-dev is worse than a failed build, and every
+      # way of losing the version (shallow clone, unreadable git) is quiet.
+      - name: Check the built version is the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          built=$(python3 -c "import json; print(json.load(open('build/project_description.json'))['project_version'])")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "built $built, tagged $tag"
+          if [ "$built" != "$tag" ]; then
+            echo "::error::firmware reports version '$built' but the tag is '$tag'"
+            exit 1
+          fi
+
+      - name: Collect artifacts
         run: |
           set -euo pipefail
           mkdir -p dist
+          base="${{ env.PROJECT_NAME }}-${{ matrix.board }}"
+          cp build/merged-factory.bin "dist/$base-factory.bin"
+          cp "build/${{ env.PROJECT_NAME }}.bin" "dist/$base-app.bin"
+          cp build/www.bin "dist/$base-www.bin"
 
-          # Full factory image (bootloader + partition table + all partitions)
-          cp build/merged-factory.bin dist/${{ env.PROJECT_NAME }}-factory.bin
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.board }}
+          path: dist/
+          if-no-files-found: error
 
-          # Application-only binary (for OTA update via /api/upload/app)
-          cp build/${{ env.PROJECT_NAME }}.bin dist/${{ env.PROJECT_NAME }}-app.bin
-
-          # WWW FAT partition image (for update via /api/upload/www)
-          cp build/www.bin dist/${{ env.PROJECT_NAME }}-www.bin
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: firmware-*
+          merge-multiple: true
 
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           body: |
             ### Firmware files
-            - **${{ env.PROJECT_NAME }}-factory.bin** — Full factory image (bootloader + partition table + app + www). Use for initial flashing or full recovery via `esptool.py`.
-            - **${{ env.PROJECT_NAME }}-app.bin** — Application firmware only. Upload via the web UI (Firmware > Application Firmware) for OTA update.
-            - **${{ env.PROJECT_NAME }}-www.bin** — Web interface FAT image. Upload via the web UI (Firmware > WWW Partition) to update the frontend independently.
-          files: |
-            dist/${{ env.PROJECT_NAME }}-factory.bin
-            dist/${{ env.PROJECT_NAME }}-app.bin
-            dist/${{ env.PROJECT_NAME }}-www.bin
+
+            One set per board: `esp32_devkit` (ESP32-WROOM-32) and `esp32c3_supermini` (ESP32-C3).
+
+            - **`${{ env.PROJECT_NAME }}-<board>-factory.bin`** — full image (bootloader + partition table + app + web UI). For a first flash or a recovery, from offset zero: `esptool write-flash 0x0 <file>`.
+            - **`${{ env.PROJECT_NAME }}-<board>-app.bin`** — application only. Upload it to the inactive `ota_0`/`ota_1` partition from the device's Firmware page.
+            - **`${{ env.PROJECT_NAME }}-<board>-www.bin`** — the web UI as a FAT image. Upload it to the `www` partition from the same page to update the frontend on its own.
+          files: dist/*.bin
