@@ -431,9 +431,27 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         break;
 
     case NetworkEventType::Ipv4Lost:
+        // The address is gone; the association is not. esp_netif raises this when the
+        // lease goes away, and a station that actually left raises LinkDown as well —
+        // so this handler never has to guess which happened.
+        //
+        // Clearing staAssociated_ here is what made the next cycle tick read a joined
+        // station as an attempt that never associated. That branch answers with
+        // ReconnectSta, which esp_wifi refuses outright on a connected station
+        // ("sta is connected, disconnect before connecting to new ap"), and the
+        // refusals still counted as attempts — so a device whose radio was fine walked
+        // its round up towards the AP window. Exactly the failure the DHCP branch was
+        // written to prevent, re-opened from the one event that clears the flag it
+        // depends on.
+        //
+        // Associated without an address is precisely what staAssociated_ means, so say
+        // that and hand the timer back to the address wait. If DHCP really is gone the
+        // tick that follows restarts the station the proper way, radio and all.
         ESP_LOGW(TAG, "Lost IP");
         staConnected_ = false;
-        staAssociated_ = false;
+        staAssociated_ = true;
+        connectTimer_.SetPeriod(pdMS_TO_TICKS(StaDhcpTimeoutMs));
+        connectTimer_.Start();
         break;
     }
 }
