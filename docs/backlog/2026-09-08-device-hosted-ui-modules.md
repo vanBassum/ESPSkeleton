@@ -127,11 +127,22 @@ while the relay shell is still only a dashboard.
 
 Note what this changes on the relay: today the device's own `index.html` *is* the page at
 `/devices/<id>/`. A relay shell serves its own HTML and pulls only the manifest and the
-module chunks from the device, so `device_frontend` stops being "serve the device's site"
-and becomes "serve the device's assets". Also extend `warm_cache`: it scrapes
-`/assets/...` references out of `index.html`, and a lazily imported chunk is named inside
-the entry chunk rather than the HTML, so module chunks are missed and the first open of a
-module page costs a live pipe round trip.
+module chunks from the device, so serving the device's assets becomes a *second* mode
+beside serving its site — **not a replacement for it** (Bas, 2026-09-08). The fleet will
+be mixed: devices old enough, small enough or simply never rebuilt will ship a whole page
+and no manifest, and they have to keep working. So the relay picks per device, on
+evidence rather than configuration — a manifest is there or it is not — and the absence
+of one is the ordinary case, not a fault to report. Both modes ride the same pipe
+underneath, so this is a routing decision and not two transports.
+
+That makes the browser pipe permanent rather than transitional, which is worth saying
+plainly because the extraction briefly lost it: `/devices/<id>/ws` was not carried into
+the .NET relay, so a device's own UI loaded and then had nothing to talk to. Restored in
+[`strux-relay@3899e9c`](https://github.com/vanBassum/strux-relay).
+
+Also extend the cache warmer: it scrapes `/assets/...` references out of `index.html`, and
+a lazily imported chunk is named inside the entry chunk rather than the HTML, so module
+chunks are missed and the first open of a module page costs a live pipe round trip.
 
 ## Settled while reviewing
 
