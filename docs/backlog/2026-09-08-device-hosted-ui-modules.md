@@ -30,8 +30,8 @@ implementation claim, so avoid the word.
 
 ## What is already true
 
-- **The relay already serves it.** `device_frontend` in
-  [`relay-server/relay.py`](../../relay-server/relay.py) proxies any path in the device's
+- **The relay already serves it.** `device_frontend` in the relay's `relay.py`
+  ([`vanBassum/strux-relay`](https://github.com/vanBassum/strux-relay)) proxies any path in the device's
   `www` over the pipe, with the device's own content-type and gzip passed through. A
   module chunk is just another file, and `import('/devices/<id>/assets/mod-abc123.js')`
   is an HTTP GET the relay serves today. Correct MIME is not incidental — `import()`
@@ -49,42 +49,29 @@ implementation claim, so avoid the word.
 
 ## Steps, in order
 
-The relay extraction is step 0 rather than a later convenience, and that reordering is
-deliberate. Doing it first means the contract in step 2 is designed against **two real
-React applications** instead of one plus a hypothetical: a contract validated against a
-single shell is exactly how a shell's accidental assumptions get baked into it. It also
-means step 0 delivers something on its own — an independently built relay — rather than
-being scaffolding for the module work.
-
-### 0. Extract the relay into its own repository
-
-A pure move, nothing else in the same step: no restructuring, no UI change, no new
-dependency. It must come out building the same image and serving the same bytes. The only
-outside references are
-[`.github/workflows/relay-image.yml`](../../.github/workflows/relay-image.yml) — which
-moves with it and loses its path filter — this repo's `CLAUDE.md`, and two backlog files.
-The relay repo gains no dependency on Strux and Strux keeps none on it.
-
-Open: whether history comes along (`git subtree split` carries `relay-server/`'s commits;
-a copy starts at one commit), the repo name, and whether
-[`2026-08-05-relay-in-production.md`](2026-08-05-relay-in-production.md) follows the code.
-The `docs/reasoning/` notes stay here — several concern the relay's cache and transport,
-but splitting an append-only record across two repositories is worse than a slightly
-wrong home, so the new repo links back instead.
+The relay was extracted into [`vanBassum/strux-relay`](https://github.com/vanBassum/strux-relay)
+first, before the shared contract exists, and that ordering is the point: the contract in
+step 2 is designed against **two real React applications** instead of one plus a
+hypothetical, and a contract validated against a single shell is exactly how that shell's
+accidental assumptions get baked into it.
 
 ### 1. React and shadcn on the relay, at behaviour parity
 
-Replace the relay's own UI, and only that. It means the `DASHBOARD` constant in
-[`relay-server/relay.py`](../../relay-server/relay.py) — one inline HTML string served at
+Replace the relay's own UI, and only that. It means the `DASHBOARD` constant in the
+relay's `relay.py` — one inline HTML string served at
 `/`, covering the device list, pairing, approve, forget and cache flush. It does **not**
 mean the `/devices/<id>/...` proxy path, which is not UI at all: device routing, the file
 cache, authentication and session handling, and the device-page flow must all come out
 functionally unchanged. The Dockerfile grows a frontend stage.
 
-**Deliberately no shell or module abstraction in this step, and none in step 0 either.**
-That is the point of keeping them apart: when something breaks, the cause cannot be
-ambiguous between the repo split, the React migration, the relay's routing and the plugin
-system. Design tokens are copied rather than shared for now — the styling contract is a
+Scaffold it with `pnpm dlx shadcn@latest init --preset b0 --template vite`. That command
+initialises a git repository of its own, which has to go — the frontend is part of the
+relay repository, not a repository beside it.
+
+**Deliberately no shell or module abstraction in this step.** That is the point of
+keeping it apart from both the extraction and the module work: when something breaks, the
+cause cannot be ambiguous between the repo split, the React migration, the relay's
+routing and the plugin system. Design tokens are copied rather than shared for now — the styling contract is a
 step 2 concern.
 
 ### 2. The shell-to-module contract
@@ -171,8 +158,8 @@ module page costs a live pipe round trip.
   runs with the operator's session for *every other* device. So the choice (all firmware
   trusted and cryptographically controlled, versus isolating device UI in a sandboxed
   iframe behind a message API) belongs to step 4 and does not block steps 0 to 3.
-- **Where the contract lives, once the relay is its own repo.** Step 0 makes it a
-  cross-repo dependency: the relay shell and every module compile against the same
-  `ShellProvider`. Either a small published package both repos consume, or a duplicated
-  type file that will drift. This is the one thing the extraction costs, and it is step
-  2's problem rather than step 0's.
+- **Where the contract lives, now that the relay is its own repo.** The relay shell and
+  every module compile against the same `ShellProvider`, so it is a cross-repo
+  dependency: either a small published package both repos consume, or a duplicated type
+  file that will drift. This is the one thing the extraction costs, and it is step 2's
+  problem.

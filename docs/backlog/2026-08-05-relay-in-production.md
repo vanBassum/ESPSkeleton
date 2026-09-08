@@ -5,9 +5,9 @@ server". Worked through step by step — tick a box when it is done and verified
 real thing, not when the code is written.
 
 Server: `vanbassum.com` (`c:\Workspace\strato-stack`, Traefik + Authentik, one stack per
-service, `make up stack=<name>`). The relay stays in this repo under `relay-server/` for
-now; nothing in it imports from the firmware, so moving it to its own repo later is a
-copy, not a refactor.
+service, `make up stack=<name>`). The relay left this repo on 2026-09-08 and now lives
+in [`vanBassum/strux-relay`](https://github.com/vanBassum/strux-relay), with the history of everything it was here — so
+the remaining steps below are worked in that repo, not this one.
 
 Related: [what the relay still owes](2026-07-03-remote-access.md) ·
 [why the transport reads its own socket](../reasoning/2026-08-05-13h55-owning-the-read-removes-the-buffer.md)

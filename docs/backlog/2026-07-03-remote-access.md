@@ -5,9 +5,9 @@ remotely. The relay is just another dumb-pipe transport into `CommandManager`, w
 is why every command — including firmware update — works remotely for free. That is
 the driving reason `CommandManager` is the star point of the architecture.
 
-Demo server: [`relay-server/`](../../relay-server/) — Python, deliberately, to prove
-the path before writing an ASP.NET one, and the device side assumes nothing about the
-server's language.
+Server: [`vanBassum/strux-relay`](https://github.com/vanBassum/strux-relay) — its own repository since 2026-09-08, and
+Python deliberately, to prove the path before writing an ASP.NET one. The device side
+assumes nothing about the server's language.
 
 **Deployed step by step in
 [`2026-08-05-relay-in-production.md`](2026-08-05-relay-in-production.md)** — that plan
