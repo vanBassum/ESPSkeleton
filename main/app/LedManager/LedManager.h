@@ -4,6 +4,7 @@
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "TypedSettings.h"
+#include "UiModule.h"
 #include "Timer.h"
 
 // ──────────────────────────────────────────────────────────────
@@ -19,6 +20,9 @@
 //   • the framework, for commands        — `led get` / `led set`, in `help list` and
 //                                          reachable over WebSocket and the relay alike
 //   • the framework, for telemetry       — a point when the indication is switched
+//   • the framework, for its own UI      — a page and a dashboard card, declared here
+//                                          and shipped as a module in www, loaded by
+//                                          whichever shell the operator is looking at
 //
 // Note what it does NOT do: nothing in Strux knows this class exists. It is not named in
 // StruxContext, not in StruxProvider, and not in main.cpp. It announces itself by
@@ -77,6 +81,14 @@ private:
     // Read on every tick rather than once at Init, so a change in the settings UI shows
     // on the board a quarter-second later instead of after a reboot.
     inline static BoolSetting enabled_{ "led.enabled", "LED Shows Relay Link", true };
+
+    // ── UI. The frontend half of this feature is a self-contained ES module in www,
+    // which a shell imports on demand. What follows is only the *declaration* a shell
+    // reads first, so it can draw a sidebar entry without loading any module code —
+    // and the ids are what the module's own activate() is matched against.
+    inline static const UiPage       uiPages_[] = { { "led", "LED", "lightbulb" } };
+    inline static const char* const  uiCards_[] = { "led" };
+    inline static UiModule uiModule_{ "led", "/modules/led.js", uiPages_, uiCards_ };
 
     // ── Commands ──
     RequestError Cmd_Get(CommandContext& ctx);

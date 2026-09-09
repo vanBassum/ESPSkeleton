@@ -8,6 +8,7 @@
 #include "SettingsManager/SettingsManager.h"
 #include "SystemManager/SystemManager.h"
 #include "TimeManager/TimeManager.h"
+#include "UiManager/UiManager.h"
 #include "UpdateManager/UpdateManager.h"
 #include "WebServerManager/WebServerManager.h"
 
@@ -35,6 +36,7 @@ public:
         networkManager_.Init();
         timeManager_.Init();
         commandManager_.Init();
+        uiManager_.Init();
         updateManager_.Init();
         webServerManager_.Init();
         // After WebServer: shares its Authenticator, and its log fan-out target.
@@ -51,6 +53,7 @@ public:
     SettingsManager& getSettingsManager() override { return settingsManager_; }
     SystemManager& getSystemManager() override { return systemManager_; }
     TimeManager& getTimeManager() override { return timeManager_; }
+    UiManager& getUiManager() override { return uiManager_; }
     UpdateManager& getUpdateManager() override { return updateManager_; }
     WebServerManager& getWebServerManager() override { return webServerManager_; }
 
@@ -61,6 +64,7 @@ private:
     NetworkManager networkManager_{*this};
     TimeManager timeManager_{*this};
     CommandManager commandManager_{*this};
+    UiManager uiManager_{*this};
     UpdateManager updateManager_{*this};
     WebServerManager webServerManager_{*this};
     RelayManager relayManager_{*this};
