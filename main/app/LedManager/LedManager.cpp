@@ -3,6 +3,7 @@
 #include "StruxProvider.h"
 #include "SettingsManager.h"
 #include "CommandManager.h"
+#include "RelayManager.h"
 #include "TelemetryManager.h"
 #include "esp_log.h"
 
@@ -23,68 +24,38 @@ void LedManager::Init()
     // Reaching DOWN into the framework, which is the only direction allowed. Nothing in
     // Strux was edited to make these two lines work.
     StruxProvider& strux = app_.getStrux();
-    strux.getSettingsManager().Register({ &blinkOnBoot_, &periodMs_ });
+    strux.getSettingsManager().Register({ &enabled_ });
     strux.getCommandManager().Register(this, commands_);
 
     timer_.SetHandler([this] { OnTick(); });
-    timer_.Init("led", pdMS_TO_TICKS(periodMs_.Get()));
+    timer_.Init("led", pdMS_TO_TICKS(POLL_MS));
 
-    // Either way the LED leaves Init() in a state this manager chose, rather than in
-    // whatever the driver happened to leave behind.
-    if (blinkOnBoot_.Get())
-        SetBlinking(true);
-    else
-        SetOn(false);
+    // The LED leaves Init() saying what is true right now — dark, because the relay
+    // cannot be up this early — rather than in whatever state the driver left behind.
+    Apply();
+    timer_.Start();
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
 }
 
-void LedManager::SetBlinking(bool blinking)
+void LedManager::SetEnabled(bool enabled)
 {
-    blinking_ = blinking;
+    enabled_.Set(enabled);
+    app_.getStrux().getSettingsManager().Save();
 
-    if (blinking)
-    {
-        ApplyPeriod();
-        timer_.Start();
-        return;
-    }
-
-    timer_.Stop();
-    app_.getBoard().GetLed().Off();
+    // Don't wait for the next tick: a switch in the dashboard that takes a visible
+    // moment to reach the board reads as a switch that did not work.
+    Apply();
 }
 
-void LedManager::SetOn(bool on)
+void LedManager::Apply()
 {
-    if (blinking_)
-        SetBlinking(false);
+    const bool want = enabled_.Get() && app_.getStrux().getRelayManager().IsConnected();
 
-    app_.getBoard().GetLed().Set(on);
-}
-
-void LedManager::OnTick()
-{
-    app_.getBoard().GetLed().Toggle();
-
-    // Re-read the setting every tick so a period changed in the settings UI takes effect
-    // on the next one. Get() is a field read, not an NVS read, so this is free.
-    ApplyPeriod();
-}
-
-void LedManager::ApplyPeriod()
-{
-    const TickType_t want = pdMS_TO_TICKS(periodMs_.Get());
-
-    TickType_t have = 0;
-    if (!timer_.GetPeriod(have) || have == want)
-        return;
-
-    // Timeout of 0, never the default portMAX_DELAY: this also runs from OnTick(), and
-    // blocking inside the timer service task is how that task deadlocks against its own
-    // command queue. A period change that cannot be queued right now lands on the tick
-    // after, which for a blink is no change at all.
-    timer_.SetPeriod(want, 0);
+    Led& led = app_.getBoard().GetLed();
+    if (want != led.IsOn())
+        led.Set(want);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -97,39 +68,35 @@ RequestError LedManager::Cmd_Get(CommandContext& ctx)
     RETURN_IF_ERROR(ctx.readArgs());
 
     auto resp = ctx.reply.object();
+    resp.field("enabled", enabled_.Get());
+    resp.field("connected", app_.getStrux().getRelayManager().IsConnected());
     resp.field("on", app_.getBoard().GetLed().IsOn());
-    resp.field("blinking", blinking_);
-    resp.field("periodMs", periodMs_.Get());
     return RequestError::Ok;
 }
 
 RequestError LedManager::Cmd_Set(CommandContext& ctx)
 {
-    // "Absent means leave it alone" needs no has() here: the destinations start at the
+    // "Absent means leave it alone" needs no has() here: the destination starts at the
     // current state, so an Optional the caller omitted simply writes itself back.
-    bool blink = blinking_;
-    bool on    = app_.getBoard().GetLed().IsOn();
+    bool enabled = enabled_.Get();
 
     RETURN_IF_ERROR(ctx.readArgs(
-        Optional("blink", blink),
-        Optional("on",    on)
+        Optional("enabled", enabled)
     ));
 
-    if (blink)
-        SetBlinking(true);
-    else
-        SetOn(on);
+    SetEnabled(enabled);
 
     // Telemetry from a command handler rather than from OnTick(): a Point is a few
     // hundred bytes of stack, which the timer service task has not got.
     auto point = app_.getStrux().getTelemetryManager().Measure("led");
-    point.Tag("mode", blinking_ ? "blink" : "static");
+    point.Tag("mode", enabled ? "link" : "off");
     point.Field("on", app_.getBoard().GetLed().IsOn());
     point.Commit();
 
     auto resp = ctx.reply.object();
     resp.field("ok", true);
+    resp.field("enabled", enabled_.Get());
+    resp.field("connected", app_.getStrux().getRelayManager().IsConnected());
     resp.field("on", app_.getBoard().GetLed().IsOn());
-    resp.field("blinking", blinking_);
     return RequestError::Ok;
 }

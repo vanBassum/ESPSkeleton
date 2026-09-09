@@ -483,9 +483,9 @@ class BackendService {
     return this.send<LedState>("led get")
   }
 
-  /** Omitted fields are left alone by the device, so `{ on }` never disturbs the
-   *  blink mode and `{ blink }` never disturbs the level. */
-  async setLed(params: { on?: boolean; blink?: boolean }): Promise<LedState> {
+  /** Turns the link indication on or off. Omitted fields are left alone by the
+   *  device, so `{}` is a no-op that still reports the current state. */
+  async setLed(params: { enabled?: boolean }): Promise<LedState> {
     return this.send<LedState>("led set", params)
   }
 
@@ -652,9 +652,12 @@ export interface DeviceInfo {
 }
 
 export interface LedState {
+  /** Whether the LED is showing the relay link at all. */
+  enabled: boolean
+  /** The relay pipe's state — what the LED is indicating. */
+  connected: boolean
+  /** The pin, which is `enabled && connected`. */
   on: boolean
-  blinking: boolean
-  periodMs?: number
 }
 
 export interface UpdateStatus {
