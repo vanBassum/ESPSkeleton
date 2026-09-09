@@ -289,11 +289,23 @@ void RelayManager::TaskLoop()
 
 void RelayManager::OnConnected()
 {
-    // A reconnect is a fresh pipe: drop the old auth state so a new remote user
-    // must authenticate again.
+    // A reconnect is a fresh pipe: drop the old session state.
     conn_.reset();
     conn_.fd = -1;   // "slot in use" — there is no socket fd on this transport
-    conn_.authed = !(auth_ && auth_->AuthRequired());
+
+    // Authentication belongs to the INTERFACE, and this one authenticates by
+    // existing: the device dialled OUT, over TLS, to a URL its owner configured,
+    // presenting a token it generated itself. That is proof of peer at the link
+    // layer — the same basis as a bonded Bluetooth transport, which AuthGate
+    // already describes as "a policy difference rather than a structural one" —
+    // so the pipe is authed the moment it is up and never sees `auth`.
+    //
+    // This line used to read `!(auth_ && auth_->AuthRequired())`, which is the
+    // WEB interface's policy. Setting web.password — a LAN concern — therefore
+    // locked the relay out of `web read`, leaving the asset proxy unable to fetch
+    // even the login page that would have unlocked it, and turning `ui modules`
+    // into a refusal indistinguishable from old firmware.
+    conn_.authed = true;
 
     skipping_ = false;
     linkUp_ = true;

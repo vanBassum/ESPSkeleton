@@ -191,8 +191,15 @@ RequestError WebServerManager::Cmd_AuthHello(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
+    // Per CONNECTION, not per device. A transport whose peer is already proven
+    // has nothing left to ask for, while a browser socket on a password-protected
+    // device does — and both arrive here. Asking the Authenticator alone told a
+    // remote browser riding an authenticated relay pipe to log in with a password
+    // it has no way to know.
+    const bool alreadyAuthed = ctx.connection && ctx.connection->isAuthed();
+
     auto resp = ctx.reply.object();
-    resp.field("authRequired", auth_.AuthRequired());
+    resp.field("authRequired", !alreadyAuthed && auth_.AuthRequired());
     return RequestError::Ok;
 }
 
